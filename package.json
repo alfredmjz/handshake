@@ -2,11 +2,15 @@
 	"name": "handshake",
 	"private": true,
 	"type": "module",
+	"packageManager": "bun@1.3.3",
+	"engines": {
+		"node": "26.x"
+	},
 	"scripts": {
-		"dev": "vite",
-		"build": "vite build",
-		"preview": "vite preview",
-		"typecheck": "tsc --noEmit",
+		"dev": "bun --bun vite",
+		"build": "bun --bun vite build",
+		"preview": "bun --bun vite preview",
+		"typecheck": "bun --bun tsc --noEmit",
 		"test": "bun test",
 		"test:watch": "bun test --watch",
 		"test:db": "supabase test db",
@@ -14,12 +18,12 @@
 		"db:start": "supabase start",
 		"db:stop": "supabase stop",
 		"db:reset": "supabase db reset",
-		"format": "prettier --write .",
-		"mobile:sync": "vite build && cap sync",
-		"mobile:add:ios": "cap add ios",
-		"mobile:add:android": "cap add android",
-		"mobile:open:ios": "cap open ios",
-		"mobile:open:android": "cap open android"
+		"format": "bun --bun prettier --write .",
+		"mobile:sync": "bun --bun vite build && bun --bun cap sync",
+		"mobile:add:ios": "bun --bun cap add ios",
+		"mobile:add:android": "bun --bun cap add android",
+		"mobile:open:ios": "bun --bun cap open ios",
+		"mobile:open:android": "bun --bun cap open android"
 	},
 	"dependencies": {
 		"@capacitor/core": "^8",

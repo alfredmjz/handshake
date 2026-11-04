@@ -35,7 +35,7 @@ flowchart LR
 	end
 	subgraph vercel["Vercel (one project, this repo)"]
 		STATIC["Static site<br/>dist/: index.html, assets, sw.js"]
-		API["API v1 function<br/>api/v1/[...path].ts, Node"]
+		API["API v1 function<br/>api/v1/[...path].ts, Bun runtime"]
 	end
 	subgraph supabase["Supabase (one project per environment)"]
 		AUTH["Auth<br/>6-digit email codes, anonymous guests"]
@@ -297,36 +297,37 @@ Nothing from Pholio is stored in Handshake, and none of Pholio's keys or URLs ap
 
 | Area                | Choice                                                          | Why                                                                                                  |
 | ------------------- | --------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------- |
-| Runtime and tooling | Bun                                                             | One fast tool for install, scripts and tests; runs TypeScript directly.                              |
+| Runtime and tooling | Bun 1.3, for every script, tool and the API function (ADR-006)  | One fast tool for install, scripts and tests; runs TypeScript directly.                              |
+| Node.js             | 26 LTS, only where a host needs it (ADR-006)                    | Vercel's build image, and the fallback runtime for the API function.                                 |
 | Client              | Vite 7, React 19, React Router 7, static SPA                    | A static build is what both the PWA and Capacitor need; no server rendering to host or keep offline. |
 | Local store         | Dexie (IndexedDB) with `useLiveQuery`                           | Screens re-render from local rows, so the app works the same with or without signal.                 |
 | Offline web         | `vite-plugin-pwa` (Workbox)                                     | Caches the app shell so the site opens offline and can be installed.                                 |
 | Mobile              | Capacitor 8 bundling `dist/`                                    | One codebase; the binary contains the app, so it opens offline; native share sheet.                  |
 | Backend             | Supabase: Postgres 17, RLS, Auth, PostgREST RPC                 | Postgres does the sync and validation in transactions; Auth covers email codes and anonymous guests. |
 | Sync                | Own mutation log + per-group versions, no Realtime              | Exactly-once, ordered, works offline, and keeps the backend swappable behind one transport file.     |
-| API for Pholio      | TypeScript on Vercel Node functions, contract-first OpenAPI 3.1 | Shares `ledger.ts`, same repo and deploy, testable in Bun (ADR-001, ADR-002).                        |
-| API database driver | `postgres` (porsager) v3, `prepare: false`                      | Small, fast, works with Supavisor transaction mode and in Bun for integration tests.                 |
+| API for Pholio      | TypeScript on a Vercel Function (Bun runtime), OpenAPI 3.1      | Shares `ledger.ts`, same repo and deploy, testable in Bun (ADR-001, ADR-002, ADR-006).               |
+| API database driver | Bun's built-in `SQL` (`Bun.sql`), `prepare: false`              | No dependency; works with Supavisor transaction mode. `postgres` (porsager) v3 is the fallback.      |
 | UI                  | Tailwind 3.4 with Pholio's tokens, Radix, sonner, lucide        | Matches the owner's other app and stays accessible.                                                  |
 | Tests               | `bun test`, pgTAP (`supabase test db`), Ajv for contract checks | Pure logic in Bun, SQL in SQL, the HTTP contract checked against the YAML.                           |
 | Hosting             | Vercel (site + function), Supabase cloud                        | Free or cheap at friend-group scale; preview deploys per branch.                                     |
 
 ## 7. Architecture decisions
 
-### ADR-001: The Pholio API is TypeScript on Vercel Node functions in this repo
+### ADR-001: The Pholio API is TypeScript on a Vercel Function in this repo
 
-- **Status:** Accepted (confirms spec decision 14).
+- **Status:** Accepted (confirms spec decision 14). The runtime is Bun, not Node (ADR-006, 2026-11-03).
 - **Context:** Pholio will integrate against `/api/v1` later and must keep working while Handshake changes.
   What matters: a stable, versioned contract; an OpenAPI document Pholio can generate a client from; the
   same balance and settle-up logic as the app (`src/lib/ledger.ts`); tests that run with the rest of the
   repo; cheap hosting that one person can run.
-- **Decision:** One Vercel serverless function (Node runtime) at `api/v1/[...path].ts`, a thin adapter over
+- **Decision:** One Vercel serverless function (Bun runtime, ADR-006) at `api/v1/[...path].ts`, a thin adapter over
   a framework-free handler in `src/server/api-v1/` that takes a Web `Request` and returns a `Response`.
   It connects to Postgres through Supavisor as `handshake_api` and calls one `api.v1_*` function per
   request.
 
 | Option                                     | Contract stability                    | OpenAPI                       | Shares `ledger.ts`                                   | Testability                      | Hosting                             | Verdict                                                     |
 | ------------------------------------------ | ------------------------------------- | ----------------------------- | ---------------------------------------------------- | -------------------------------- | ----------------------------------- | ----------------------------------------------------------- |
-| **TypeScript, Vercel Node function**       | Own HTTP layer                        | Contract-first YAML (ADR-002) | Yes, same import                                     | `bun test` with a fake store     | Same project and deploy as the site | **Chosen**                                                  |
+| **TypeScript, Vercel Function**            | Own HTTP layer                        | Contract-first YAML (ADR-002) | Yes, same import                                     | `bun test` with a fake store     | Same project and deploy as the site | **Chosen**                                                  |
 | TypeScript, Supabase Edge Function (Deno)  | Own HTTP layer                        | Same                          | Only via Deno-compatible imports and a second bundle | Deno test runner, separate setup | Tied to Supabase; separate deploy   | Rejected                                                    |
 | Python FastAPI or Go on Fly/Render         | Own HTTP layer                        | Generated from code (FastAPI) | No: ledger logic rewritten in a second language      | Second toolchain                 | Another host and bill               | Rejected                                                    |
 | Expose PostgREST/RPC to Pholio             | Couples Pholio to tables and Supabase | PostgREST's own               | No                                                   | —                                | Free                                | Rejected                                                    |
@@ -334,7 +335,7 @@ Nothing from Pholio is stored in Handshake, and none of Pholio's keys or URLs ap
 
 - **Consequences:**
   - The handler uses only Web standards (`Request`, `Response`, `URL`, `crypto.subtle`), so it runs
-    unchanged in Bun tests, Node on Vercel, or Vercel's Bun runtime later.
+    unchanged in Bun tests, Vercel's Bun runtime, or Node 26 on Vercel if the Bun runtime has to be dropped.
   - The rounding and settle-up logic exists once in TypeScript (plus the SQL check of shares, spec
     decision 3).
   - Vercel's function builder does not reliably resolve the `@/` path alias at runtime. Files the function
@@ -397,6 +398,37 @@ Nothing from Pholio is stored in Handshake, and none of Pholio's keys or URLs ap
   (`joined_at`, then `id`); when no full member is left, the group is deleted.
 - **Trade-off:** if the owner is away, nobody else can invite or complete. A "Make owner" handover is a
   possible later addition (a new mutation; no schema change).
+
+### ADR-006: Bun everywhere; Node 26 LTS only where a host needs it
+
+- **Status:** Accepted (owner, 2026-11-03).
+- **Context:** The owner wants Bun wherever it works, and Node only where it is really needed, on its
+  latest LTS (26, from 2026-10-28). Until now `bun run dev`, `build`, `typecheck` and `format` started
+  Vite, `tsc` and Prettier under Node, because their launchers ask for `node`; the API function was
+  planned for Vercel's Node runtime.
+- **Decision:**
+  - Every script runs its tool under Bun with `bun --bun` (Vite dev, build and preview, `tsc`, Prettier,
+    the Capacitor CLI). Checked on 2026-11-03: all of them work, the PWA build included.
+  - `package.json` pins `"packageManager": "bun@1.3.3"`, which CI reads (`bun-version-file`).
+  - The API function runs on Vercel's **Bun runtime** (`"bunVersion": "1.x"` in `vercel.json`, the Bun 1.3
+    line). It talks to Postgres through `Bun.sql` with `prepare: false`, so it needs no driver package.
+  - Node stays only where a host brings it: Vercel's build machine, and the fallback runtime if Bun's has to
+    go. `"engines": { "node": "26.x" }` pins both to Node 26 LTS. Nothing in the repo runs Node directly,
+    so a developer machine doesn't need it for Handshake.
+  - CI actions use their current majors (`actions/checkout@v7`, `supabase/setup-cli@v3`,
+    `oven-sh/setup-bun@v2`), which run on the runner's Node 24 instead of the deprecated Node 20.
+- **Trade-offs:**
+  - Vercel's Bun runtime is in **public beta**. It has no automatic source maps and no request metrics on
+    `node:http`, neither of which this function uses. The way back is one line: remove `bunVersion`, and
+    the same handler runs on Node 26.
+  - `Bun.sql` is younger than `postgres`. The `ApiStore` seam keeps the choice local to
+    `postgres-store.ts`, and the store contract suite (§9.11) proves whichever one is used.
+  - Bun 1.4 (Vercel's `"1.4.x"`) is a rewrite with breaking changes. Stay on 1.3 until it has been tried
+    here on its own branch.
+- **Rejected:** keeping the Node runtime for the function (works, but goes against the owner's rule and
+  adds a second runtime to test against); `.nvmrc` or `.node-version` files (nothing local needs Node,
+  and `engines` is what Vercel reads).
+- **Revisit:** when Vercel's Bun runtime leaves beta, and when moving to Bun 1.4.
 
 ## 8. The MVP
 
@@ -1419,8 +1451,8 @@ Chat 3 builds and tests modules M1–M4 and M6–M8. Each one is tested only thr
 
 ### 12.2 API (M9)
 
-1. Dependencies: `postgres` at runtime; `ajv` (and `yaml` if Bun's YAML import doesn't fit) as dev
-   dependencies.
+1. Dependencies: none at runtime (`Bun.sql`, ADR-006); `ajv` (and `yaml` if Bun's YAML import doesn't fit)
+   as dev dependencies. Add `postgres` only if `Bun.sql` fails the store contract suite through Supavisor.
 2. `src/server/api-v1/store.ts`: the `ApiStore` seam exactly as in §9.11, with `ApiStoreError`.
 3. `src/server/api-v1/index.ts`: `createApiV1({ store, now })`, with the order of checks and the invariants
    in §9.10.
@@ -1432,9 +1464,12 @@ Chat 3 builds and tests modules M1–M4 and M6–M8. Each one is tested only thr
    - `src/server/api-v1/postgres-store.ts`: `createPostgresApiStore(sql)`, one `SELECT api.v1_*` per method.
    - `tests/support/memory-api-store.ts`: `createMemoryApiStore(fixture)`.
 5. `api/v1/[...path].ts`, the composition root:
-   - A module-level `postgres(process.env.HANDSHAKE_API_DATABASE_URL, { prepare: false, max: 5,
-idle_timeout: 20, connect_timeout: 10 })`.
-   - `createApiV1`, with `GET`, `OPTIONS`, `POST`, `PUT`, `PATCH` and `DELETE` all delegating to it.
+   - A module-level `new SQL({ url: process.env.HANDSHAKE_API_DATABASE_URL, prepare: false, max: 5,
+idleTimeout: 20, connectionTimeout: 10 })` from `bun`. It runs on Vercel's Bun runtime (`bunVersion` is
+     already in `vercel.json`).
+   - `createApiV1`, with `GET`, `OPTIONS`, `POST`, `PUT`, `PATCH` and `DELETE` all delegating to it. If the
+     Bun runtime doesn't route method exports from `api/v1/[...path].ts`, use its documented form instead
+     (`Bun.serve({ fetch: handle })` in one `api/` file, with a rewrite from `/api/v1/*`).
    - Add `api` to `tsconfig.json` `include`. Runtime imports are relative (ADR-001).
 6. `vercel.json`: the SPA rewrite becomes `{ "source": "/((?!api/).*)", "destination": "/index.html" }`.
    `vite.config.ts`: Workbox `navigateFallbackDenylist: [/^\/api\//]`.
@@ -1450,8 +1485,8 @@ idle_timeout: 20, connect_timeout: 10 })`.
    - `bunx @redocly/cli@1 lint` was run on the contract on 2026-11-03: valid, with one warning, the
      missing `info.license`. The API is private and has no license, so add `redocly.yaml` with
      `rules: { info-license: off }` to make `api:lint` exit clean.
-9. Run `bunx vercel build` once (or `vercel dev`) to confirm the function bundles and routes. Record the
-   result in the report.
+9. Run `bunx vercel build` once (or `vercel dev`) to confirm the function bundles and routes on the Bun
+   runtime. Record the result in the report.
 
 ### 12.3 Done for chat 3
 

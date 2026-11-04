@@ -10,7 +10,8 @@ Handshake's database (see `docs/shared-ledger-spec.md`).
 
 | Area     | Technology                                                                       |
 | -------- | -------------------------------------------------------------------------------- |
-| Runtime  | **Bun** (`bun install`, `bun run …`, `bunx`)                                     |
+| Runtime  | **Bun 1.3** for everything (`bun install`, `bun run …`, `bun --bun <tool>`)      |
+| Node.js  | **26 LTS**, only where a host needs it (Vercel's build, API fallback)            |
 | Client   | **Vite 7 + React 19 + React Router 7**, a static single-page app                 |
 | Offline  | **Dexie** (IndexedDB) on the device, `vite-plugin-pwa` service worker on the web |
 | Server   | **Supabase**: Postgres + RLS, Auth with 6-digit email codes                      |

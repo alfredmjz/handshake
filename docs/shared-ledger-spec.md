@@ -363,8 +363,8 @@ by someone else is not replayed on top; the server turns it into a conflict when
 
 ### 14. The API runs as Vercel functions in this repo
 
-- **Chosen Solution:** `api/v1/[...path].ts` in this repo, deployed with the app on Vercel (Node
-  runtime), a thin adapter over a framework-free handler in `src/server/api-v1/`. It connects to Postgres
+- **Chosen Solution:** `api/v1/[...path].ts` in this repo, deployed with the app on Vercel (Bun
+  runtime; Node 26 LTS as the fallback, ADR-006), a thin adapter over a framework-free handler in `src/server/api-v1/`. It connects to Postgres
   through the Supabase connection pooler as a dedicated role `handshake_api` that can only `EXECUTE` the
   functions in an `api` schema. **Each `api.v1_*` function takes the token's hash, not a user id**, and
   authenticates and rate-limits inside the same call, so the role's password alone reads nothing. The
