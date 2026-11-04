@@ -36,6 +36,7 @@ jobs:
       - uses: supabase/setup-cli@v3
         with:
           version: 2.122.1
-      # Auth stays on: its migrations add auth.users columns the tests use (is_anonymous).
-      - run: supabase start -x realtime,storage-api,imgproxy,studio,edge-runtime,logflare,vector,postgres-meta,supavisor
+      # Auth stays on: its migrations add auth.users columns the tests use (is_anonymous). Mailpit stays
+      # off: no test sends email, and its port has been seen taken on GitHub's runners.
+      - run: supabase start -x realtime,storage-api,imgproxy,studio,edge-runtime,logflare,vector,postgres-meta,supavisor,mailpit
       - run: supabase test db
