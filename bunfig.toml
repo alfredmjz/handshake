@@ -1,0 +1,3 @@
+# Unit tests live in tests/ and run with `bun test`.
+[test]
+root = "./tests"

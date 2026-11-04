@@ -1,0 +1,418 @@
+openapi: 3.1.0
+info:
+  title: Handshake API
+  version: 1.0.0
+  summary: Read-only access to one person's shared expenses in Handshake.
+  description: |
+    Every response is about the person who owns the bearer token: what they paid, what they owe and
+    their balance in each group. Amounts are whole cents (dollars only). See docs/api-v1.md for the
+    behaviour behind each field. Within v1, changes are additive only; clients must ignore unknown fields.
+servers:
+  - url: https://{domain}/api/v1
+    variables:
+      domain:
+        default: handshake.example
+        description: The domain Handshake is deployed on.
+security:
+  - bearerToken: []
+paths:
+  /me:
+    get:
+      operationId: getMe
+      summary: The token's owner
+      responses:
+        "200":
+          description: The person who owns the token.
+          headers:
+            Cache-Control:
+              $ref: "#/components/headers/CacheControl"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Me"
+        "401":
+          $ref: "#/components/responses/InvalidToken"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+        "500":
+          $ref: "#/components/responses/ServerError"
+  /groups:
+    get:
+      operationId: listGroups
+      summary: The person's groups
+      description: Every group the person is in now, completed ones included, sorted by name (case-insensitive).
+      responses:
+        "200":
+          description: The groups.
+          headers:
+            Cache-Control:
+              $ref: "#/components/headers/CacheControl"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/GroupList"
+        "401":
+          $ref: "#/components/responses/InvalidToken"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+        "500":
+          $ref: "#/components/responses/ServerError"
+  /groups/{groupId}:
+    get:
+      operationId: getGroup
+      summary: One group, with the suggested payments that involve the person
+      parameters:
+        - $ref: "#/components/parameters/GroupId"
+      responses:
+        "200":
+          description: The group.
+          headers:
+            Cache-Control:
+              $ref: "#/components/headers/CacheControl"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/GroupDetail"
+        "401":
+          $ref: "#/components/responses/InvalidToken"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+        "500":
+          $ref: "#/components/responses/ServerError"
+  /groups/{groupId}/entries:
+    get:
+      operationId: listGroupEntries
+      summary: Change feed of one group's entries
+      parameters:
+        - $ref: "#/components/parameters/GroupId"
+        - $ref: "#/components/parameters/Cursor"
+        - $ref: "#/components/parameters/Limit"
+      responses:
+        "200":
+          description: A page of changed entries.
+          headers:
+            Cache-Control:
+              $ref: "#/components/headers/CacheControl"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EntryPage"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/InvalidToken"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+        "500":
+          $ref: "#/components/responses/ServerError"
+  /entries:
+    get:
+      operationId: listEntries
+      summary: Change feed of entries across all the person's groups
+      parameters:
+        - $ref: "#/components/parameters/Cursor"
+        - $ref: "#/components/parameters/Limit"
+      responses:
+        "200":
+          description: A page of changed entries.
+          headers:
+            Cache-Control:
+              $ref: "#/components/headers/CacheControl"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EntryPage"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/InvalidToken"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+        "500":
+          $ref: "#/components/responses/ServerError"
+components:
+  securitySchemes:
+    bearerToken:
+      type: http
+      scheme: bearer
+      description: A Handshake connection token, `hsk_` followed by 43 base64url characters.
+  parameters:
+    GroupId:
+      name: groupId
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+    Cursor:
+      name: cursor
+      in: query
+      required: false
+      description: The `nextCursor` from the previous page of this endpoint. Opaque; leave out to start from the beginning.
+      schema:
+        type: string
+        pattern: "^[A-Za-z0-9_-]+$"
+    Limit:
+      name: limit
+      in: query
+      required: false
+      description: Entries per page. A page can hold slightly more when several entries changed together.
+      schema:
+        type: integer
+        minimum: 1
+        maximum: 500
+        default: 100
+  headers:
+    CacheControl:
+      schema:
+        type: string
+        const: no-store
+    RetryAfter:
+      description: Seconds until the rate-limit window resets.
+      schema:
+        type: integer
+        minimum: 1
+        maximum: 60
+    WwwAuthenticate:
+      schema:
+        type: string
+        const: Bearer
+  responses:
+    BadRequest:
+      description: A parameter is invalid.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+          example:
+            error: { code: bad_request, message: "limit must be a whole number from 1 to 500." }
+    InvalidToken:
+      description: The token is missing, malformed, unknown or revoked.
+      headers:
+        WWW-Authenticate:
+          $ref: "#/components/headers/WwwAuthenticate"
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+          example:
+            error: { code: invalid_token, message: "The token is missing, unknown or revoked." }
+    NotFound:
+      description: The group doesn't exist, was deleted, or the person isn't in it.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+          example:
+            error: { code: not_found, message: "Not found." }
+    RateLimited:
+      description: More than 60 requests in the current minute with this token.
+      headers:
+        Retry-After:
+          $ref: "#/components/headers/RetryAfter"
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+          example:
+            error: { code: rate_limited, message: "Too many requests. Try again in a minute." }
+    ServerError:
+      description: Something failed on Handshake's side.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+          example:
+            error: { code: server_error, message: "Something went wrong. Try again later." }
+  schemas:
+    Cents:
+      type: integer
+      description: Whole cents.
+    Timestamp:
+      type: string
+      format: date-time
+      pattern: "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$"
+      examples: ["2026-11-03T18:20:00.000Z"]
+    Me:
+      type: object
+      required: [userId, displayName]
+      properties:
+        userId:
+          type: string
+          format: uuid
+        displayName:
+          type: string
+          minLength: 1
+          maxLength: 60
+    Role:
+      type: string
+      description: New values may be added within v1; treat unknown ones as `member`.
+      enum: [owner, member, guest]
+    Group:
+      type: object
+      required: [id, name, role, memberId, paidCents, owedCents, balanceCents, completedAt, updatedAt]
+      properties:
+        id:
+          type: string
+          format: uuid
+        name:
+          type: string
+          minLength: 1
+          maxLength: 80
+        role:
+          $ref: "#/components/schemas/Role"
+        memberId:
+          type: string
+          format: uuid
+          description: The person's member id in this group.
+        paidCents:
+          allOf: [{ $ref: "#/components/schemas/Cents" }]
+          minimum: 0
+          description: Total the person paid across the group's entries that aren't deleted.
+        owedCents:
+          allOf: [{ $ref: "#/components/schemas/Cents" }]
+          minimum: 0
+          description: Total the person owes from those entries.
+        balanceCents:
+          allOf: [{ $ref: "#/components/schemas/Cents" }]
+          description: paidCents − owedCents. Positive means others owe the person.
+        completedAt:
+          oneOf:
+            - $ref: "#/components/schemas/Timestamp"
+            - type: "null"
+        updatedAt:
+          $ref: "#/components/schemas/Timestamp"
+    GroupList:
+      type: object
+      required: [groups]
+      properties:
+        groups:
+          type: array
+          items:
+            $ref: "#/components/schemas/Group"
+    SuggestedPayment:
+      type: object
+      required: [fromMemberId, fromName, toMemberId, toName, amountCents]
+      properties:
+        fromMemberId:
+          type: string
+          format: uuid
+        fromName:
+          type: string
+        toMemberId:
+          type: string
+          format: uuid
+        toName:
+          type: string
+        amountCents:
+          allOf: [{ $ref: "#/components/schemas/Cents" }]
+          minimum: 1
+    GroupDetail:
+      allOf:
+        - $ref: "#/components/schemas/Group"
+        - type: object
+          required: [settleUp]
+          properties:
+            settleUp:
+              type: array
+              description: The suggested payments that settle the group, only those involving the person.
+              items:
+                $ref: "#/components/schemas/SuggestedPayment"
+    Entry:
+      type: object
+      required:
+        - id
+        - groupId
+        - kind
+        - description
+        - entryDate
+        - totalCents
+        - involved
+        - paidCents
+        - owedCents
+        - netCents
+        - hasConflict
+        - createdAt
+        - updatedAt
+        - deletedAt
+      properties:
+        id:
+          type: string
+          format: uuid
+        groupId:
+          type: string
+          format: uuid
+        kind:
+          type: string
+          enum: [expense, payment]
+        description:
+          type: string
+          minLength: 1
+          maxLength: 120
+        entryDate:
+          type: string
+          format: date
+        totalCents:
+          allOf: [{ $ref: "#/components/schemas/Cents" }]
+          minimum: 1
+        involved:
+          type: boolean
+          description: Whether the person has a share in this entry.
+        paidCents:
+          allOf: [{ $ref: "#/components/schemas/Cents" }]
+          minimum: 0
+        owedCents:
+          allOf: [{ $ref: "#/components/schemas/Cents" }]
+          minimum: 0
+        netCents:
+          allOf: [{ $ref: "#/components/schemas/Cents" }]
+          description: paidCents − owedCents.
+        hasConflict:
+          type: boolean
+          description: An edit conflict is open; amounts are the current version.
+        createdAt:
+          $ref: "#/components/schemas/Timestamp"
+        updatedAt:
+          $ref: "#/components/schemas/Timestamp"
+        deletedAt:
+          oneOf:
+            - $ref: "#/components/schemas/Timestamp"
+            - type: "null"
+    EntryPage:
+      type: object
+      required: [entries, nextCursor, hasMore, removedGroupIds]
+      properties:
+        entries:
+          type: array
+          items:
+            $ref: "#/components/schemas/Entry"
+        nextCursor:
+          type: string
+          pattern: "^[A-Za-z0-9_-]+$"
+          description: Opaque. Send it as `cursor` next time.
+        hasMore:
+          type: boolean
+          description: More changes are waiting; call again now with nextCursor.
+        removedGroupIds:
+          type: array
+          description: Groups seen through this cursor that the person has left or that were deleted.
+          items:
+            type: string
+            format: uuid
+    Error:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: object
+          required: [code, message]
+          properties:
+            code:
+              type: string
+              enum: [bad_request, invalid_token, not_found, method_not_allowed, rate_limited, server_error]
+            message:
+              type: string
