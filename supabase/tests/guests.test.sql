@@ -76,9 +76,9 @@ CREATE FUNCTION pg_temp.expense(p_entry UUID, p_payer UUID, p_amount INT, p_alex
         'items', jsonb_build_array(jsonb_build_object('amountCents', p_amount, 'paidBy', p_payer,
             'splitAmong', '["20000000-0000-0000-0000-0000000000a1", "20000000-0000-0000-0000-0000000000d1", "20000000-0000-0000-0000-0000000000b1"]'::JSONB)),
         'shares', jsonb_build_array(
-            jsonb_build_object('memberId', '20000000-0000-0000-0000-0000000000a1', 'paidCents', CASE WHEN p_payer = '20000000-0000-0000-0000-0000000000a1' THEN p_amount ELSE 0 END, 'owedCents', p_alex),
-            jsonb_build_object('memberId', '20000000-0000-0000-0000-0000000000d1', 'paidCents', CASE WHEN p_payer = '20000000-0000-0000-0000-0000000000d1' THEN p_amount ELSE 0 END, 'owedCents', p_kim),
-            jsonb_build_object('memberId', '20000000-0000-0000-0000-0000000000b1', 'paidCents', CASE WHEN p_payer = '20000000-0000-0000-0000-0000000000b1' THEN p_amount ELSE 0 END, 'owedCents', p_sam)
+            jsonb_build_object('memberId', '20000000-0000-0000-0000-0000000000a1', 'paidCents', CASE WHEN p_payer = '20000000-0000-0000-0000-0000000000a1' THEN p_amount ELSE 0 END, 'owedCents', p_alex, 'owedTo', jsonb_build_object(p_payer, p_alex)),
+            jsonb_build_object('memberId', '20000000-0000-0000-0000-0000000000d1', 'paidCents', CASE WHEN p_payer = '20000000-0000-0000-0000-0000000000d1' THEN p_amount ELSE 0 END, 'owedCents', p_kim, 'owedTo', jsonb_build_object(p_payer, p_kim)),
+            jsonb_build_object('memberId', '20000000-0000-0000-0000-0000000000b1', 'paidCents', CASE WHEN p_payer = '20000000-0000-0000-0000-0000000000b1' THEN p_amount ELSE 0 END, 'owedCents', p_sam, 'owedTo', jsonb_build_object(p_payer, p_sam))
         )
     );
 $$;
@@ -116,7 +116,7 @@ SELECT is(
 SELECT is(
     pg_temp.try('dddddddd-dddd-dddd-dddd-dddddddddddd', pg_temp.expense('30000000-0000-0000-0000-000000000002', '20000000-0000-0000-0000-0000000000d1', 1000, 333, 334, 333)),
     'applied',
-    'a guest adds an expense'
+    'a guest adds a bill'
 );
 SELECT is((SELECT created_by_member_id::TEXT FROM public.ledger_entries WHERE id = '30000000-0000-0000-0000-000000000002'), '20000000-0000-0000-0000-0000000000d1', '... recorded as added by Kim''s member row');
 SELECT is(pg_temp.try('dddddddd-dddd-dddd-dddd-dddddddddddd', '{"type": "member.rename", "groupId": "10000000-0000-0000-0000-000000000001", "memberId": "20000000-0000-0000-0000-0000000000d1", "displayName": "Kimberly"}'), 'applied', 'a guest renames themselves');
@@ -142,10 +142,15 @@ SELECT is(
     'a guest can''t delete someone else''s entry'
 );
 SELECT is(
-    pg_temp.try('dddddddd-dddd-dddd-dddd-dddddddddddd', '{"type": "entry.create", "groupId": "10000000-0000-0000-0000-000000000001", "entryId": "30000000-0000-0000-0000-000000000003", "kind": "payment", "amountCents": 300, "entryDate": "2026-11-03", "recordedVia": "settle_up",
-        "shares": [{"memberId": "20000000-0000-0000-0000-0000000000d1", "paidCents": 300, "owedCents": 0}, {"memberId": "20000000-0000-0000-0000-0000000000b1", "paidCents": 0, "owedCents": 300}]}'),
-    'HS403',
-    'a guest can''t record from the settle-up tracker'
+    pg_temp.try('dddddddd-dddd-dddd-dddd-dddddddddddd', '{"type": "payment.record", "groupId": "10000000-0000-0000-0000-000000000001", "entryId": "30000000-0000-0000-0000-000000000003",
+        "fromMemberId": "20000000-0000-0000-0000-0000000000d1", "toMemberId": "20000000-0000-0000-0000-0000000000b1", "amountCents": 300, "entryDate": "2026-11-03", "notes": null}'),
+    'applied',
+    'a guest records paying Sam back (payment.record.own)'
+);
+SELECT is(
+    pg_temp.try('bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb', '{"type": "payment.confirm", "groupId": "10000000-0000-0000-0000-000000000001", "entryId": "30000000-0000-0000-0000-000000000003"}'),
+    'applied',
+    '... which Sam confirms'
 );
 SELECT is(pg_temp.try('dddddddd-dddd-dddd-dddd-dddddddddddd', t.mutation), 'HS403', 'a guest can''t ' || t.what)
 FROM (VALUES

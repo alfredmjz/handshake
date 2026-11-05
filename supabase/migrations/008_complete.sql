@@ -1,73 +1,20 @@
 -- Migration: 008_complete
--- Description: Completing a group. group.complete (owner) makes the group read-only and, in the same
--- transaction, takes away the access of every guest who never added an email: their member row becomes
--- a name-only non-member, so entries and balances still add up, and a guest login left in no other
--- group is deleted. group.reopen (owner) makes the group editable again; deleted logins don't come back.
+-- Description: Completing a group, and deleting an account. group.complete (owner) makes the group
+-- read-only and, in the same transaction, takes away the access of every guest who never added an email:
+-- their member row becomes a name-only person, so bills and debts still add up, and a guest login left in
+-- no other group is deleted. Pending payments stay pending. group.reopen (owner) makes it editable again;
+-- deleted logins don't come back. delete_account() (spec decision 19) leaves the person's history behind
+-- under their name and removes their login.
 
-ALTER TABLE public.groups ADD COLUMN IF NOT EXISTS completed_at TIMESTAMPTZ;
-ALTER TABLE public.groups ADD COLUMN IF NOT EXISTS completed_by_member_id UUID REFERENCES public.group_members(id);
-
--- =============================================================================
--- Completed groups refuse every change but group.reopen and group.delete
--- =============================================================================
-
-CREATE OR REPLACE FUNCTION private.require_member(
-    p_user UUID,
-    p_group_id UUID,
-    p_roles TEXT[],
-    p_allow_completed BOOLEAN DEFAULT FALSE
-)
-RETURNS public.group_members
-LANGUAGE plpgsql SET search_path = ''
-AS $$
-DECLARE
-    v_member public.group_members;
-BEGIN
-    PERFORM 1 FROM public.groups WHERE id = p_group_id FOR NO KEY UPDATE;
-    v_member := private.caller_member(p_user, p_group_id);
-
-    IF v_member.id IS NULL THEN
-        RAISE EXCEPTION 'You are not a member of this group' USING ERRCODE = 'HS403';
-    END IF;
-    IF EXISTS (SELECT 1 FROM public.groups WHERE id = p_group_id AND deleted_at IS NOT NULL) THEN
-        RAISE EXCEPTION 'This group was deleted' USING ERRCODE = 'HS403';
-    END IF;
-    IF NOT p_allow_completed AND EXISTS (SELECT 1 FROM public.groups WHERE id = p_group_id AND completed_at IS NOT NULL) THEN
-        RAISE EXCEPTION 'This group is completed' USING ERRCODE = 'HS403';
-    END IF;
-    IF NOT v_member.role = ANY (p_roles) THEN
-        RAISE EXCEPTION '%', CASE WHEN p_roles = ARRAY['owner'] THEN 'Only the group''s owner can do this'
-            ELSE 'Guests can''t do this' END
-            USING ERRCODE = 'HS403';
-    END IF;
-
-    RETURN v_member;
-END;
-$$;
-
--- A completed group's links stop working until it is reopened.
-CREATE OR REPLACE FUNCTION private.find_invite(p_token TEXT)
-RETURNS public.group_invites
-LANGUAGE plpgsql STABLE SET search_path = ''
-AS $$
-DECLARE
-    v_invite public.group_invites;
-BEGIN
-    SELECT i.* INTO v_invite
-    FROM public.group_invites i
-    JOIN public.groups g ON g.id = i.group_id
-    WHERE i.token_hash = private.hash_token(p_token)
-        AND i.revoked_at IS NULL
-        AND i.expires_at > NOW()
-        AND g.deleted_at IS NULL
-        AND g.completed_at IS NULL;
-
-    IF v_invite.id IS NULL THEN
-        RAISE EXCEPTION 'This invite link doesn''t work any more' USING ERRCODE = 'HS404';
-    END IF;
-    RETURN v_invite;
-END;
-$$;
+-- A deleted account must not take the groups and links it made with it.
+ALTER TABLE public.groups ALTER COLUMN created_by DROP NOT NULL;
+ALTER TABLE public.groups DROP CONSTRAINT IF EXISTS groups_created_by_fkey;
+ALTER TABLE public.groups
+    ADD CONSTRAINT groups_created_by_fkey FOREIGN KEY (created_by) REFERENCES auth.users(id) ON DELETE SET NULL;
+ALTER TABLE public.group_invites ALTER COLUMN created_by DROP NOT NULL;
+ALTER TABLE public.group_invites DROP CONSTRAINT IF EXISTS group_invites_created_by_fkey;
+ALTER TABLE public.group_invites
+    ADD CONSTRAINT group_invites_created_by_fkey FOREIGN KEY (created_by) REFERENCES auth.users(id) ON DELETE SET NULL;
 
 -- =============================================================================
 -- Changes
@@ -83,7 +30,7 @@ DECLARE
     v_version BIGINT;
     v_guest UUID;
 BEGIN
-    v_me := private.require_member(p_user, v_group_id, ARRAY['owner']);
+    v_me := private.require(p_user, v_group_id, 'group.complete');
 
     v_version := private.next_group_version(v_group_id);
     UPDATE public.groups
@@ -116,7 +63,7 @@ DECLARE
     v_group_id UUID := (p_mutation->>'groupId')::UUID;
     v_version BIGINT;
 BEGIN
-    PERFORM private.require_member(p_user, v_group_id, ARRAY['owner'], TRUE);
+    PERFORM private.require(p_user, v_group_id, 'group.reopen');
 
     IF NOT EXISTS (SELECT 1 FROM public.groups WHERE id = v_group_id AND completed_at IS NOT NULL) THEN
         RETURN;
@@ -131,122 +78,45 @@ END;
 $$;
 
 -- =============================================================================
--- Pull: groups gain completed_at and completed_by_member_id
+-- Deleting an account (online only)
 -- =============================================================================
 
-CREATE OR REPLACE FUNCTION public.pull_changes(p_cursors JSONB DEFAULT '{}'::JSONB)
-RETURNS JSONB
-LANGUAGE sql STABLE SECURITY INVOKER SET search_path = ''
+-- In one transaction, for every group the caller has a row in: their pending payments are undone, their
+-- row becomes a name-only person with the same name (so every bill, payment and debt still shows who it
+-- was), and a group they own passes on (or is deleted with no full member left). Then their login goes.
+-- Each group takes one version, so the others pull the change. Guests may delete too.
+CREATE OR REPLACE FUNCTION public.delete_account()
+RETURNS VOID
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = ''
 AS $$
-    WITH mine AS (
-        SELECT g.id, g.head_version, COALESCE((p_cursors->>(g.id::TEXT))::BIGINT, 0) AS since
-        FROM public.groups g
-        WHERE public.is_group_member(g.id)
-    )
-    SELECT jsonb_build_object(
-        'group_ids', COALESCE((SELECT jsonb_agg(m.id) FROM mine m), '[]'::JSONB),
-        'changes', COALESCE((
-            SELECT jsonb_agg(jsonb_build_object(
-                'group_id', m.id,
-                'version', m.head_version,
-                'groups', COALESCE((
-                    SELECT jsonb_agg(jsonb_build_object(
-                        'id', g.id,
-                        'name', g.name,
-                        'base_currency', g.base_currency,
-                        'created_by', g.created_by,
-                        'created_at', g.created_at,
-                        'deleted_at', g.deleted_at,
-                        'completed_at', g.completed_at,
-                        'completed_by_member_id', g.completed_by_member_id,
-                        'row_version', g.row_version
-                    ))
-                    FROM public.groups g
-                    WHERE g.id = m.id AND g.row_version > m.since
-                ), '[]'::JSONB),
-                'members', COALESCE((
-                    SELECT jsonb_agg(jsonb_build_object(
-                        'id', gm.id,
-                        'group_id', gm.group_id,
-                        'user_id', gm.user_id,
-                        'display_name', gm.display_name,
-                        'role', gm.role,
-                        'joined_at', gm.joined_at,
-                        'deleted_at', gm.deleted_at,
-                        'row_version', gm.row_version
-                    ))
-                    FROM public.group_members gm
-                    WHERE gm.group_id = m.id AND gm.row_version > m.since
-                ), '[]'::JSONB),
-                'entries', COALESCE((
-                    SELECT jsonb_agg(jsonb_build_object(
-                        'id', e.id,
-                        'group_id', e.group_id,
-                        'kind', e.kind,
-                        'description', e.description,
-                        'amount_cents', e.amount_cents,
-                        'items', e.items,
-                        'entry_date', e.entry_date,
-                        'notes', e.notes,
-                        'recorded_via', e.recorded_via,
-                        'created_by_member_id', e.created_by_member_id,
-                        'updated_by_member_id', e.updated_by_member_id,
-                        'created_at', e.created_at,
-                        'updated_at', e.updated_at,
-                        'deleted_at', e.deleted_at,
-                        'row_version', e.row_version,
-                        'shares', COALESCE((
-                            SELECT jsonb_agg(jsonb_build_object(
-                                'member_id', s.member_id,
-                                'paid_cents', s.paid_cents,
-                                'owed_cents', s.owed_cents
-                            ) ORDER BY s.member_id)
-                            FROM public.ledger_shares s
-                            WHERE s.entry_id = e.id
-                        ), '[]'::JSONB)
-                    ))
-                    FROM public.ledger_entries e
-                    WHERE e.group_id = m.id AND e.row_version > m.since
-                ), '[]'::JSONB),
-                'conflicts', COALESCE((
-                    SELECT jsonb_agg(jsonb_build_object(
-                        'id', c.id,
-                        'group_id', c.group_id,
-                        'entry_id', c.entry_id,
-                        'base_version', c.base_version,
-                        'base', c.base,
-                        'proposed', c.proposed,
-                        'proposed_by_member_id', c.proposed_by_member_id,
-                        'created_at', c.created_at,
-                        'resolved_at', c.resolved_at,
-                        'resolved_by_member_id', c.resolved_by_member_id,
-                        'resolution', c.resolution,
-                        'row_version', c.row_version
-                    ))
-                    FROM public.entry_conflicts c
-                    WHERE c.group_id = m.id AND c.row_version > m.since
-                ), '[]'::JSONB),
-                'invites', COALESCE((
-                    SELECT jsonb_agg(jsonb_build_object(
-                        'id', i.id,
-                        'group_id', i.group_id,
-                        'claim_member_id', i.claim_member_id,
-                        'created_by', i.created_by,
-                        'created_at', i.created_at,
-                        'expires_at', i.expires_at,
-                        'revoked_at', i.revoked_at,
-                        'row_version', i.row_version
-                    ))
-                    FROM public.group_invites i
-                    WHERE i.group_id = m.id AND i.row_version > m.since
-                ), '[]'::JSONB)
-            ))
-            FROM mine m
-            WHERE m.head_version > m.since
-        ), '[]'::JSONB)
-    );
+DECLARE
+    v_user UUID := (SELECT auth.uid());
+    v_row public.group_members;
+    v_version BIGINT;
+BEGIN
+    IF v_user IS NULL THEN
+        RAISE EXCEPTION 'Not signed in' USING ERRCODE = '28000';
+    END IF;
+
+    FOR v_row IN SELECT gm.* FROM public.group_members gm WHERE gm.user_id = v_user ORDER BY gm.group_id LOOP
+        v_version := private.next_group_version(v_row.group_id);
+
+        PERFORM private.undo_pending_payments(v_row.id, v_version);
+
+        UPDATE public.group_members
+        SET user_id = NULL, role = 'member', joined_at = NULL, updated_at = NOW(), row_version = v_version
+        WHERE id = v_row.id;
+
+        IF v_row.role = 'owner' AND v_row.deleted_at IS NULL THEN
+            PERFORM private.hand_over(v_row.group_id, v_version);
+        END IF;
+    END LOOP;
+
+    -- Cascades to their profile, sync_mutations and API tokens (009), so Pholio's connection stops.
+    DELETE FROM auth.users WHERE id = v_user;
+END;
 $$;
 
 REVOKE EXECUTE ON ALL FUNCTIONS IN SCHEMA private FROM PUBLIC, anon, authenticated;
-REVOKE EXECUTE ON FUNCTION public.pull_changes(JSONB) FROM PUBLIC, anon;
-GRANT EXECUTE ON FUNCTION public.pull_changes(JSONB) TO authenticated;
+REVOKE EXECUTE ON FUNCTION public.delete_account() FROM PUBLIC, anon;
+GRANT EXECUTE ON FUNCTION public.delete_account() TO authenticated;

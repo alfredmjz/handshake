@@ -4,14 +4,17 @@
 // tests/lib/ledger-cases-sql.test.ts fails if that file is out of date. Only ever add cases.
 //
 // - People are named; the SQL side maps the n-th name in `members` to a fixed UUID.
-// - `paid` and `owed` have one key per share, written in bill order: the order people first appear in
-//   the items' splitAmong lists, then payers who are in no split. computeShares returns shares in that
-//   order, and the SQL test checks it.
-// - `balances` (paid − owed per share) and `payments` (suggested, in the order summarizeGroup finds
-//   them) are for summarizeGroup; the SQL side doesn't use them.
+// - Rounding is per payer: each payer absorbs the cent on their own items (spec decision 4).
+// - `paid`, `owed` and `parts` have one key per share, written in bill order: the order people first
+//   appear in the items' splitAmong lists, then payers who are in no split. computeShares returns shares
+//   in that order, and the SQL test checks it.
+// - `parts` is each share's owedTo: what that person owes each payer, non-zero parts only (a payer's own
+//   part included).
+// - `balances` (paid − owed per share) and `debts` (pairwise, netted both ways, sorted by debtor then
+//   creditor name) are for summarizeGroup; the SQL side doesn't use them.
 
 export type LedgerCaseItem = { amountCents: number; paidBy: string; splitAmong: string[] };
-export type LedgerCasePayment = { from: string; to: string; amountCents: number };
+export type LedgerCaseDebt = { from: string; to: string; amountCents: number };
 
 export type LedgerCase = {
 	name: string;
@@ -19,8 +22,9 @@ export type LedgerCase = {
 	items: LedgerCaseItem[];
 	paid: Record<string, number>;
 	owed: Record<string, number>;
+	parts: Record<string, Record<string, number>>;
 	balances: Record<string, number>;
-	payments: LedgerCasePayment[];
+	debts: LedgerCaseDebt[];
 };
 
 const P1 = "Person 1";
@@ -38,8 +42,15 @@ export const LEDGER_CASES: LedgerCase[] = [
 		items: [{ amountCents: 5000, paidBy: P1, splitAmong: FIVE }],
 		paid: { [P1]: 5000, [P2]: 0, [P3]: 0, [P4]: 0, [P5]: 0 },
 		owed: { [P1]: 1000, [P2]: 1000, [P3]: 1000, [P4]: 1000, [P5]: 1000 },
+		parts: {
+			[P1]: { [P1]: 1000 },
+			[P2]: { [P1]: 1000 },
+			[P3]: { [P1]: 1000 },
+			[P4]: { [P1]: 1000 },
+			[P5]: { [P1]: 1000 },
+		},
 		balances: { [P1]: 4000, [P2]: -1000, [P3]: -1000, [P4]: -1000, [P5]: -1000 },
-		payments: [
+		debts: [
 			{ from: P2, to: P1, amountCents: 1000 },
 			{ from: P3, to: P1, amountCents: 1000 },
 			{ from: P4, to: P1, amountCents: 1000 },
@@ -53,8 +64,9 @@ export const LEDGER_CASES: LedgerCase[] = [
 		items: [{ amountCents: 1000, paidBy: "Sam", splitAmong: ["Alex", "Jo", "Sam"] }],
 		paid: { Alex: 0, Jo: 0, Sam: 1000 },
 		owed: { Alex: 333, Jo: 333, Sam: 334 },
+		parts: { Alex: { Sam: 333 }, Jo: { Sam: 333 }, Sam: { Sam: 334 } },
 		balances: { Alex: -333, Jo: -333, Sam: 666 },
-		payments: [
+		debts: [
 			{ from: "Alex", to: "Sam", amountCents: 333 },
 			{ from: "Jo", to: "Sam", amountCents: 333 },
 		],
@@ -66,8 +78,9 @@ export const LEDGER_CASES: LedgerCase[] = [
 		items: [{ amountCents: 2000, paidBy: "Sam", splitAmong: ["Alex", "Jo", "Sam"] }],
 		paid: { Alex: 0, Jo: 0, Sam: 2000 },
 		owed: { Alex: 667, Jo: 667, Sam: 666 },
+		parts: { Alex: { Sam: 667 }, Jo: { Sam: 667 }, Sam: { Sam: 666 } },
 		balances: { Alex: -667, Jo: -667, Sam: 1334 },
-		payments: [
+		debts: [
 			{ from: "Alex", to: "Sam", amountCents: 667 },
 			{ from: "Jo", to: "Sam", amountCents: 667 },
 		],
@@ -83,10 +96,11 @@ export const LEDGER_CASES: LedgerCase[] = [
 		],
 		paid: { [P1]: 2300, [P2]: 0, [P3]: 0 },
 		owed: { [P1]: 500, [P2]: 500, [P3]: 1300 },
+		parts: { [P1]: { [P1]: 500 }, [P2]: { [P1]: 500 }, [P3]: { [P1]: 1300 } },
 		balances: { [P1]: 1800, [P2]: -500, [P3]: -1300 },
-		payments: [
-			{ from: P3, to: P1, amountCents: 1300 },
+		debts: [
 			{ from: P2, to: P1, amountCents: 500 },
+			{ from: P3, to: P1, amountCents: 1300 },
 		],
 	},
 	{
@@ -100,15 +114,16 @@ export const LEDGER_CASES: LedgerCase[] = [
 		],
 		paid: { [P1]: 2300, [P2]: 0, [P3]: 0 },
 		owed: { [P1]: 500, [P2]: 900, [P3]: 900 },
+		parts: { [P1]: { [P1]: 500 }, [P2]: { [P1]: 900 }, [P3]: { [P1]: 900 } },
 		balances: { [P1]: 1800, [P2]: -900, [P3]: -900 },
-		payments: [
+		debts: [
 			{ from: P2, to: P1, amountCents: 900 },
 			{ from: P3, to: P1, amountCents: 900 },
 		],
 	},
 	{
-		// (6000 + 4000) / 5 = 2000 each exactly. Debtors tie at −2000 and go by name; after Person 3 pays
-		// Person 1, both creditors are at +2000 and Person 1 comes first by name.
+		// Each payer's item splits exactly: 6000 / 5 = 1200 to Person 1, 4000 / 5 = 800 to Person 2. Person 2
+		// owes Person 1 1200 and is owed 800 back, so 400 net.
 		name: "Several payers, even: 6000 paid by Person 1 and 4000 by Person 2, both split by all 5",
 		members: FIVE,
 		items: [
@@ -117,30 +132,49 @@ export const LEDGER_CASES: LedgerCase[] = [
 		],
 		paid: { [P1]: 6000, [P2]: 4000, [P3]: 0, [P4]: 0, [P5]: 0 },
 		owed: { [P1]: 2000, [P2]: 2000, [P3]: 2000, [P4]: 2000, [P5]: 2000 },
+		parts: {
+			[P1]: { [P1]: 1200, [P2]: 800 },
+			[P2]: { [P1]: 1200, [P2]: 800 },
+			[P3]: { [P1]: 1200, [P2]: 800 },
+			[P4]: { [P1]: 1200, [P2]: 800 },
+			[P5]: { [P1]: 1200, [P2]: 800 },
+		},
 		balances: { [P1]: 4000, [P2]: 2000, [P3]: -2000, [P4]: -2000, [P5]: -2000 },
-		payments: [
-			{ from: P3, to: P1, amountCents: 2000 },
-			{ from: P4, to: P1, amountCents: 2000 },
-			{ from: P5, to: P2, amountCents: 2000 },
+		debts: [
+			{ from: P2, to: P1, amountCents: 400 },
+			{ from: P3, to: P1, amountCents: 1200 },
+			{ from: P3, to: P2, amountCents: 800 },
+			{ from: P4, to: P1, amountCents: 1200 },
+			{ from: P4, to: P2, amountCents: 800 },
+			{ from: P5, to: P1, amountCents: 1200 },
+			{ from: P5, to: P2, amountCents: 800 },
 		],
 	},
 	{
-		// D = 15. Persons 1–3: 333.33 + 400 = 733.33 → 733; Persons 4–5: 400 exactly. Σ = 2999 of 3000, so
-		// the biggest payer (Person 2, 2000) takes the cent: 734.
-		name: "Several payers, with a cent: the biggest payer covers it",
+		// Person 1's item: 1000 / 3 = 333.33 → 333 three times (999), so Person 1 covers the cent: 334.
+		// Person 2's item: 2000 / 5 = 400 each exactly. Person 1 owes Person 2 400 and is owed 333: 67 net.
+		name: "Several payers, with a cent: each payer covers the cent on their own item",
 		members: FIVE,
 		items: [
 			{ amountCents: 1000, paidBy: P1, splitAmong: [P1, P2, P3] },
 			{ amountCents: 2000, paidBy: P2, splitAmong: FIVE },
 		],
 		paid: { [P1]: 1000, [P2]: 2000, [P3]: 0, [P4]: 0, [P5]: 0 },
-		owed: { [P1]: 733, [P2]: 734, [P3]: 733, [P4]: 400, [P5]: 400 },
-		balances: { [P1]: 267, [P2]: 1266, [P3]: -733, [P4]: -400, [P5]: -400 },
-		payments: [
-			{ from: P3, to: P2, amountCents: 733 },
+		owed: { [P1]: 734, [P2]: 733, [P3]: 733, [P4]: 400, [P5]: 400 },
+		parts: {
+			[P1]: { [P1]: 334, [P2]: 400 },
+			[P2]: { [P1]: 333, [P2]: 400 },
+			[P3]: { [P1]: 333, [P2]: 400 },
+			[P4]: { [P2]: 400 },
+			[P5]: { [P2]: 400 },
+		},
+		balances: { [P1]: 266, [P2]: 1267, [P3]: -733, [P4]: -400, [P5]: -400 },
+		debts: [
+			{ from: P1, to: P2, amountCents: 67 },
+			{ from: P3, to: P1, amountCents: 333 },
+			{ from: P3, to: P2, amountCents: 400 },
 			{ from: P4, to: P2, amountCents: 400 },
-			{ from: P5, to: P1, amountCents: 267 },
-			{ from: P5, to: P2, amountCents: 133 },
+			{ from: P5, to: P2, amountCents: 400 },
 		],
 	},
 	{
@@ -151,11 +185,12 @@ export const LEDGER_CASES: LedgerCase[] = [
 		items: [{ amountCents: 2000, paidBy: "Sam", splitAmong: ["Alex", "Jo", "Kim"] }],
 		paid: { Alex: 0, Jo: 0, Kim: 0, Sam: 2000 },
 		owed: { Alex: 666, Jo: 667, Kim: 667, Sam: 0 },
+		parts: { Alex: { Sam: 666 }, Jo: { Sam: 667 }, Kim: { Sam: 667 }, Sam: {} },
 		balances: { Alex: -666, Jo: -667, Kim: -667, Sam: 2000 },
-		payments: [
+		debts: [
+			{ from: "Alex", to: "Sam", amountCents: 666 },
 			{ from: "Jo", to: "Sam", amountCents: 667 },
 			{ from: "Kim", to: "Sam", amountCents: 667 },
-			{ from: "Alex", to: "Sam", amountCents: 666 },
 		],
 	},
 	{
@@ -165,16 +200,17 @@ export const LEDGER_CASES: LedgerCase[] = [
 		items: [{ amountCents: 1000, paidBy: "Sam", splitAmong: ["Alex", "Jo", "Kim"] }],
 		paid: { Alex: 0, Jo: 0, Kim: 0, Sam: 1000 },
 		owed: { Alex: 333, Jo: 333, Kim: 333, Sam: 1 },
+		parts: { Alex: { Sam: 333 }, Jo: { Sam: 333 }, Kim: { Sam: 333 }, Sam: { Sam: 1 } },
 		balances: { Alex: -333, Jo: -333, Kim: -333, Sam: 999 },
-		payments: [
+		debts: [
 			{ from: "Alex", to: "Sam", amountCents: 333 },
 			{ from: "Jo", to: "Sam", amountCents: 333 },
 			{ from: "Kim", to: "Sam", amountCents: 333 },
 		],
 	},
 	{
-		// Rounded once per person: 2000 / 3 = 666.67 → 667 each (2001), not 333 + 333 per item. Sam gives
-		// back the extra cent.
+		// Rounded once per person and payer: 2000 / 3 = 666.67 → 667 each (2001), not 333 + 333 per item. Sam
+		// gives back the extra cent.
 		name: "Two items of 1000, each split by Alex, Jo and Sam, Sam paid both",
 		members: ["Alex", "Jo", "Sam"],
 		items: [
@@ -183,22 +219,24 @@ export const LEDGER_CASES: LedgerCase[] = [
 		],
 		paid: { Alex: 0, Jo: 0, Sam: 2000 },
 		owed: { Alex: 667, Jo: 667, Sam: 666 },
+		parts: { Alex: { Sam: 667 }, Jo: { Sam: 667 }, Sam: { Sam: 666 } },
 		balances: { Alex: -667, Jo: -667, Sam: 1334 },
-		payments: [
+		debts: [
 			{ from: "Alex", to: "Sam", amountCents: 667 },
 			{ from: "Jo", to: "Sam", amountCents: 667 },
 		],
 	},
 	{
-		// A payment is a one-item bill: the person paying back paid it, the person receiving owes it. Alex
-		// is in the split, so Alex comes first; Sam is a payer in no split, so last.
+		// A payment's shares are a one-item bill: the person paying back paid it, the person receiving owes
+		// it to them. Alex is in the split, so Alex comes first; Sam is a payer in no split, so last.
 		name: "A payment: Sam pays Alex 3000",
 		members: ["Alex", "Sam"],
 		items: [{ amountCents: 3000, paidBy: "Sam", splitAmong: ["Alex"] }],
 		paid: { Alex: 0, Sam: 3000 },
 		owed: { Alex: 3000, Sam: 0 },
+		parts: { Alex: { Sam: 3000 }, Sam: {} },
 		balances: { Alex: -3000, Sam: 3000 },
-		payments: [{ from: "Alex", to: "Sam", amountCents: 3000 }],
+		debts: [{ from: "Alex", to: "Sam", amountCents: 3000 }],
 	},
 	{
 		// 0.33 rounds to 0 for all three (0); Alex, the payer, owes the cent. Jo and Sam keep 0/0 shares.
@@ -207,8 +245,9 @@ export const LEDGER_CASES: LedgerCase[] = [
 		items: [{ amountCents: 1, paidBy: "Alex", splitAmong: ["Alex", "Jo", "Sam"] }],
 		paid: { Alex: 1, Jo: 0, Sam: 0 },
 		owed: { Alex: 1, Jo: 0, Sam: 0 },
+		parts: { Alex: { Alex: 1 }, Jo: {}, Sam: {} },
 		balances: { Alex: 0, Jo: 0, Sam: 0 },
-		payments: [],
+		debts: [],
 	},
 	{
 		// 250.5 rounds half up to 251 for all four (1004 of 1002). Sam owes nothing, so two cents come off,
@@ -218,12 +257,13 @@ export const LEDGER_CASES: LedgerCase[] = [
 		items: [{ amountCents: 1002, paidBy: "Sam", splitAmong: ["Alex", "Jo", "Kim", "Lee"] }],
 		paid: { Alex: 0, Jo: 0, Kim: 0, Lee: 0, Sam: 1002 },
 		owed: { Alex: 250, Jo: 250, Kim: 251, Lee: 251, Sam: 0 },
+		parts: { Alex: { Sam: 250 }, Jo: { Sam: 250 }, Kim: { Sam: 251 }, Lee: { Sam: 251 }, Sam: {} },
 		balances: { Alex: -250, Jo: -250, Kim: -251, Lee: -251, Sam: 1002 },
-		payments: [
-			{ from: "Kim", to: "Sam", amountCents: 251 },
-			{ from: "Lee", to: "Sam", amountCents: 251 },
+		debts: [
 			{ from: "Alex", to: "Sam", amountCents: 250 },
 			{ from: "Jo", to: "Sam", amountCents: 250 },
+			{ from: "Kim", to: "Sam", amountCents: 251 },
+			{ from: "Lee", to: "Sam", amountCents: 251 },
 		],
 	},
 	{
@@ -237,28 +277,30 @@ export const LEDGER_CASES: LedgerCase[] = [
 		],
 		paid: { Alex: 0, Jo: 0, Kim: 0, Lee: 0, Sam: 2003 },
 		owed: { Alex: 667, Jo: 667, Kim: 668, Lee: 1, Sam: 0 },
+		parts: { Alex: { Sam: 667 }, Jo: { Sam: 667 }, Kim: { Sam: 668 }, Lee: { Sam: 1 }, Sam: {} },
 		balances: { Alex: -667, Jo: -667, Kim: -668, Lee: -1, Sam: 2003 },
-		payments: [
-			{ from: "Kim", to: "Sam", amountCents: 668 },
+		debts: [
 			{ from: "Alex", to: "Sam", amountCents: 667 },
 			{ from: "Jo", to: "Sam", amountCents: 667 },
+			{ from: "Kim", to: "Sam", amountCents: 668 },
 			{ from: "Lee", to: "Sam", amountCents: 1 },
 		],
 	},
 	{
-		// 2000 / 3 = 666.67 → 667 each (2001). Jo and Sam both paid 1000; Jo paid the earlier item, so Jo
-		// gives back the extra cent.
-		name: "Payers tie: the one who paid the earliest item covers the cent",
+		// Each item is 1000 / 3 = 333.33 → 333 three times (999), and each payer covers their own cent: Jo
+		// owes Jo 334, Sam owes Sam 334. Jo and Sam owe each other 333, which nets to nothing.
+		name: "Two payers, one item each: each covers the cent on their own item",
 		members: ["Alex", "Jo", "Sam"],
 		items: [
 			{ amountCents: 1000, paidBy: "Jo", splitAmong: ["Alex", "Jo", "Sam"] },
 			{ amountCents: 1000, paidBy: "Sam", splitAmong: ["Alex", "Jo", "Sam"] },
 		],
 		paid: { Alex: 0, Jo: 1000, Sam: 1000 },
-		owed: { Alex: 667, Jo: 666, Sam: 667 },
-		balances: { Alex: -667, Jo: 334, Sam: 333 },
-		payments: [
-			{ from: "Alex", to: "Jo", amountCents: 334 },
+		owed: { Alex: 666, Jo: 667, Sam: 667 },
+		parts: { Alex: { Jo: 333, Sam: 333 }, Jo: { Jo: 334, Sam: 333 }, Sam: { Jo: 333, Sam: 334 } },
+		balances: { Alex: -666, Jo: 333, Sam: 333 },
+		debts: [
+			{ from: "Alex", to: "Jo", amountCents: 333 },
 			{ from: "Alex", to: "Sam", amountCents: 333 },
 		],
 	},

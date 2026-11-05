@@ -166,7 +166,16 @@ BEGIN
 END;
 $$;
 
--- One group as the token's owner sees it: their role, member id and totals over entries not deleted.
+-- Whether an entry counts in debts, balances and the API: a bill that isn't deleted, or a payment that
+-- is confirmed (both sides agreed, or the other side has no login).
+CREATE OR REPLACE FUNCTION private.entry_counts(p_entry public.ledger_entries)
+RETURNS BOOLEAN
+LANGUAGE sql IMMUTABLE SET search_path = ''
+AS $$
+    SELECT CASE WHEN p_entry.kind = 'expense' THEN p_entry.deleted_at IS NULL ELSE p_entry.payment_status = 'confirmed' END;
+$$;
+
+-- One group as the token's owner sees it: their role, member id and totals over the entries that count.
 -- STABLE, so inside a caller's statement it reads that statement's snapshot.
 CREATE OR REPLACE FUNCTION private.api_group(p_group public.groups, p_member public.group_members)
 RETURNS JSONB
@@ -187,7 +196,7 @@ AS $$
         )
     )
     FROM public.ledger_shares s
-    JOIN public.ledger_entries e ON e.id = s.entry_id AND e.deleted_at IS NULL
+    JOIN public.ledger_entries e ON e.id = s.entry_id AND private.entry_counts(e)
     WHERE s.member_id = p_member.id;
 $$;
 
@@ -206,7 +215,8 @@ BEGIN
 END;
 $$;
 
--- Every group the owner is in now (completed ones too), by name.
+-- Every group the owner is in now (completed ones too), by name, with their own paid and owed totals;
+-- the handler's balance is paid − owed.
 CREATE OR REPLACE FUNCTION api.v1_groups(p_token_hash TEXT)
 RETURNS JSONB
 LANGUAGE plpgsql VOLATILE SECURITY DEFINER SET search_path = ''
@@ -223,8 +233,10 @@ BEGIN
 END;
 $$;
 
--- One group plus every member row (people who left and non-members too) with their totals. NULL when the
--- group is unknown, deleted or not the owner's; the call still counts, and the store reports HS404.
+-- One group plus every member row (people who left and name-only people too) with their totals and
+-- owedTo (payer member id -> cents) over the entries that count, from which the handler works out the
+-- owner's debts with summarizeGroup. NULL when the group is unknown, deleted or not the owner's; the call
+-- still counts, and the store reports HS404.
 CREATE OR REPLACE FUNCTION api.v1_group(p_token_hash TEXT, p_group_id UUID)
 RETURNS JSONB
 LANGUAGE plpgsql VOLATILE SECURITY DEFINER SET search_path = ''
@@ -239,15 +251,26 @@ BEGIN
                 'displayName', m.display_name,
                 'active', m.deleted_at IS NULL,
                 'paidCents', COALESCE(t.paid, 0),
-                'owedCents', COALESCE(t.owed, 0)
+                'owedCents', COALESCE(t.owed, 0),
+                'owedTo', COALESCE(o.owed_to, '{}'::JSONB)
             ) ORDER BY lower(m.display_name), m.id), '[]'::JSONB)
             FROM public.group_members m
             LEFT JOIN LATERAL (
                 SELECT sum(s.paid_cents) AS paid, sum(s.owed_cents) AS owed
                 FROM public.ledger_shares s
-                JOIN public.ledger_entries e ON e.id = s.entry_id AND e.deleted_at IS NULL
+                JOIN public.ledger_entries e ON e.id = s.entry_id AND private.entry_counts(e)
                 WHERE s.member_id = m.id
             ) t ON TRUE
+            LEFT JOIN LATERAL (
+                SELECT jsonb_object_agg(x.payer, x.cents) AS owed_to
+                FROM (
+                    SELECT p.payer_member_id AS payer, sum(p.owed_cents) AS cents
+                    FROM public.ledger_share_parts p
+                    JOIN public.ledger_entries e ON e.id = p.entry_id AND private.entry_counts(e)
+                    WHERE p.member_id = m.id
+                    GROUP BY p.payer_member_id
+                ) x
+            ) o ON TRUE
             WHERE m.group_id = g.id
         ))
         FROM public.groups g
@@ -257,14 +280,17 @@ BEGIN
 END;
 $$;
 
--- The entries feed (ADR-004). p_cursor maps group id -> the last version already read ({} = from the
--- start); p_group_id NULL means every group the owner is in. An entry's feed version is the newest of
--- its own and its conflicts' row_version, so opening or resolving a conflict sends it again. Groups go in
--- id order and entries by feed version, then id; the page stops after p_limit entries but always
--- finishes the version it is in. A fully read group's cursor value is its head_version. Cursor groups
--- the owner can no longer see come back in removedGroupIds and leave the cursor. NULL when p_group_id is
--- given and not the owner's; the call still counts, and the store reports HS404.
-CREATE OR REPLACE FUNCTION api.v1_entries(p_token_hash TEXT, p_group_id UUID, p_cursor JSONB, p_limit INT)
+-- Replaced by api.v1_payments (ADR-004, 2026-11-04).
+DROP FUNCTION IF EXISTS api.v1_entries(TEXT, UUID, JSONB, INT);
+
+-- The payments feed (ADR-004): confirmed payments the owner is one side of. p_cursor maps group id -> the
+-- last version already read ({} = from the start); p_group_id NULL means every group the owner is in. A
+-- confirmed payment never changes, so its feed version is the version that confirmed it. Groups go in id
+-- order and payments by version, then id; the page stops after p_limit payments but always finishes the
+-- version it is in. A fully read group's cursor value is its head_version. Cursor groups the owner can no
+-- longer see come back in removedGroupIds and leave the cursor. NULL when p_group_id is given and not the
+-- owner's; the call still counts, and the store reports HS404.
+CREATE OR REPLACE FUNCTION api.v1_payments(p_token_hash TEXT, p_group_id UUID, p_cursor JSONB, p_limit INT)
 RETURNS JSONB
 LANGUAGE plpgsql VOLATILE SECURITY DEFINER SET search_path = ''
 AS $$
@@ -276,7 +302,7 @@ DECLARE
     v_found BOOLEAN;
 BEGIN
     WITH visible AS (
-        SELECT g.id AS group_id, g.head_version, gm.id AS member_id
+        SELECT g.id AS group_id, g.name AS group_name, g.head_version, gm.id AS member_id
         FROM public.groups g
         JOIN public.group_members gm ON gm.group_id = g.id AND gm.user_id = v_user AND gm.deleted_at IS NULL
         WHERE g.deleted_at IS NULL
@@ -287,13 +313,14 @@ BEGIN
         WHERE p_group_id IS NULL OR v.group_id = p_group_id
     ),
     changed AS (
-        SELECT e.id, e.group_id, s.member_id, GREATEST(e.row_version, COALESCE(c.version, 0)) AS feed_version
+        SELECT
+            e.id, e.group_id, e.row_version AS feed_version, s.group_name, s.member_id,
+            (SELECT x.member_id FROM public.ledger_shares x WHERE x.entry_id = e.id AND x.paid_cents > 0) AS from_member_id,
+            (SELECT x.member_id FROM public.ledger_shares x WHERE x.entry_id = e.id AND x.owed_cents > 0) AS to_member_id
         FROM scope s
         JOIN public.ledger_entries e ON e.group_id = s.group_id
-        LEFT JOIN LATERAL (
-            SELECT max(ec.row_version) AS version FROM public.entry_conflicts ec WHERE ec.entry_id = e.id
-        ) c ON TRUE
-        WHERE GREATEST(e.row_version, COALESCE(c.version, 0)) > s.since
+        WHERE e.kind = 'payment' AND e.payment_status = 'confirmed' AND e.row_version > s.since
+            AND EXISTS (SELECT 1 FROM public.ledger_shares x WHERE x.entry_id = e.id AND x.member_id = s.member_id)
     ),
     numbered AS (
         SELECT ch.*, row_number() OVER (ORDER BY ch.group_id, ch.feed_version, ch.id) AS n FROM changed ch
@@ -307,27 +334,23 @@ BEGIN
     )
     SELECT
         jsonb_build_object(
-            'entries', COALESCE((
+            'payments', COALESCE((
                 SELECT jsonb_agg(jsonb_build_object(
                     'id', e.id,
                     'groupId', e.group_id,
-                    'kind', e.kind,
-                    'description', e.description,
+                    'groupName', p.group_name,
+                    'direction', CASE WHEN p.from_member_id = p.member_id THEN 'sent' ELSE 'received' END,
+                    'counterpartyMemberId', c.id,
+                    'counterpartyName', c.display_name,
+                    'amountCents', e.amount_cents,
                     'entryDate', e.entry_date,
-                    'totalCents', e.amount_cents,
-                    'involved', sh.member_id IS NOT NULL,
-                    'paidCents', COALESCE(sh.paid_cents, 0),
-                    'owedCents', COALESCE(sh.owed_cents, 0),
-                    'hasConflict', EXISTS (
-                        SELECT 1 FROM public.entry_conflicts ec WHERE ec.entry_id = e.id AND ec.resolved_at IS NULL
-                    ),
-                    'createdAt', e.created_at,
-                    'updatedAt', e.updated_at,
-                    'deletedAt', e.deleted_at
+                    'notes', e.notes,
+                    'confirmedAt', e.confirmed_at
                 ) ORDER BY p.n)
                 FROM numbered p
                 JOIN public.ledger_entries e ON e.id = p.id
-                LEFT JOIN public.ledger_shares sh ON sh.entry_id = e.id AND sh.member_id = p.member_id
+                JOIN public.group_members c
+                    ON c.id = CASE WHEN p.from_member_id = p.member_id THEN p.to_member_id ELSE p.from_member_id END
                 WHERE p.n <= (SELECT n FROM page_end)
             ), '[]'::JSONB),
             'cursor', COALESCE((
@@ -367,7 +390,7 @@ REVOKE EXECUTE ON ALL FUNCTIONS IN SCHEMA api FROM PUBLIC, anon, authenticated;
 GRANT EXECUTE ON FUNCTION api.v1_me(TEXT) TO handshake_api;
 GRANT EXECUTE ON FUNCTION api.v1_groups(TEXT) TO handshake_api;
 GRANT EXECUTE ON FUNCTION api.v1_group(TEXT, UUID) TO handshake_api;
-GRANT EXECUTE ON FUNCTION api.v1_entries(TEXT, UUID, JSONB, INT) TO handshake_api;
+GRANT EXECUTE ON FUNCTION api.v1_payments(TEXT, UUID, JSONB, INT) TO handshake_api;
 
 REVOKE EXECUTE ON FUNCTION public.create_api_token(TEXT) FROM PUBLIC, anon;
 REVOKE EXECUTE ON FUNCTION public.list_api_tokens() FROM PUBLIC, anon;

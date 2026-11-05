@@ -243,6 +243,15 @@ SELECT is(pg_temp.try('aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa', '{"type": "invite.
 SELECT is(pg_temp.try('aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa', '{"type": "invite.revoke", "groupId": "10000000-0000-0000-0000-000000000001", "inviteId": "50000000-0000-0000-0000-000000000077"}'), 'applied', 'revoking a link the server never stored is accepted');
 SELECT is(pg_temp.try('aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa', '{"type": "invite.revoke", "groupId": "10000000-0000-0000-0000-000000000002", "inviteId": "50000000-0000-0000-0000-000000000001"}'), 'HS422', 'a link can''t be revoked through another group');
 
+-- Members make links too, and revoke the ones they made (invite.revoke.own), not anyone else's.
+SELECT is(
+    pg_temp.try('bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb', pg_temp.invite('50000000-0000-0000-0000-000000000004', '10000000-0000-0000-0000-000000000001', 'invites1test0000000000000000000000000000004', NULL, NOW() + INTERVAL '14 days')),
+    'applied',
+    'Sam, a member, makes a link'
+);
+SELECT is(pg_temp.try('bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb', '{"type": "invite.revoke", "groupId": "10000000-0000-0000-0000-000000000001", "inviteId": "50000000-0000-0000-0000-000000000004"}'), 'applied', '... and revokes it');
+SELECT is((SELECT revoked_at IS NOT NULL FROM public.group_invites WHERE id = '50000000-0000-0000-0000-000000000004'), TRUE, 'Sam''s link is revoked');
+
 -- ---------------------------------------------------------------------------
 -- A guest who adds an email becomes a member everywhere, keeping their rows
 -- ---------------------------------------------------------------------------

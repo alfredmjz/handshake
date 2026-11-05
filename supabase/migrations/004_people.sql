@@ -1,19 +1,64 @@
 -- Migration: 004_people
--- Description: Roles (owner, member, guest), when each person joined, and the people changes:
--- member.add, member.rename, member.remove (which is also how someone leaves) and group.delete.
--- push_changes() now reports an HS code with every rejection, and apply_mutation() hands each change
--- type to its own private.apply_<type> function. There is no admin role: what isn't for everyone is
--- for the owner alone.
+-- Description: Roles (owner, member, guest), when each person joined, completed groups, and the people
+-- changes: member.add, member.rename, member.remove (which is also how someone leaves) and group.delete.
+-- Who may do what is one matrix (spec decision 8, ADR-007): private.may() and
+-- private.allowed_when_completed(), asked through private.require(). push_changes() reports an HS code
+-- with every rejection, and apply_mutation() hands each change type to its own private.apply_<type>.
 
 ALTER TABLE public.group_members DROP CONSTRAINT IF EXISTS group_members_role_check;
 ALTER TABLE public.group_members
     ADD CONSTRAINT group_members_role_check CHECK (role IN ('owner', 'member', 'guest'));
 
--- Set whenever user_id is set. NULL for someone added by name who hasn't joined yet.
+-- Set whenever user_id is set. NULL for a name-only person.
 ALTER TABLE public.group_members ADD COLUMN IF NOT EXISTS joined_at TIMESTAMPTZ;
 UPDATE public.group_members SET joined_at = created_at WHERE user_id IS NOT NULL AND joined_at IS NULL;
 
+-- A completed group is read-only apart from what the matrix allows (008 completes and reopens).
+ALTER TABLE public.groups ADD COLUMN IF NOT EXISTS completed_at TIMESTAMPTZ;
+ALTER TABLE public.groups ADD COLUMN IF NOT EXISTS completed_by_member_id UUID REFERENCES public.group_members(id);
+
 ALTER DEFAULT PRIVILEGES FOR ROLE postgres IN SCHEMA private REVOKE EXECUTE ON FUNCTIONS FROM PUBLIC;
+
+-- =============================================================================
+-- The permission matrix
+-- =============================================================================
+
+-- Spec decision 8, held in step with src/lib/permissions.ts by tests/fixtures/permission-cases.ts.
+CREATE OR REPLACE FUNCTION private.may(p_action TEXT, p_role TEXT)
+RETURNS BOOLEAN
+LANGUAGE sql IMMUTABLE SET search_path = ''
+AS $$
+    SELECT COALESCE(CASE p_action
+        WHEN 'group.rename' THEN p_role = 'owner'
+        WHEN 'group.delete' THEN p_role = 'owner'
+        WHEN 'group.complete' THEN p_role = 'owner'
+        WHEN 'group.reopen' THEN p_role = 'owner'
+        WHEN 'member.add' THEN p_role IN ('owner', 'member')
+        WHEN 'member.rename.self' THEN p_role IN ('owner', 'member', 'guest')
+        WHEN 'member.rename.others' THEN p_role = 'owner'
+        WHEN 'member.remove.self' THEN p_role IN ('owner', 'member', 'guest')
+        WHEN 'member.remove.others' THEN p_role = 'owner'
+        WHEN 'entry.create' THEN p_role IN ('owner', 'member', 'guest')
+        WHEN 'entry.update' THEN p_role IN ('owner', 'member')
+        WHEN 'entry.delete.own' THEN p_role IN ('owner', 'member', 'guest')
+        WHEN 'entry.delete.others' THEN p_role IN ('owner', 'member')
+        WHEN 'conflict.resolve' THEN p_role IN ('owner', 'member')
+        WHEN 'invite.create' THEN p_role IN ('owner', 'member')
+        WHEN 'invite.revoke.own' THEN p_role IN ('owner', 'member')
+        WHEN 'invite.revoke.others' THEN p_role = 'owner'
+        WHEN 'payment.record.own' THEN p_role IN ('owner', 'member', 'guest')
+        WHEN 'payment.record.others' THEN p_role IN ('owner', 'member')
+        WHEN 'payment.respond' THEN p_role IN ('owner', 'member', 'guest')
+        WHEN 'payment.undo' THEN p_role IN ('owner', 'member', 'guest')
+    END, FALSE);
+$$;
+
+CREATE OR REPLACE FUNCTION private.allowed_when_completed(p_action TEXT)
+RETURNS BOOLEAN
+LANGUAGE sql IMMUTABLE SET search_path = ''
+AS $$
+    SELECT COALESCE(p_action IN ('group.delete', 'group.reopen', 'member.remove.self', 'payment.respond'), FALSE);
+$$;
 
 -- =============================================================================
 -- Shared checks
@@ -34,39 +79,42 @@ AS $$
     SELECT * FROM public.group_members WHERE group_id = p_group_id AND user_id = p_user AND deleted_at IS NULL;
 $$;
 
--- Locks the group row first, so changes to one group apply one at a time and every check after this
--- sees what the previous change committed. p_allow_completed is for group.reopen and group.delete,
--- the only changes a completed group accepts (008).
-CREATE OR REPLACE FUNCTION private.require_member(
-    p_user UUID,
-    p_group_id UUID,
-    p_roles TEXT[],
-    p_allow_completed BOOLEAN DEFAULT FALSE
-)
+-- The one permission check every change makes, for the action it is doing. It first locks the group row,
+-- so changes to one group apply one at a time and every check after this sees what the previous change
+-- committed. Returns the caller's member row; HS403 if they are not an active member, the group is
+-- deleted, the group is completed and the action isn't allowed then, or their role may not.
+CREATE OR REPLACE FUNCTION private.require(p_user UUID, p_group_id UUID, p_action TEXT)
 RETURNS public.group_members
 LANGUAGE plpgsql SET search_path = ''
 AS $$
 DECLARE
+    v_group public.groups;
     v_member public.group_members;
 BEGIN
-    PERFORM 1 FROM public.groups WHERE id = p_group_id FOR NO KEY UPDATE;
+    SELECT * INTO v_group FROM public.groups WHERE id = p_group_id FOR NO KEY UPDATE;
     v_member := private.caller_member(p_user, p_group_id);
 
     IF v_member.id IS NULL THEN
         RAISE EXCEPTION 'You are not a member of this group' USING ERRCODE = 'HS403';
     END IF;
-    IF EXISTS (SELECT 1 FROM public.groups WHERE id = p_group_id AND deleted_at IS NOT NULL) THEN
+    IF v_group.deleted_at IS NOT NULL THEN
         RAISE EXCEPTION 'This group was deleted' USING ERRCODE = 'HS403';
     END IF;
-    IF NOT v_member.role = ANY (p_roles) THEN
-        RAISE EXCEPTION '%', CASE WHEN p_roles = ARRAY['owner'] THEN 'Only the group''s owner can do this'
-            ELSE 'Guests can''t do this' END
+    IF v_group.completed_at IS NOT NULL AND NOT private.allowed_when_completed(p_action) THEN
+        RAISE EXCEPTION 'This group is completed' USING ERRCODE = 'HS403';
+    END IF;
+    IF NOT private.may(p_action, v_member.role) THEN
+        RAISE EXCEPTION '%', CASE WHEN private.may(p_action, 'owner') AND NOT private.may(p_action, 'member')
+            THEN 'Only the group''s owner can do this' ELSE 'Guests can''t do this' END
             USING ERRCODE = 'HS403';
     END IF;
 
     RETURN v_member;
 END;
 $$;
+
+-- Replaced by private.require (ADR-007).
+DROP FUNCTION IF EXISTS private.require_member(UUID, UUID, TEXT[], BOOLEAN);
 
 -- =============================================================================
 -- Changes
@@ -80,6 +128,7 @@ DECLARE
     v_group_id UUID := (p_mutation->>'groupId')::UUID;
     v_version BIGINT;
 BEGIN
+    -- An account rule outside the matrix.
     IF private.is_anonymous() THEN
         RAISE EXCEPTION 'Guests can''t create groups' USING ERRCODE = 'HS403';
     END IF;
@@ -119,7 +168,7 @@ DECLARE
     v_group_id UUID := (p_mutation->>'groupId')::UUID;
     v_version BIGINT;
 BEGIN
-    PERFORM private.require_member(p_user, v_group_id, ARRAY['owner']);
+    PERFORM private.require(p_user, v_group_id, 'group.rename');
 
     v_version := private.next_group_version(v_group_id);
     UPDATE public.groups
@@ -136,14 +185,14 @@ DECLARE
     v_group_id UUID := (p_mutation->>'groupId')::UUID;
     v_version BIGINT;
 BEGIN
-    PERFORM private.require_member(p_user, v_group_id, ARRAY['owner'], TRUE);
+    PERFORM private.require(p_user, v_group_id, 'group.delete');
 
     v_version := private.next_group_version(v_group_id);
     UPDATE public.groups SET deleted_at = NOW(), updated_at = NOW(), row_version = v_version WHERE id = v_group_id;
 END;
 $$;
 
--- Someone added by name: no user yet, so they can be in bills before they join.
+-- A name-only person: no user yet, so they can be in bills before they join.
 CREATE OR REPLACE FUNCTION private.apply_member_add(p_user UUID, p_mutation JSONB)
 RETURNS VOID
 LANGUAGE plpgsql SET search_path = ''
@@ -152,7 +201,7 @@ DECLARE
     v_group_id UUID := (p_mutation->>'groupId')::UUID;
     v_version BIGINT;
 BEGIN
-    PERFORM private.require_member(p_user, v_group_id, ARRAY['owner']);
+    PERFORM private.require(p_user, v_group_id, 'member.add');
 
     v_version := private.next_group_version(v_group_id);
     INSERT INTO public.group_members (id, group_id, display_name, role, row_version)
@@ -170,11 +219,10 @@ DECLARE
     v_me public.group_members;
     v_version BIGINT;
 BEGIN
-    v_me := private.require_member(p_user, v_group_id, ARRAY['owner', 'member', 'guest']);
+    v_me := private.caller_member(p_user, v_group_id);
+    PERFORM private.require(p_user, v_group_id,
+        CASE WHEN v_target = v_me.id THEN 'member.rename.self' ELSE 'member.rename.others' END);
 
-    IF v_target <> v_me.id AND v_me.role <> 'owner' THEN
-        RAISE EXCEPTION 'Only the group''s owner can rename other people' USING ERRCODE = 'HS403';
-    END IF;
     IF NOT EXISTS (SELECT 1 FROM public.group_members WHERE id = v_target AND group_id = v_group_id) THEN
         RAISE EXCEPTION 'That person is not in this group' USING ERRCODE = 'HS422';
     END IF;
@@ -183,6 +231,28 @@ BEGIN
     UPDATE public.group_members
     SET display_name = btrim(p_mutation->>'displayName'), updated_at = NOW(), row_version = v_version
     WHERE id = v_target;
+END;
+$$;
+
+-- Hands a group whose owner is going over to the full member who joined first (joined_at, then id),
+-- or deletes it when no full member is left, even if guests remain. Stamps p_version.
+CREATE OR REPLACE FUNCTION private.hand_over(p_group_id UUID, p_version BIGINT)
+RETURNS VOID
+LANGUAGE plpgsql SET search_path = ''
+AS $$
+BEGIN
+    UPDATE public.group_members SET role = 'owner', updated_at = NOW(), row_version = p_version
+    WHERE id = (
+        SELECT id FROM public.group_members
+        WHERE group_id = p_group_id AND role = 'member' AND user_id IS NOT NULL AND deleted_at IS NULL
+        ORDER BY joined_at, id
+        LIMIT 1
+    );
+
+    IF NOT FOUND THEN
+        UPDATE public.groups SET deleted_at = NOW(), updated_at = NOW(), row_version = p_version
+        WHERE id = p_group_id AND deleted_at IS NULL;
+    END IF;
 END;
 $$;
 
@@ -198,11 +268,9 @@ DECLARE
     v_target public.group_members;
     v_version BIGINT;
 BEGIN
-    v_me := private.require_member(p_user, v_group_id, ARRAY['owner', 'member', 'guest']);
-
-    IF (p_mutation->>'memberId')::UUID <> v_me.id AND v_me.role <> 'owner' THEN
-        RAISE EXCEPTION 'Only the group''s owner can remove other people' USING ERRCODE = 'HS403';
-    END IF;
+    v_me := private.caller_member(p_user, v_group_id);
+    PERFORM private.require(p_user, v_group_id,
+        CASE WHEN (p_mutation->>'memberId')::UUID = v_me.id THEN 'member.remove.self' ELSE 'member.remove.others' END);
 
     SELECT * INTO v_target
     FROM public.group_members
@@ -224,21 +292,12 @@ BEGIN
         row_version = v_version
     WHERE id = v_target.id;
 
-    -- Only the owner can remove the owner, so this is the owner leaving. Ownership passes to the full
-    -- member who joined first; with no full member left the group is deleted, even if guests remain.
-    IF v_target.role = 'owner' THEN
-        UPDATE public.group_members SET role = 'owner', updated_at = NOW(), row_version = v_version
-        WHERE id = (
-            SELECT id FROM public.group_members
-            WHERE group_id = v_group_id AND role = 'member' AND user_id IS NOT NULL AND deleted_at IS NULL
-            ORDER BY joined_at, id
-            LIMIT 1
-        );
+    -- Someone gone from the group can't answer a handshake any more (005).
+    PERFORM private.undo_pending_payments(v_target.id, v_version);
 
-        IF NOT FOUND THEN
-            UPDATE public.groups SET deleted_at = NOW(), updated_at = NOW(), row_version = v_version
-            WHERE id = v_group_id;
-        END IF;
+    -- Only the owner can remove the owner, so this is the owner leaving.
+    IF v_target.role = 'owner' THEN
+        PERFORM private.hand_over(v_group_id, v_version);
     END IF;
 END;
 $$;
@@ -305,61 +364,8 @@ BEGIN
 END;
 $$;
 
--- =============================================================================
--- Pull: members gain joined_at
--- =============================================================================
-
-CREATE OR REPLACE FUNCTION public.pull_changes(p_cursors JSONB DEFAULT '{}'::JSONB)
-RETURNS JSONB
-LANGUAGE sql STABLE SECURITY INVOKER SET search_path = ''
-AS $$
-    WITH mine AS (
-        SELECT g.id, g.head_version, COALESCE((p_cursors->>(g.id::TEXT))::BIGINT, 0) AS since
-        FROM public.groups g
-        WHERE public.is_group_member(g.id)
-    )
-    SELECT jsonb_build_object(
-        'group_ids', COALESCE((SELECT jsonb_agg(m.id) FROM mine m), '[]'::JSONB),
-        'changes', COALESCE((
-            SELECT jsonb_agg(jsonb_build_object(
-                'group_id', m.id,
-                'version', m.head_version,
-                'groups', COALESCE((
-                    SELECT jsonb_agg(jsonb_build_object(
-                        'id', g.id,
-                        'name', g.name,
-                        'base_currency', g.base_currency,
-                        'created_by', g.created_by,
-                        'created_at', g.created_at,
-                        'deleted_at', g.deleted_at,
-                        'row_version', g.row_version
-                    ))
-                    FROM public.groups g
-                    WHERE g.id = m.id AND g.row_version > m.since
-                ), '[]'::JSONB),
-                'members', COALESCE((
-                    SELECT jsonb_agg(jsonb_build_object(
-                        'id', gm.id,
-                        'group_id', gm.group_id,
-                        'user_id', gm.user_id,
-                        'display_name', gm.display_name,
-                        'role', gm.role,
-                        'joined_at', gm.joined_at,
-                        'deleted_at', gm.deleted_at,
-                        'row_version', gm.row_version
-                    ))
-                    FROM public.group_members gm
-                    WHERE gm.group_id = m.id AND gm.row_version > m.since
-                ), '[]'::JSONB)
-            ))
-            FROM mine m
-            WHERE m.head_version > m.since
-        ), '[]'::JSONB)
-    );
-$$;
+-- pull_changes() gets its final shape in 007, once every synced table exists.
 
 REVOKE EXECUTE ON ALL FUNCTIONS IN SCHEMA private FROM PUBLIC, anon, authenticated;
 REVOKE EXECUTE ON FUNCTION public.push_changes(JSONB) FROM PUBLIC, anon;
-REVOKE EXECUTE ON FUNCTION public.pull_changes(JSONB) FROM PUBLIC, anon;
 GRANT EXECUTE ON FUNCTION public.push_changes(JSONB) TO authenticated;
-GRANT EXECUTE ON FUNCTION public.pull_changes(JSONB) TO authenticated;
