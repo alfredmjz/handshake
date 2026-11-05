@@ -15,6 +15,7 @@
 		"test:watch": "bun test --watch",
 		"test:db": "supabase test db",
 		"gen:ledger-cases": "bun scripts/ledger-cases-sql.ts",
+		"gen:permission-cases": "bun scripts/permission-cases-sql.ts",
 		"db:start": "supabase start",
 		"db:stop": "supabase stop",
 		"db:reset": "supabase db reset",

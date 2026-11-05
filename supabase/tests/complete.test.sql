@@ -79,7 +79,7 @@ CREATE FUNCTION pg_temp.expense(p_entry UUID, p_payer UUID, p_other UUID) RETURN
         'items', jsonb_build_array(jsonb_build_object('amountCents', 900, 'paidBy', p_payer,
             'splitAmong', jsonb_build_array('20000000-0000-0000-0000-0000000000a1', '20000000-0000-0000-0000-0000000000b1', p_other))),
         'shares', (
-            SELECT jsonb_agg(jsonb_build_object('memberId', m, 'paidCents', CASE WHEN m = p_payer THEN 900 ELSE 0 END, 'owedCents', 300))
+            SELECT jsonb_agg(jsonb_build_object('memberId', m, 'paidCents', CASE WHEN m = p_payer THEN 900 ELSE 0 END, 'owedCents', 300, 'owedTo', jsonb_build_object(p_payer, 300)))
             FROM unnest(ARRAY['20000000-0000-0000-0000-0000000000a1'::UUID, '20000000-0000-0000-0000-0000000000b1'::UUID, p_other]) AS m
         )
     );
@@ -210,10 +210,12 @@ FROM (VALUES
     ('aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa', '{"type": "invite.create", "groupId": "10000000-0000-0000-0000-000000000001", "inviteId": "50000000-0000-0000-0000-000000000003", "token": "completetestinvitetoken00000000000000000003"}', 'making an invite'),
     ('aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa', '{"type": "member.add", "groupId": "10000000-0000-0000-0000-000000000001", "memberId": "20000000-0000-0000-0000-000000000092", "displayName": "Ren"}', 'adding someone'),
     ('aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa', '{"type": "group.rename", "groupId": "10000000-0000-0000-0000-000000000001", "name": "Banff (done)"}', 'renaming the group'),
-    ('bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb', '{"type": "member.remove", "groupId": "10000000-0000-0000-0000-000000000001", "memberId": "20000000-0000-0000-0000-0000000000b1"}', 'leaving'),
+    ('aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa', '{"type": "member.remove", "groupId": "10000000-0000-0000-0000-000000000001", "memberId": "20000000-0000-0000-0000-0000000000b1"}', 'removing someone else'),
     ('aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa', '{"type": "group.complete", "groupId": "10000000-0000-0000-0000-000000000001"}', 'completing it again')
 ) AS t(who, mutation, what);
 SELECT throws_ok($$ SELECT pg_temp.preview_signed_out('completetestinvitetoken00000000000000000001') $$, 'HS404', NULL, 'its links stop working');
+SELECT is(pg_temp.try('cccccccc-cccc-cccc-cccc-cccccccccccc', '{"type": "member.remove", "groupId": "10000000-0000-0000-0000-000000000001", "memberId": "20000000-0000-0000-0000-0000000000c1"}'), 'applied', 'leaving still works (member.remove.self is allowed when completed)');
+SELECT is((SELECT deleted_at IS NOT NULL FROM public.group_members WHERE id = '20000000-0000-0000-0000-0000000000c1'), TRUE, 'Jo has left');
 
 -- ---------------------------------------------------------------------------
 -- Reopening (owner only) makes it editable again

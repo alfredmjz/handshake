@@ -1,8 +1,9 @@
 -- Migration: 006_conflicts
--- Description: Edit conflicts. An entry.update or entry.delete that started from an older version of an
--- entry someone else has changed since is not applied and not rejected: it becomes an entry_conflicts
--- row that the group resolves with conflict.resolve. Each entry's last 20 versions are kept so a
--- conflict can show the version its proposer started from.
+-- Description: entry.update and entry.delete for bills, and edit conflicts. A change that started from
+-- an older version of a bill someone else has changed since is not applied and not rejected: it becomes
+-- an entry_conflicts row that the group resolves with conflict.resolve. Each bill's last 20 versions are
+-- kept so a conflict can show the version its proposer started from. Payments never conflict: they are
+-- only recorded, answered or undone (005).
 
 -- =============================================================================
 -- TABLES: entry_conflicts, ledger_entry_versions
@@ -14,7 +15,7 @@ CREATE TABLE IF NOT EXISTS public.entry_conflicts (
     group_id UUID NOT NULL REFERENCES public.groups(id) ON DELETE CASCADE,
     entry_id UUID NOT NULL REFERENCES public.ledger_entries(id) ON DELETE CASCADE,
     base_version BIGINT NOT NULL,
-    -- The entry at base_version (an EntrySnapshot), or NULL once that version is no longer kept.
+    -- The bill at base_version (an EntrySnapshot), or NULL once that version is no longer kept.
     base JSONB,
     -- What the proposer wanted, without rowVersion and updatedByMemberId; NULL for a delete.
     proposed JSONB,
@@ -51,7 +52,8 @@ GRANT SELECT ON public.entry_conflicts TO authenticated;
 -- Snapshots
 -- =============================================================================
 
--- An EntrySnapshot (docs/architecture.md §11.1) of the entry as stored now.
+-- An EntrySnapshot (docs/architecture.md §11.1) of the bill as stored now. Shares are sorted by memberId
+-- and carry owedTo.
 CREATE OR REPLACE FUNCTION private.entry_snapshot(p_entry_id UUID)
 RETURNS JSONB
 LANGUAGE sql SET search_path = ''
@@ -66,7 +68,12 @@ AS $$
             SELECT jsonb_agg(jsonb_build_object(
                 'memberId', s.member_id,
                 'paidCents', s.paid_cents,
-                'owedCents', s.owed_cents
+                'owedCents', s.owed_cents,
+                'owedTo', COALESCE((
+                    SELECT jsonb_object_agg(p.payer_member_id, p.owed_cents)
+                    FROM public.ledger_share_parts p
+                    WHERE p.entry_id = s.entry_id AND p.member_id = s.member_id
+                ), '{}'::JSONB)
             ) ORDER BY s.member_id)
             FROM public.ledger_shares s
             WHERE s.entry_id = e.id
@@ -79,30 +86,31 @@ AS $$
     WHERE e.id = p_entry_id;
 $$;
 
--- The same shape for a proposed change, as the entry would be stored.
+-- The same shape for a proposed change, as the bill would be stored.
 CREATE OR REPLACE FUNCTION private.entry_proposal(p_entry JSONB)
 RETURNS JSONB
 LANGUAGE sql STABLE SET search_path = ''
 AS $$
     SELECT jsonb_build_object(
-        'description', private.entry_description(p_entry),
+        'description', btrim(p_entry->>'description'),
         'amountCents', (p_entry->>'amountCents')::NUMERIC::BIGINT,
         'entryDate', (p_entry->>'entryDate')::DATE,
         'notes', p_entry->>'notes',
-        'items', CASE WHEN p_entry->>'kind' = 'expense' THEN p_entry->'items' END,
+        'items', p_entry->'items',
         'shares', (
             SELECT jsonb_agg(jsonb_build_object(
-                'memberId', (s->>'memberId')::UUID,
-                'paidCents', (s->>'paidCents')::NUMERIC::BIGINT,
-                'owedCents', (s->>'owedCents')::NUMERIC::BIGINT
-            ) ORDER BY (s->>'memberId')::UUID)
-            FROM jsonb_array_elements(p_entry->'shares') s
+                'memberId', s.member_id,
+                'paidCents', s.paid_cents,
+                'owedCents', s.owed_cents,
+                'owedTo', s.owed_to
+            ) ORDER BY s.member_id)
+            FROM private.share_rows(p_entry->'shares') s
         ),
         'deletedAt', NULL
     );
 $$;
 
--- Keeps the entry's current version, and only its newest 20.
+-- Keeps the bill's current version, and only its newest 20.
 CREATE OR REPLACE FUNCTION private.record_entry_version(p_entry_id UUID)
 RETURNS VOID
 LANGUAGE plpgsql SET search_path = ''
@@ -124,13 +132,13 @@ BEGIN
 END;
 $$;
 
--- Entries written before this migration get their current version recorded.
+-- Bills written before this migration get their current version recorded.
 INSERT INTO public.ledger_entry_versions (entry_id, row_version, snapshot)
-SELECT e.id, e.row_version, private.entry_snapshot(e.id) FROM public.ledger_entries e
+SELECT e.id, e.row_version, private.entry_snapshot(e.id) FROM public.ledger_entries e WHERE e.kind = 'expense'
 ON CONFLICT (entry_id, row_version) DO NOTHING;
 
 -- =============================================================================
--- Writing entries: every write now records a version
+-- Writing bills: every write now records a version
 -- =============================================================================
 
 CREATE OR REPLACE FUNCTION private.save_entry(
@@ -144,24 +152,22 @@ CREATE OR REPLACE FUNCTION private.save_entry(
 RETURNS VOID
 LANGUAGE plpgsql SET search_path = ''
 AS $$
-DECLARE
-    v_items JSONB := CASE WHEN p_entry->>'kind' = 'expense' THEN p_entry->'items' END;
 BEGIN
     IF p_is_new THEN
         INSERT INTO public.ledger_entries (
-            id, group_id, kind, description, amount_cents, items, entry_date, notes, recorded_via,
+            id, group_id, kind, description, amount_cents, items, entry_date, notes,
             created_by_member_id, updated_by_member_id, row_version
         )
         VALUES (
-            p_entry_id, p_group_id, p_entry->>'kind', private.entry_description(p_entry),
-            (p_entry->>'amountCents')::NUMERIC::BIGINT, v_items, (p_entry->>'entryDate')::DATE, p_entry->>'notes',
-            p_entry->>'recordedVia', p_member_id, p_member_id, p_version
+            p_entry_id, p_group_id, 'expense', btrim(p_entry->>'description'),
+            (p_entry->>'amountCents')::NUMERIC::BIGINT, p_entry->'items', (p_entry->>'entryDate')::DATE, p_entry->>'notes',
+            p_member_id, p_member_id, p_version
         );
     ELSE
         UPDATE public.ledger_entries
-        SET description = private.entry_description(p_entry),
+        SET description = btrim(p_entry->>'description'),
             amount_cents = (p_entry->>'amountCents')::NUMERIC::BIGINT,
-            items = v_items,
+            items = p_entry->'items',
             entry_date = (p_entry->>'entryDate')::DATE,
             notes = p_entry->>'notes',
             updated_by_member_id = p_member_id,
@@ -171,11 +177,7 @@ BEGIN
         WHERE id = p_entry_id;
     END IF;
 
-    DELETE FROM public.ledger_shares WHERE entry_id = p_entry_id;
-    INSERT INTO public.ledger_shares (entry_id, group_id, member_id, paid_cents, owed_cents)
-    SELECT p_entry_id, p_group_id, (s->>'memberId')::UUID, (s->>'paidCents')::NUMERIC::BIGINT, (s->>'owedCents')::NUMERIC::BIGINT
-    FROM jsonb_array_elements(p_entry->'shares') s;
-
+    PERFORM private.write_shares(p_entry_id, p_group_id, p_entry->'shares');
     PERFORM private.record_entry_version(p_entry_id);
 END;
 $$;
@@ -223,7 +225,7 @@ BEGIN
 END;
 $$;
 
--- A change is stale when the entry has moved past the version it started from and someone else moved
+-- A change is stale when the bill has moved past the version it started from and someone else moved
 -- it. The same person on two devices is not a conflict: their last change wins.
 CREATE OR REPLACE FUNCTION private.is_stale(p_mutation JSONB, p_entry public.ledger_entries, p_member_id UUID)
 RETURNS BOOLEAN
@@ -234,6 +236,29 @@ BEGIN
         RAISE EXCEPTION 'baseVersion must be the entry''s version the change started from' USING ERRCODE = 'HS422';
     END IF;
     RETURN p_entry.row_version > (p_mutation->>'baseVersion')::NUMERIC AND p_entry.updated_by_member_id <> p_member_id;
+END;
+$$;
+
+-- The stored bill an update or delete is about: NULL when the server never stored it (its create was
+-- rejected), so the change is accepted and does nothing.
+CREATE OR REPLACE FUNCTION private.stored_bill(p_group_id UUID, p_entry_id UUID)
+RETURNS public.ledger_entries
+LANGUAGE plpgsql SET search_path = ''
+AS $$
+DECLARE
+    v_entry public.ledger_entries;
+BEGIN
+    SELECT * INTO v_entry FROM public.ledger_entries WHERE id = p_entry_id;
+    IF v_entry.id IS NULL THEN
+        RETURN NULL;
+    END IF;
+    IF v_entry.group_id <> p_group_id THEN
+        RAISE EXCEPTION 'That entry is in another group' USING ERRCODE = 'HS422';
+    END IF;
+    IF v_entry.kind = 'payment' THEN
+        RAISE EXCEPTION 'A payment can''t be edited or deleted; record one the other way instead' USING ERRCODE = 'HS422';
+    END IF;
+    RETURN v_entry;
 END;
 $$;
 
@@ -251,20 +276,13 @@ DECLARE
     v_entry public.ledger_entries;
     v_version BIGINT;
 BEGIN
-    v_me := private.require_member(p_user, v_group_id, ARRAY['owner', 'member']);
+    v_me := private.require(p_user, v_group_id, 'entry.update');
 
-    SELECT * INTO v_entry FROM public.ledger_entries WHERE id = (p_mutation->>'entryId')::UUID;
-    -- Its create was rejected, so it never reached the server: accept the update and do nothing.
+    v_entry := private.stored_bill(v_group_id, (p_mutation->>'entryId')::UUID);
     IF v_entry.id IS NULL THEN
         RETURN;
     END IF;
-    IF v_entry.group_id <> v_group_id THEN
-        RAISE EXCEPTION 'That entry is in another group' USING ERRCODE = 'HS422';
-    END IF;
-    IF v_entry.kind IS DISTINCT FROM p_mutation->>'kind' THEN
-        RAISE EXCEPTION 'An entry can''t change between expense and payment' USING ERRCODE = 'HS422';
-    END IF;
-    PERFORM private.validate_entry(v_group_id, p_mutation || jsonb_build_object('recordedVia', v_entry.recorded_via));
+    PERFORM private.validate_entry(v_group_id, p_mutation);
 
     v_version := private.next_group_version(v_group_id);
     IF private.is_stale(p_mutation, v_entry, v_me.id) THEN
@@ -285,20 +303,15 @@ DECLARE
     v_entry public.ledger_entries;
     v_version BIGINT;
 BEGIN
-    v_me := private.require_member(p_user, v_group_id, ARRAY['owner', 'member', 'guest']);
-
+    -- Who added it decides the action; a bill never stored is checked as your own.
+    v_me := private.caller_member(p_user, v_group_id);
     SELECT * INTO v_entry FROM public.ledger_entries WHERE id = (p_mutation->>'entryId')::UUID;
-    IF v_entry.id IS NULL THEN
-        RETURN;
-    END IF;
-    IF v_entry.group_id <> v_group_id THEN
-        RAISE EXCEPTION 'That entry is in another group' USING ERRCODE = 'HS422';
-    END IF;
-    IF v_me.role = 'guest' AND v_entry.created_by_member_id <> v_me.id THEN
-        RAISE EXCEPTION 'Guests can only delete entries they added' USING ERRCODE = 'HS403';
-    END IF;
-    -- Deleted already, by anyone: nothing left to do, and nothing to disagree about.
-    IF v_entry.deleted_at IS NOT NULL THEN
+    v_me := private.require(p_user, v_group_id,
+        CASE WHEN v_entry.id IS NULL OR v_entry.created_by_member_id = v_me.id THEN 'entry.delete.own' ELSE 'entry.delete.others' END);
+
+    v_entry := private.stored_bill(v_group_id, (p_mutation->>'entryId')::UUID);
+    -- Never stored, or deleted already by anyone: nothing left to do, and nothing to disagree about.
+    IF v_entry.id IS NULL OR v_entry.deleted_at IS NOT NULL THEN
         RETURN;
     END IF;
 
@@ -311,8 +324,8 @@ BEGIN
 END;
 $$;
 
--- `entry` is the final version (the entry.create fields; kind may be left out) or {"deleted": true}. It
--- is applied as it is, with no stale check: resolving is deciding.
+-- `entry` is the final version (the entry.create fields of a bill) or {"deleted": true}. It is applied
+-- as it is, with no stale check: resolving is deciding.
 CREATE OR REPLACE FUNCTION private.apply_conflict_resolve(p_user UUID, p_mutation JSONB)
 RETURNS VOID
 LANGUAGE plpgsql SET search_path = ''
@@ -321,11 +334,10 @@ DECLARE
     v_group_id UUID := (p_mutation->>'groupId')::UUID;
     v_me public.group_members;
     v_conflict public.entry_conflicts;
-    v_entry public.ledger_entries;
     v_final JSONB := p_mutation->'entry';
     v_version BIGINT;
 BEGIN
-    v_me := private.require_member(p_user, v_group_id, ARRAY['owner', 'member']);
+    v_me := private.require(p_user, v_group_id, 'conflict.resolve');
 
     SELECT * INTO v_conflict
     FROM public.entry_conflicts
@@ -349,19 +361,12 @@ BEGIN
         RAISE EXCEPTION 'A resolution needs the final entry, or deleted: true' USING ERRCODE = 'HS422';
     END IF;
 
-    SELECT * INTO v_entry FROM public.ledger_entries WHERE id = v_conflict.entry_id;
     v_version := private.next_group_version(v_group_id);
-
     IF v_final->'deleted' = 'true'::JSONB THEN
-        PERFORM private.delete_entry(v_entry.id, v_me.id, v_version);
+        PERFORM private.delete_entry(v_conflict.entry_id, v_me.id, v_version);
     ELSE
-        v_final := jsonb_build_object('kind', v_entry.kind, 'recordedVia', v_entry.recorded_via)
-            || (v_final - 'recordedVia');
-        IF v_final->>'kind' IS DISTINCT FROM v_entry.kind THEN
-            RAISE EXCEPTION 'An entry can''t change between expense and payment' USING ERRCODE = 'HS422';
-        END IF;
         PERFORM private.validate_entry(v_group_id, v_final);
-        PERFORM private.save_entry(v_entry.id, v_group_id, v_final, v_me.id, v_version, FALSE);
+        PERFORM private.save_entry(v_conflict.entry_id, v_group_id, v_final, v_me.id, v_version, FALSE);
     END IF;
 
     UPDATE public.entry_conflicts
@@ -373,107 +378,4 @@ BEGIN
 END;
 $$;
 
--- =============================================================================
--- Pull: conflicts
--- =============================================================================
-
-CREATE OR REPLACE FUNCTION public.pull_changes(p_cursors JSONB DEFAULT '{}'::JSONB)
-RETURNS JSONB
-LANGUAGE sql STABLE SECURITY INVOKER SET search_path = ''
-AS $$
-    WITH mine AS (
-        SELECT g.id, g.head_version, COALESCE((p_cursors->>(g.id::TEXT))::BIGINT, 0) AS since
-        FROM public.groups g
-        WHERE public.is_group_member(g.id)
-    )
-    SELECT jsonb_build_object(
-        'group_ids', COALESCE((SELECT jsonb_agg(m.id) FROM mine m), '[]'::JSONB),
-        'changes', COALESCE((
-            SELECT jsonb_agg(jsonb_build_object(
-                'group_id', m.id,
-                'version', m.head_version,
-                'groups', COALESCE((
-                    SELECT jsonb_agg(jsonb_build_object(
-                        'id', g.id,
-                        'name', g.name,
-                        'base_currency', g.base_currency,
-                        'created_by', g.created_by,
-                        'created_at', g.created_at,
-                        'deleted_at', g.deleted_at,
-                        'row_version', g.row_version
-                    ))
-                    FROM public.groups g
-                    WHERE g.id = m.id AND g.row_version > m.since
-                ), '[]'::JSONB),
-                'members', COALESCE((
-                    SELECT jsonb_agg(jsonb_build_object(
-                        'id', gm.id,
-                        'group_id', gm.group_id,
-                        'user_id', gm.user_id,
-                        'display_name', gm.display_name,
-                        'role', gm.role,
-                        'joined_at', gm.joined_at,
-                        'deleted_at', gm.deleted_at,
-                        'row_version', gm.row_version
-                    ))
-                    FROM public.group_members gm
-                    WHERE gm.group_id = m.id AND gm.row_version > m.since
-                ), '[]'::JSONB),
-                'entries', COALESCE((
-                    SELECT jsonb_agg(jsonb_build_object(
-                        'id', e.id,
-                        'group_id', e.group_id,
-                        'kind', e.kind,
-                        'description', e.description,
-                        'amount_cents', e.amount_cents,
-                        'items', e.items,
-                        'entry_date', e.entry_date,
-                        'notes', e.notes,
-                        'recorded_via', e.recorded_via,
-                        'created_by_member_id', e.created_by_member_id,
-                        'updated_by_member_id', e.updated_by_member_id,
-                        'created_at', e.created_at,
-                        'updated_at', e.updated_at,
-                        'deleted_at', e.deleted_at,
-                        'row_version', e.row_version,
-                        'shares', COALESCE((
-                            SELECT jsonb_agg(jsonb_build_object(
-                                'member_id', s.member_id,
-                                'paid_cents', s.paid_cents,
-                                'owed_cents', s.owed_cents
-                            ) ORDER BY s.member_id)
-                            FROM public.ledger_shares s
-                            WHERE s.entry_id = e.id
-                        ), '[]'::JSONB)
-                    ))
-                    FROM public.ledger_entries e
-                    WHERE e.group_id = m.id AND e.row_version > m.since
-                ), '[]'::JSONB),
-                'conflicts', COALESCE((
-                    SELECT jsonb_agg(jsonb_build_object(
-                        'id', c.id,
-                        'group_id', c.group_id,
-                        'entry_id', c.entry_id,
-                        'base_version', c.base_version,
-                        'base', c.base,
-                        'proposed', c.proposed,
-                        'proposed_by_member_id', c.proposed_by_member_id,
-                        'created_at', c.created_at,
-                        'resolved_at', c.resolved_at,
-                        'resolved_by_member_id', c.resolved_by_member_id,
-                        'resolution', c.resolution,
-                        'row_version', c.row_version
-                    ))
-                    FROM public.entry_conflicts c
-                    WHERE c.group_id = m.id AND c.row_version > m.since
-                ), '[]'::JSONB)
-            ))
-            FROM mine m
-            WHERE m.head_version > m.since
-        ), '[]'::JSONB)
-    );
-$$;
-
 REVOKE EXECUTE ON ALL FUNCTIONS IN SCHEMA private FROM PUBLIC, anon, authenticated;
-REVOKE EXECUTE ON FUNCTION public.pull_changes(JSONB) FROM PUBLIC, anon;
-GRANT EXECUTE ON FUNCTION public.pull_changes(JSONB) TO authenticated;

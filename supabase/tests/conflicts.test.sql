@@ -70,7 +70,8 @@ CREATE FUNCTION pg_temp.saved(p_name TEXT) RETURNS BIGINT LANGUAGE sql AS $$
     SELECT version FROM saved WHERE name = p_name;
 $$;
 
--- An expense Alex paid, split by Alex, Jo and Sam; the owed cents are worked out by hand per use.
+-- A bill Alex paid, split by Alex, Jo and Sam, so everything is owed to Alex; the owed cents are worked
+-- out by hand per use.
 CREATE FUNCTION pg_temp.expense(p_entry UUID, p_description TEXT, p_amount INT, p_alex INT, p_jo INT, p_sam INT) RETURNS JSONB LANGUAGE sql AS $$
     SELECT jsonb_build_object(
         'type', 'entry.create',
@@ -86,9 +87,9 @@ CREATE FUNCTION pg_temp.expense(p_entry UUID, p_description TEXT, p_amount INT, 
             'splitAmong', '["20000000-0000-0000-0000-0000000000a1", "20000000-0000-0000-0000-0000000000c1", "20000000-0000-0000-0000-0000000000b1"]'::JSONB
         )),
         'shares', jsonb_build_array(
-            jsonb_build_object('memberId', '20000000-0000-0000-0000-0000000000a1', 'paidCents', p_amount, 'owedCents', p_alex),
-            jsonb_build_object('memberId', '20000000-0000-0000-0000-0000000000c1', 'paidCents', 0, 'owedCents', p_jo),
-            jsonb_build_object('memberId', '20000000-0000-0000-0000-0000000000b1', 'paidCents', 0, 'owedCents', p_sam)
+            jsonb_build_object('memberId', '20000000-0000-0000-0000-0000000000a1', 'paidCents', p_amount, 'owedCents', p_alex, 'owedTo', jsonb_build_object('20000000-0000-0000-0000-0000000000a1', p_alex)),
+            jsonb_build_object('memberId', '20000000-0000-0000-0000-0000000000c1', 'paidCents', 0, 'owedCents', p_jo, 'owedTo', jsonb_build_object('20000000-0000-0000-0000-0000000000a1', p_jo)),
+            jsonb_build_object('memberId', '20000000-0000-0000-0000-0000000000b1', 'paidCents', 0, 'owedCents', p_sam, 'owedTo', jsonb_build_object('20000000-0000-0000-0000-0000000000a1', p_sam))
         )
     );
 $$;
@@ -177,9 +178,9 @@ SELECT results_eq(
        FROM public.entry_conflicts WHERE id = '40000000-0000-0000-0000-000000000001' $$,
     $$ VALUES ('Dinner', 1000, pg_temp.saved('dinner added'), '20000000-0000-0000-0000-0000000000a1', '334',
                'Dinner', 1200,
-               '[{"memberId": "20000000-0000-0000-0000-0000000000a1", "paidCents": 1200, "owedCents": 400},
-                 {"memberId": "20000000-0000-0000-0000-0000000000b1", "paidCents": 0, "owedCents": 400},
-                 {"memberId": "20000000-0000-0000-0000-0000000000c1", "paidCents": 0, "owedCents": 400}]'::JSONB,
+               '[{"memberId": "20000000-0000-0000-0000-0000000000a1", "paidCents": 1200, "owedCents": 400, "owedTo": {"20000000-0000-0000-0000-0000000000a1": 400}},
+                 {"memberId": "20000000-0000-0000-0000-0000000000b1", "paidCents": 0, "owedCents": 400, "owedTo": {"20000000-0000-0000-0000-0000000000a1": 400}},
+                 {"memberId": "20000000-0000-0000-0000-0000000000c1", "paidCents": 0, "owedCents": 400, "owedTo": {"20000000-0000-0000-0000-0000000000a1": 400}}]'::JSONB,
                FALSE, FALSE, 'null'::JSONB) $$,
     'it holds the base version (Alex''s dinner, Alex owing 334) and Jo''s proposed version (1200, shares by member id, no version fields)'
 );

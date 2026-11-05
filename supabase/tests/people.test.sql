@@ -136,19 +136,21 @@ SELECT is(
 );
 
 -- ---------------------------------------------------------------------------
--- A member can't manage people or the group
+-- A member adds people and makes invites, but can't manage others or the group. One call per action
+-- here proves each apply_* asks for the right one; the matrix is pinned in permission_cases.test.sql.
 -- ---------------------------------------------------------------------------
-SELECT is(pg_temp.try('bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb', '{"type": "member.add", "groupId": "10000000-0000-0000-0000-000000000001", "memberId": "20000000-0000-0000-0000-000000000091", "displayName": "Max"}'), 'HS403', 'a member cannot add people');
+SELECT is(pg_temp.try('bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb', '{"type": "member.add", "groupId": "10000000-0000-0000-0000-000000000001", "memberId": "20000000-0000-0000-0000-000000000091", "displayName": "Max"}'), 'applied', 'a member adds someone by name (member.add)');
+SELECT is(pg_temp.try('dddddddd-dddd-dddd-dddd-dddddddddddd', '{"type": "member.add", "groupId": "10000000-0000-0000-0000-000000000001", "memberId": "20000000-0000-0000-0000-000000000092", "displayName": "Ned"}'), 'HS403', 'a guest can''t (member.add)');
 SELECT is(pg_temp.try('bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb', '{"type": "member.rename", "groupId": "10000000-0000-0000-0000-000000000001", "memberId": "20000000-0000-0000-0000-0000000000f1", "displayName": "Patricia"}'), 'HS403', 'a member cannot rename someone else');
 SELECT is(pg_temp.try('bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb', '{"type": "group.rename", "groupId": "10000000-0000-0000-0000-000000000001", "name": "Sam''s Banff"}'), 'HS403', 'a member cannot rename the group');
 SELECT is(pg_temp.try('bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb', '{"type": "member.remove", "groupId": "10000000-0000-0000-0000-000000000001", "memberId": "20000000-0000-0000-0000-0000000000f1"}'), 'HS403', 'a member cannot remove a non-member');
 SELECT is(pg_temp.try('bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb', '{"type": "member.remove", "groupId": "10000000-0000-0000-0000-000000000001", "memberId": "20000000-0000-0000-0000-0000000000c1"}'), 'HS403', 'a member cannot remove another member');
 SELECT is(pg_temp.try('bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb', '{"type": "member.remove", "groupId": "10000000-0000-0000-0000-000000000001", "memberId": "20000000-0000-0000-0000-0000000000d1"}'), 'HS403', 'a member cannot remove a guest');
-SELECT is(pg_temp.try('bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb', '{"type": "invite.create", "groupId": "10000000-0000-0000-0000-000000000001", "inviteId": "50000000-0000-0000-0000-000000000002", "token": "peopletestinvitetoken0000000000000000000002"}'), 'HS403', 'a member cannot make invites');
+SELECT is(pg_temp.try('bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb', '{"type": "invite.create", "groupId": "10000000-0000-0000-0000-000000000001", "inviteId": "50000000-0000-0000-0000-000000000002", "token": "peopletestinvitetoken0000000000000000000002"}'), 'applied', 'a member makes an invite (invite.create)');
 SELECT is(pg_temp.try('bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb', '{"type": "group.delete", "groupId": "10000000-0000-0000-0000-000000000001"}'), 'HS403', 'a member cannot delete the group');
 
 SELECT is(
-    pg_temp.push('bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb', '{"type": "member.add", "groupId": "10000000-0000-0000-0000-000000000001", "memberId": "20000000-0000-0000-0000-000000000091", "displayName": "Max"}')#>>'{rejected,0,reason}',
+    pg_temp.push('bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb', '{"type": "member.rename", "groupId": "10000000-0000-0000-0000-000000000001", "memberId": "20000000-0000-0000-0000-0000000000f1", "displayName": "Patricia"}')#>>'{rejected,0,reason}',
     'Only the group''s owner can do this',
     '... and is told why'
 );
@@ -199,12 +201,12 @@ SELECT is(
 
 SELECT is(
     pg_temp.head('10000000-0000-0000-0000-000000000001'),
-    19::BIGINT,
-    'one version per applied change: create 1, adds 2–6, invite 7, joins 8–11, renames 12–15, group rename 16, removals 17–19; rejected changes take none'
+    21::BIGINT,
+    'one version per applied change: create 1, adds 2–6, invite 7, joins 8–11, Sam''s add 12 and invite 13, renames 14–17, group rename 18, removals 19–21; rejected changes take none'
 );
 
 SELECT is(pg_temp.try('aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa', '{"type": "member.remove", "groupId": "10000000-0000-0000-0000-000000000001", "memberId": "20000000-0000-0000-0000-0000000000e1"}'), 'applied', 'removing someone already removed (another device did it) is accepted');
-SELECT is(pg_temp.head('10000000-0000-0000-0000-000000000001'), 19::BIGINT, '... and changes nothing');
+SELECT is(pg_temp.head('10000000-0000-0000-0000-000000000001'), 21::BIGINT, '... and changes nothing');
 
 SELECT is(pg_temp.try('eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee', '{"type": "member.rename", "groupId": "10000000-0000-0000-0000-000000000001", "memberId": "20000000-0000-0000-0000-0000000000e1", "displayName": "Lee again"}'), 'HS403', 'someone removed can no longer change the group');
 SELECT is(pg_temp.pull('eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee')->'group_ids', '[]'::JSONB, '... and their next pull drops it');
@@ -217,13 +219,13 @@ SELECT is(pg_temp.try('aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa', '{"type": "member.
 SELECT results_eq(
     $$ SELECT display_name, role, deleted_at IS NOT NULL, row_version FROM public.group_members
        WHERE group_id = '10000000-0000-0000-0000-000000000001' AND role <> 'guest' AND user_id IS NOT NULL ORDER BY display_name $$,
-    $$ VALUES ('Alex', 'member', TRUE, 20::BIGINT), ('Jo', 'owner', FALSE, 20::BIGINT), ('Lee', 'member', TRUE, 19::BIGINT), ('Sam', 'member', FALSE, 15::BIGINT) $$,
+    $$ VALUES ('Alex', 'member', TRUE, 22::BIGINT), ('Jo', 'owner', FALSE, 22::BIGINT), ('Lee', 'member', TRUE, 21::BIGINT), ('Sam', 'member', FALSE, 17::BIGINT) $$,
     'Jo, who joined first, is the new owner (not Sam, whose id sorts first) and Alex''s removed row is no longer the owner, both in one version'
 );
 
 SELECT is(pg_temp.pull('aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa')->'group_ids', '[]'::JSONB, 'the group drops from the old owner''s device');
 SELECT is(
-    pg_temp.pull('cccccccc-cccc-cccc-cccc-cccccccccccc', '{"10000000-0000-0000-0000-000000000001": 19}')#>'{changes,0,members}' @> '[{"display_name": "Jo", "role": "owner"}]'::JSONB,
+    pg_temp.pull('cccccccc-cccc-cccc-cccc-cccccccccccc', '{"10000000-0000-0000-0000-000000000001": 21}')#>'{changes,0,members}' @> '[{"display_name": "Jo", "role": "owner"}]'::JSONB,
     TRUE,
     'the new role reaches the other devices'
 );

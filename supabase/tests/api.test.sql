@@ -88,8 +88,8 @@ $$;
 CREATE FUNCTION pg_temp.v1_group(p_hash TEXT, p_group UUID) RETURNS JSONB LANGUAGE sql SET role = 'handshake_api' AS $$
     SELECT api.v1_group(p_hash, p_group);
 $$;
-CREATE FUNCTION pg_temp.v1_entries(p_hash TEXT, p_group UUID, p_cursor JSONB, p_limit INT) RETURNS JSONB LANGUAGE sql SET role = 'handshake_api' AS $$
-    SELECT api.v1_entries(p_hash, p_group, p_cursor, p_limit);
+CREATE FUNCTION pg_temp.v1_payments(p_hash TEXT, p_group UUID, p_cursor JSONB, p_limit INT) RETURNS JSONB LANGUAGE sql SET role = 'handshake_api' AS $$
+    SELECT api.v1_payments(p_hash, p_group, p_cursor, p_limit);
 $$;
 -- The SQLSTATE (and DETAIL, if any) a statement raises when run as handshake_api, or 'ok'.
 CREATE FUNCTION pg_temp.sqlstate_as_api(p_sql TEXT) RETURNS TEXT LANGUAGE plpgsql SET role = 'handshake_api' AS $$
@@ -127,8 +127,14 @@ CREATE FUNCTION pg_temp.expense(p_group UUID, p_entry UUID, p_description TEXT, 
         'amountCents', p_amount, 'entryDate', '2026-11-02', 'notes', NULL,
         'items', jsonb_build_array(jsonb_build_object('amountCents', p_amount, 'paidBy', p_payer,
             'splitAmong', (SELECT jsonb_agg(k ORDER BY k) FROM jsonb_object_keys(p_shares) k WHERE (p_shares->k->>1)::INT > 0))),
-        'shares', (SELECT jsonb_agg(jsonb_build_object('memberId', k, 'paidCents', (p_shares->k->>0)::INT, 'owedCents', (p_shares->k->>1)::INT)) FROM jsonb_object_keys(p_shares) k)
+        'shares', (SELECT jsonb_agg(jsonb_build_object('memberId', k, 'paidCents', (p_shares->k->>0)::INT, 'owedCents', (p_shares->k->>1)::INT,
+            'owedTo', CASE WHEN (p_shares->k->>1)::INT > 0 THEN jsonb_build_object(p_payer, (p_shares->k->>1)::INT) ELSE '{}'::JSONB END)) FROM jsonb_object_keys(p_shares) k)
     );
+$$;
+-- A payment.record: p_from paid p_to back p_amount.
+CREATE FUNCTION pg_temp.pay(p_group UUID, p_entry UUID, p_from UUID, p_to UUID, p_amount INT) RETURNS JSONB LANGUAGE sql AS $$
+    SELECT jsonb_build_object('type', 'payment.record', 'groupId', p_group, 'entryId', p_entry,
+        'fromMemberId', p_from, 'toMemberId', p_to, 'amountCents', p_amount, 'entryDate', '2026-11-04', 'notes', NULL);
 $$;
 
 -- ---------------------------------------------------------------------------
@@ -270,10 +276,10 @@ SELECT is(
     '{"id": "10000000-0000-0000-0000-000000000001", "name": "Banff", "role": "member", "memberId": "20000000-0000-0000-0000-0000000000b1",
       "paidCents": 1000, "owedCents": 334, "completedAt": null,
       "members": [
-        {"memberId": "20000000-0000-0000-0000-0000000000a1", "displayName": "Alex", "active": true, "paidCents": 0, "owedCents": 333},
-        {"memberId": "20000000-0000-0000-0000-0000000000c1", "displayName": "Jo", "active": true, "paidCents": 0, "owedCents": 333},
-        {"memberId": "20000000-0000-0000-0000-0000000000f1", "displayName": "Pat", "active": true, "paidCents": 0, "owedCents": 0},
-        {"memberId": "20000000-0000-0000-0000-0000000000b1", "displayName": "Sam", "active": true, "paidCents": 1000, "owedCents": 334}]}'::JSONB,
+        {"memberId": "20000000-0000-0000-0000-0000000000a1", "displayName": "Alex", "active": true, "paidCents": 0, "owedCents": 333, "owedTo": {"20000000-0000-0000-0000-0000000000b1": 333}},
+        {"memberId": "20000000-0000-0000-0000-0000000000c1", "displayName": "Jo", "active": true, "paidCents": 0, "owedCents": 333, "owedTo": {"20000000-0000-0000-0000-0000000000b1": 333}},
+        {"memberId": "20000000-0000-0000-0000-0000000000f1", "displayName": "Pat", "active": true, "paidCents": 0, "owedCents": 0, "owedTo": {}},
+        {"memberId": "20000000-0000-0000-0000-0000000000b1", "displayName": "Sam", "active": true, "paidCents": 1000, "owedCents": 334, "owedTo": {"20000000-0000-0000-0000-0000000000b1": 334}}]}'::JSONB,
     'v1_group for Banff: Sam''s totals plus every member''s, by name, so the handler can work out settle-up (Alex → Sam 333, Jo → Sam 333)'
 );
 SELECT is(pg_temp.v1_group(pg_temp.token_hash('sam'), '10000000-0000-0000-0000-000000000002'), NULL, 'v1_group for a group Sam isn''t in returns NULL (the store reports HS404)');
@@ -291,7 +297,7 @@ SELECT is(pg_temp.try('cccccccc-cccc-cccc-cccc-cccccccccccc', jsonb_build_object
 SELECT is(pg_temp.try('cccccccc-cccc-cccc-cccc-cccccccccccc', '{"type": "member.remove", "groupId": "10000000-0000-0000-0000-000000000001", "memberId": "20000000-0000-0000-0000-0000000000c1"}'), 'applied', '... and leaves Banff');
 SELECT is(
     pg_temp.v1_group(pg_temp.token_hash('sam'), '10000000-0000-0000-0000-000000000001')->'members'->1,
-    '{"memberId": "20000000-0000-0000-0000-0000000000c1", "displayName": "Jo", "active": false, "paidCents": 0, "owedCents": 333}'::JSONB,
+    '{"memberId": "20000000-0000-0000-0000-0000000000c1", "displayName": "Jo", "active": false, "paidCents": 0, "owedCents": 333, "owedTo": {"20000000-0000-0000-0000-0000000000b1": 333}}'::JSONB,
     'Jo is still listed, inactive, with the dinner share and not the deleted snacks'
 );
 SELECT is((pg_temp.v1_groups(pg_temp.token_hash('sam'))->0->>'owedCents')::INT, 334, 'Sam''s total skips the deleted snacks too');
@@ -311,75 +317,105 @@ SELECT is(pg_temp.v1_me(pg_temp.token_hash('lee'))->>'displayName', 'Lee', 'afte
 SELECT is((SELECT rate_window_count FROM public.api_tokens WHERE id = (SELECT id FROM tokens WHERE name = 'lee')), 1, '... in a new window');
 
 -- ---------------------------------------------------------------------------
--- The entries feed
+-- Payments: only confirmed ones count, in the totals and in the feed
 -- ---------------------------------------------------------------------------
--- Banff now has the dinner (Sam in it) and the deleted snacks. Add a taxi Sam is in and a lunch Sam isn't:
--- taxi: Alex paid 600, Alex and Sam 300 each; lunch: Alex paid 300, all Alex's.
+-- Banff now has the dinner (Alex 333, Jo 333 and Sam 334, all owed to Sam) and the deleted snacks; Jo has
+-- left. Alex pays Sam back 333.
 SELECT is(
-    pg_temp.try('aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa', pg_temp.expense('10000000-0000-0000-0000-000000000001', '30000000-0000-0000-0000-000000000002', 'Taxi', 600, '20000000-0000-0000-0000-0000000000a1',
-        '{"20000000-0000-0000-0000-0000000000a1": [600, 300], "20000000-0000-0000-0000-0000000000b1": [0, 300]}')),
-    'applied', 'Alex adds a taxi'
+    pg_temp.try('aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa', pg_temp.pay('10000000-0000-0000-0000-000000000001', '30000000-0000-0000-0000-000000000011', '20000000-0000-0000-0000-0000000000a1', '20000000-0000-0000-0000-0000000000b1', 333)),
+    'applied', 'Alex records "I paid Sam $3.33"'
+);
+SELECT is(pg_temp.v1_payments(pg_temp.token_hash('sam'), NULL, '{}', 100)->'payments', '[]'::JSONB, 'a pending payment is never in the feed');
+SELECT is((pg_temp.v1_groups(pg_temp.token_hash('sam'))->0->>'owedCents')::INT, 334, '... nor in the totals');
+SELECT is(
+    pg_temp.try('bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb', '{"type": "payment.confirm", "groupId": "10000000-0000-0000-0000-000000000001", "entryId": "30000000-0000-0000-0000-000000000011"}'),
+    'applied', 'Sam confirms it'
+);
+SELECT results_eq(
+    $$ SELECT (g->>'paidCents')::INT, (g->>'owedCents')::INT FROM jsonb_array_elements(pg_temp.v1_groups(pg_temp.token_hash('sam'))) g $$,
+    $$ VALUES (1000, 667) $$,
+    'now it counts: Sam paid 1000 and owes 334 + 333 = 667, so the handler''s balance is 333'
 );
 SELECT is(
-    pg_temp.try('aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa', pg_temp.expense('10000000-0000-0000-0000-000000000001', '30000000-0000-0000-0000-000000000003', 'Lunch', 300, '20000000-0000-0000-0000-0000000000a1',
-        '{"20000000-0000-0000-0000-0000000000a1": [300, 300]}')),
-    'applied', 'Alex adds a lunch only Alex shares'
+    pg_temp.v1_group(pg_temp.token_hash('sam'), '10000000-0000-0000-0000-000000000001')->'members',
+    '[{"memberId": "20000000-0000-0000-0000-0000000000a1", "displayName": "Alex", "active": true, "paidCents": 333, "owedCents": 333, "owedTo": {"20000000-0000-0000-0000-0000000000b1": 333}},
+      {"memberId": "20000000-0000-0000-0000-0000000000c1", "displayName": "Jo", "active": false, "paidCents": 0, "owedCents": 333, "owedTo": {"20000000-0000-0000-0000-0000000000b1": 333}},
+      {"memberId": "20000000-0000-0000-0000-0000000000f1", "displayName": "Pat", "active": true, "paidCents": 0, "owedCents": 0, "owedTo": {}},
+      {"memberId": "20000000-0000-0000-0000-0000000000b1", "displayName": "Sam", "active": true, "paidCents": 1000, "owedCents": 667,
+       "owedTo": {"20000000-0000-0000-0000-0000000000a1": 333, "20000000-0000-0000-0000-0000000000b1": 334}}]'::JSONB,
+    'v1_group''s members carry owedTo per pair, so the handler finds one debt for Sam: Jo owes 333 (Alex 333 − 333 = square)'
+);
+
+-- Sam records "Pat paid me $2.00" (Pat has no login, so it counts at once) and "I paid Alex $1.00" (pending).
+SELECT is(
+    pg_temp.try('bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb', pg_temp.pay('10000000-0000-0000-0000-000000000001', '30000000-0000-0000-0000-000000000012', '20000000-0000-0000-0000-0000000000f1', '20000000-0000-0000-0000-0000000000b1', 200)),
+    'applied', 'Sam records Pat paying Sam 200'
+);
+SELECT is(
+    pg_temp.try('bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb', pg_temp.pay('10000000-0000-0000-0000-000000000001', '30000000-0000-0000-0000-000000000013', '20000000-0000-0000-0000-0000000000b1', '20000000-0000-0000-0000-0000000000a1', 100)),
+    'applied', 'Sam records paying Alex 100, which waits for Alex'
 );
 
 SELECT results_eq(
-    $$ SELECT e->>'id', e->>'description', (e->>'involved')::BOOLEAN, (e->>'paidCents')::INT, (e->>'owedCents')::INT, e->>'deletedAt' IS NOT NULL
-       FROM jsonb_array_elements(pg_temp.v1_entries(pg_temp.token_hash('sam'), NULL, '{}', 2)->'entries') e $$,
-    $$ VALUES ('30000000-0000-0000-0000-000000000001', 'Dinner', TRUE, 1000, 334, FALSE), ('30000000-0000-0000-0000-000000000005', 'Snacks', TRUE, 0, 200, TRUE) $$,
-    'the first page of 2: the dinner (Sam paid 1000, owes 334), then the deleted snacks, in version order'
+    $$ SELECT p->>'id', p->>'direction', p->>'counterpartyName', (p->>'amountCents')::INT
+       FROM jsonb_array_elements(pg_temp.v1_payments(pg_temp.token_hash('sam'), NULL, '{}', 1)->'payments') p $$,
+    $$ VALUES ('30000000-0000-0000-0000-000000000011', 'received', 'Alex', 333) $$,
+    'the first page of 1: Alex''s 333, received'
 );
 SELECT is(
-    pg_temp.v1_entries(pg_temp.token_hash('sam'), NULL, '{}', 2) - 'entries',
-    jsonb_build_object('cursor', jsonb_build_object('10000000-0000-0000-0000-000000000001', pg_temp.version_of('30000000-0000-0000-0000-000000000005')), 'hasMore', TRUE, 'removedGroupIds', '[]'::JSONB),
-    '... its cursor stops at the snacks'' version, and there is more'
+    pg_temp.v1_payments(pg_temp.token_hash('sam'), NULL, '{}', 1) - 'payments',
+    jsonb_build_object('cursor', jsonb_build_object('10000000-0000-0000-0000-000000000001', pg_temp.version_of('30000000-0000-0000-0000-000000000011')), 'hasMore', TRUE, 'removedGroupIds', '[]'::JSONB),
+    '... its cursor stops at the version that confirmed it, and there is more'
 );
 SELECT is(
-    (SELECT array_agg(k ORDER BY k) FROM jsonb_object_keys(pg_temp.v1_entries(pg_temp.token_hash('sam'), NULL, '{}', 1)->'entries'->0) k),
-    ARRAY['createdAt', 'deletedAt', 'description', 'entryDate', 'groupId', 'hasConflict', 'id', 'involved', 'kind', 'owedCents', 'paidCents', 'totalCents', 'updatedAt'],
-    'a feed entry has exactly these keys (the handler adds netCents)'
+    (SELECT array_agg(k ORDER BY k) FROM jsonb_object_keys(pg_temp.v1_payments(pg_temp.token_hash('sam'), NULL, '{}', 1)->'payments'->0) k),
+    ARRAY['amountCents', 'confirmedAt', 'counterpartyMemberId', 'counterpartyName', 'direction', 'entryDate', 'groupId', 'groupName', 'id', 'notes'],
+    'a feed payment has exactly these keys'
 );
 SELECT is(
-    (pg_temp.v1_entries(pg_temp.token_hash('sam'), NULL, '{}', 1)->'entries'->0) - 'createdAt' - 'updatedAt',
-    '{"id": "30000000-0000-0000-0000-000000000001", "groupId": "10000000-0000-0000-0000-000000000001", "kind": "expense", "description": "Dinner",
-      "entryDate": "2026-11-02", "totalCents": 1000, "involved": true, "paidCents": 1000, "owedCents": 334, "hasConflict": false, "deletedAt": null}'::JSONB,
-    'the dinner as Sam''s feed shows it'
+    (pg_temp.v1_payments(pg_temp.token_hash('sam'), NULL, '{}', 1)->'payments'->0) - 'confirmedAt',
+    '{"id": "30000000-0000-0000-0000-000000000011", "groupId": "10000000-0000-0000-0000-000000000001", "groupName": "Banff", "direction": "received",
+      "counterpartyMemberId": "20000000-0000-0000-0000-0000000000a1", "counterpartyName": "Alex", "amountCents": 333, "entryDate": "2026-11-04", "notes": null}'::JSONB,
+    'Alex''s payment as Sam''s feed shows it'
 );
-
 SELECT results_eq(
-    $$ SELECT e->>'description', (e->>'involved')::BOOLEAN, (e->>'paidCents')::INT, (e->>'owedCents')::INT
-       FROM jsonb_array_elements(pg_temp.v1_entries(pg_temp.token_hash('sam'), NULL, jsonb_build_object('10000000-0000-0000-0000-000000000001', pg_temp.version_of('30000000-0000-0000-0000-000000000005')), 2)->'entries') e $$,
-    $$ VALUES ('Taxi', TRUE, 0, 300), ('Lunch', FALSE, 0, 0) $$,
-    'the next page: the taxi (Sam owes 300) and the lunch, which Sam isn''t in (zeros)'
+    $$ SELECT p->>'id', p->>'direction', p->>'counterpartyName', (p->>'amountCents')::INT
+       FROM jsonb_array_elements(pg_temp.v1_payments(pg_temp.token_hash('sam'), NULL, jsonb_build_object('10000000-0000-0000-0000-000000000001', pg_temp.version_of('30000000-0000-0000-0000-000000000011')), 100)->'payments') p $$,
+    $$ VALUES ('30000000-0000-0000-0000-000000000012', 'received', 'Pat', 200) $$,
+    'the next page: Pat''s 200; Sam''s pending 100 to Alex isn''t there'
 );
 SELECT is(
-    pg_temp.v1_entries(pg_temp.token_hash('sam'), NULL, jsonb_build_object('10000000-0000-0000-0000-000000000001', pg_temp.version_of('30000000-0000-0000-0000-000000000005')), 2) - 'entries',
+    pg_temp.v1_payments(pg_temp.token_hash('sam'), NULL, jsonb_build_object('10000000-0000-0000-0000-000000000001', pg_temp.version_of('30000000-0000-0000-0000-000000000011')), 100) - 'payments',
     jsonb_build_object('cursor', jsonb_build_object('10000000-0000-0000-0000-000000000001', pg_temp.head('10000000-0000-0000-0000-000000000001')), 'hasMore', FALSE, 'removedGroupIds', '[]'::JSONB),
     '... after which Banff is fully read: its cursor value is its head version'
 );
+SELECT is(pg_temp.v1_payments(pg_temp.token_hash('lee'), NULL, '{}', 100)->'payments', '[]'::JSONB, 'Lee, who isn''t in Banff, sees none of its payments');
+
+SELECT pg_temp.head('10000000-0000-0000-0000-000000000001') AS version INTO TEMP banff_read;
 SELECT is(
-    pg_temp.v1_entries(pg_temp.token_hash('sam'), NULL, jsonb_build_object('10000000-0000-0000-0000-000000000001', pg_temp.head('10000000-0000-0000-0000-000000000001')), 100)->'entries',
-    '[]'::JSONB,
-    'an up-to-date cursor gets no entries'
+    pg_temp.try('aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa', '{"type": "payment.confirm", "groupId": "10000000-0000-0000-0000-000000000001", "entryId": "30000000-0000-0000-0000-000000000013"}'),
+    'applied', 'Alex confirms Sam''s 100'
+);
+SELECT results_eq(
+    $$ SELECT p->>'direction', p->>'counterpartyName', (p->>'amountCents')::INT
+       FROM jsonb_array_elements(pg_temp.v1_payments(pg_temp.token_hash('sam'), NULL, jsonb_build_object('10000000-0000-0000-0000-000000000001', (SELECT version FROM banff_read)), 100)->'payments') p $$,
+    $$ VALUES ('sent', 'Alex', 100) $$,
+    'once confirmed it arrives, as sent'
 );
 
--- A newly joined group arrives with its whole history: Canmore's parking (Alex paid 200, Alex and Sam 100 each).
-SELECT is(pg_temp.try('aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa', '{"type": "member.add", "groupId": "10000000-0000-0000-0000-000000000003", "memberId": "20000000-0000-0000-0000-0000000000b3", "displayName": "Sam"}'), 'applied', 'Alex adds Sam to Canmore');
+-- A newly joined group arrives with its whole history: in Canmore, Alex paid Sam (still name-only) 50.
+SELECT is(pg_temp.try('aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa', '{"type": "member.add", "groupId": "10000000-0000-0000-0000-000000000003", "memberId": "20000000-0000-0000-0000-0000000000b3", "displayName": "Sam"}'), 'applied', 'Alex adds Sam to Canmore by name');
 SELECT is(
-    pg_temp.try('aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa', pg_temp.expense('10000000-0000-0000-0000-000000000003', '30000000-0000-0000-0000-000000000004', 'Parking', 200, '20000000-0000-0000-0000-0000000000a3',
-        '{"20000000-0000-0000-0000-0000000000a3": [200, 100], "20000000-0000-0000-0000-0000000000b3": [0, 100]}')),
-    'applied', 'Alex adds parking to Canmore, before Sam has joined'
+    pg_temp.try('aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa', pg_temp.pay('10000000-0000-0000-0000-000000000003', '30000000-0000-0000-0000-000000000014', '20000000-0000-0000-0000-0000000000a3', '20000000-0000-0000-0000-0000000000b3', 50)),
+    'applied', 'Alex records paying Sam 50 there, which counts at once'
 );
 SELECT is(pg_temp.try('aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa', '{"type": "invite.create", "groupId": "10000000-0000-0000-0000-000000000003", "inviteId": "50000000-0000-0000-0000-000000000003", "token": "apitestinvitetoken0000000000000000000000003"}'), 'applied', 'Alex makes a link to Canmore');
-SELECT is(pg_temp.join('bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb', 'apitestinvitetoken0000000000000000000000003', '20000000-0000-0000-0000-0000000000b3'), '10000000-0000-0000-0000-000000000003'::UUID, 'Sam joins Canmore');
+SELECT is(pg_temp.join('bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb', 'apitestinvitetoken0000000000000000000000003', '20000000-0000-0000-0000-0000000000b3'), '10000000-0000-0000-0000-000000000003'::UUID, 'Sam joins Canmore as that Sam');
 SELECT is(
-    pg_temp.v1_entries(pg_temp.token_hash('sam'), NULL, jsonb_build_object('10000000-0000-0000-0000-000000000001', pg_temp.head('10000000-0000-0000-0000-000000000001')), 100) #- '{entries,0,createdAt}' #- '{entries,0,updatedAt}',
+    pg_temp.v1_payments(pg_temp.token_hash('sam'), NULL, jsonb_build_object('10000000-0000-0000-0000-000000000001', pg_temp.head('10000000-0000-0000-0000-000000000001')), 100) #- '{payments,0,confirmedAt}',
     jsonb_build_object(
-        'entries', '[{"id": "30000000-0000-0000-0000-000000000004", "groupId": "10000000-0000-0000-0000-000000000003", "kind": "expense", "description": "Parking", "entryDate": "2026-11-02",
-                      "totalCents": 200, "involved": true, "paidCents": 0, "owedCents": 100, "hasConflict": false, "deletedAt": null}]'::JSONB,
+        'payments', '[{"id": "30000000-0000-0000-0000-000000000014", "groupId": "10000000-0000-0000-0000-000000000003", "groupName": "Canmore", "direction": "received",
+                       "counterpartyMemberId": "20000000-0000-0000-0000-0000000000a3", "counterpartyName": "Alex", "amountCents": 50, "entryDate": "2026-11-04", "notes": null}]'::JSONB,
         'cursor', jsonb_build_object('10000000-0000-0000-0000-000000000001', pg_temp.head('10000000-0000-0000-0000-000000000001'), '10000000-0000-0000-0000-000000000003', pg_temp.head('10000000-0000-0000-0000-000000000003')),
         'hasMore', FALSE,
         'removedGroupIds', '[]'::JSONB
@@ -387,39 +423,19 @@ SELECT is(
     'the old cursor picks up Canmore, which it had never seen, from the start'
 );
 
--- A conflict sends its entry again: Alex edits the dinner from a version Sam has since changed.
-SELECT is(
-    pg_temp.try('bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb', pg_temp.expense('10000000-0000-0000-0000-000000000001', '30000000-0000-0000-0000-000000000001', 'Dinner', 1000, '20000000-0000-0000-0000-0000000000b1',
-        '{"20000000-0000-0000-0000-0000000000a1": [0, 333], "20000000-0000-0000-0000-0000000000b1": [1000, 334], "20000000-0000-0000-0000-0000000000c1": [0, 333]}')
-        || jsonb_build_object('type', 'entry.update', 'baseVersion', pg_temp.version_of('30000000-0000-0000-0000-000000000001'), 'notes', 'Sam''s note')),
-    'applied', 'Sam adds a note to the dinner'
-);
-SELECT pg_temp.head('10000000-0000-0000-0000-000000000001') AS banff_before_conflict INTO TEMP banff_before_conflict;
-SELECT is(
-    pg_temp.try('aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa', pg_temp.expense('10000000-0000-0000-0000-000000000001', '30000000-0000-0000-0000-000000000001', 'Dinner out', 1000, '20000000-0000-0000-0000-0000000000b1',
-        '{"20000000-0000-0000-0000-0000000000a1": [0, 333], "20000000-0000-0000-0000-0000000000b1": [1000, 334], "20000000-0000-0000-0000-0000000000c1": [0, 333]}')
-        || jsonb_build_object('type', 'entry.update', 'baseVersion', pg_temp.version_of('30000000-0000-0000-0000-000000000001') - 1)),
-    'applied', 'Alex''s stale edit becomes a conflict'
-);
-SELECT results_eq(
-    $$ SELECT e->>'id', (e->>'hasConflict')::BOOLEAN, e->>'description'
-       FROM jsonb_array_elements(pg_temp.v1_entries(pg_temp.token_hash('sam'), '10000000-0000-0000-0000-000000000001',
-            jsonb_build_object('10000000-0000-0000-0000-000000000001', (SELECT banff_before_conflict FROM banff_before_conflict)), 100)->'entries') e $$,
-    $$ VALUES ('30000000-0000-0000-0000-000000000001', TRUE, 'Dinner') $$,
-    'the dinner comes again with hasConflict, still the current version, on Banff''s own feed too'
-);
-
 -- A group the person left is reported, and leaves the cursor.
 SELECT is(pg_temp.try('bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb', '{"type": "member.remove", "groupId": "10000000-0000-0000-0000-000000000003", "memberId": "20000000-0000-0000-0000-0000000000b3"}'), 'applied', 'Sam leaves Canmore');
 SELECT is(
-    pg_temp.v1_entries(pg_temp.token_hash('sam'), NULL, jsonb_build_object('10000000-0000-0000-0000-000000000001', pg_temp.head('10000000-0000-0000-0000-000000000001'),
+    pg_temp.v1_payments(pg_temp.token_hash('sam'), NULL, jsonb_build_object('10000000-0000-0000-0000-000000000001', pg_temp.head('10000000-0000-0000-0000-000000000001'),
         '10000000-0000-0000-0000-000000000003', 1), 100),
-    jsonb_build_object('entries', '[]'::JSONB, 'cursor', jsonb_build_object('10000000-0000-0000-0000-000000000001', pg_temp.head('10000000-0000-0000-0000-000000000001')),
+    jsonb_build_object('payments', '[]'::JSONB, 'cursor', jsonb_build_object('10000000-0000-0000-0000-000000000001', pg_temp.head('10000000-0000-0000-0000-000000000001')),
         'hasMore', FALSE, 'removedGroupIds', '["10000000-0000-0000-0000-000000000003"]'::JSONB),
     'Canmore comes back in removedGroupIds and is left out of the cursor'
 );
-SELECT is(pg_temp.v1_entries(pg_temp.token_hash('sam'), '10000000-0000-0000-0000-000000000003', '{}', 100), NULL, 'Canmore''s own feed now returns NULL (HS404)');
-SELECT is(pg_temp.v1_entries(pg_temp.token_hash('sam'), '10000000-0000-0000-0000-000000000002', '{}', 100), NULL, '... as does a group Sam was never in');
+SELECT is(jsonb_array_length(pg_temp.v1_payments(pg_temp.token_hash('sam'), '10000000-0000-0000-0000-000000000001', '{}', 100)->'payments'), 3, 'Banff''s own feed has its three confirmed payments with Sam');
+SELECT is(pg_temp.v1_payments(pg_temp.token_hash('sam'), '10000000-0000-0000-0000-000000000003', '{}', 100), NULL, 'Canmore''s own feed now returns NULL (HS404)');
+SELECT is(pg_temp.v1_payments(pg_temp.token_hash('sam'), '10000000-0000-0000-0000-000000000002', '{}', 100), NULL, '... as does a group Sam was never in');
+
 
 -- ---------------------------------------------------------------------------
 -- What handshake_api can reach: the four api.v1_* functions, nothing else
@@ -428,7 +444,7 @@ SELECT is(
     (SELECT array_agg(n.nspname || '.' || p.proname ORDER BY p.proname) FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
      WHERE has_function_privilege('handshake_api', p.oid, 'EXECUTE') AND has_schema_privilege('handshake_api', n.oid, 'USAGE')
          AND n.nspname NOT IN ('pg_catalog', 'information_schema') AND n.nspname NOT LIKE 'pg_temp%'),
-    ARRAY['api.v1_entries', 'api.v1_group', 'api.v1_groups', 'api.v1_me'],
+    ARRAY['api.v1_group', 'api.v1_groups', 'api.v1_me', 'api.v1_payments'],
     'outside the system catalogs, handshake_api can execute only the four api.v1_* functions'
 );
 SELECT is(

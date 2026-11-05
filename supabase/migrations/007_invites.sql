@@ -56,7 +56,7 @@ DECLARE
     v_token TEXT := p_mutation->>'token';
     v_claim UUID := (p_mutation->>'claimMemberId')::UUID;
 BEGIN
-    PERFORM private.require_member(p_user, v_group_id, ARRAY['owner']);
+    PERFORM private.require(p_user, v_group_id, 'invite.create');
 
     IF v_token IS NULL OR v_token !~ '^[A-Za-z0-9_-]{43}$' THEN
         RAISE EXCEPTION 'An invite token must be 32 random bytes in base64url' USING ERRCODE = 'HS422';
@@ -89,7 +89,11 @@ DECLARE
     v_group_id UUID := (p_mutation->>'groupId')::UUID;
     v_invite public.group_invites;
 BEGIN
-    PERFORM private.require_member(p_user, v_group_id, ARRAY['owner']);
+    -- Whoever made the link may revoke it; anyone else's needs the owner. A link never stored is checked
+    -- as your own.
+    SELECT * INTO v_invite FROM public.group_invites WHERE id = (p_mutation->>'inviteId')::UUID;
+    PERFORM private.require(p_user, v_group_id,
+        CASE WHEN v_invite.id IS NULL OR v_invite.created_by = p_user THEN 'invite.revoke.own' ELSE 'invite.revoke.others' END);
 
     SELECT * INTO v_invite FROM public.group_invites WHERE id = (p_mutation->>'inviteId')::UUID;
     -- Its create never reached the server, or it is revoked already.
@@ -109,7 +113,8 @@ $$;
 -- Joining (online only)
 -- =============================================================================
 
--- The live invite for a token: not revoked, not expired, its group not deleted. HS404 otherwise.
+-- The live invite for a token: not revoked, not expired, its group neither deleted nor completed (a
+-- completed group's links work again once it is reopened). HS404 otherwise.
 CREATE OR REPLACE FUNCTION private.find_invite(p_token TEXT)
 RETURNS public.group_invites
 LANGUAGE plpgsql STABLE SET search_path = ''
@@ -123,7 +128,8 @@ BEGIN
     WHERE i.token_hash = private.hash_token(p_token)
         AND i.revoked_at IS NULL
         AND i.expires_at > NOW()
-        AND g.deleted_at IS NULL;
+        AND g.deleted_at IS NULL
+        AND g.completed_at IS NULL;
 
     IF v_invite.id IS NULL THEN
         RAISE EXCEPTION 'This invite link doesn''t work any more' USING ERRCODE = 'HS404';
@@ -283,9 +289,13 @@ END;
 $$;
 
 -- =============================================================================
--- Pull: invites, without token_hash
+-- Pull: the final shape, now that every synced table exists
 -- =============================================================================
 
+-- p_cursors maps group id -> the last version this device has. STABLE gives the whole call one
+-- snapshot, so each returned version matches the rows returned with it. Each entry carries all of its
+-- shares (each with owed_to, payer member id -> cents) and a payment's handshake fields; invites never
+-- carry token_hash.
 CREATE OR REPLACE FUNCTION public.pull_changes(p_cursors JSONB DEFAULT '{}'::JSONB)
 RETURNS JSONB
 LANGUAGE sql STABLE SECURITY INVOKER SET search_path = ''
@@ -309,6 +319,8 @@ AS $$
                         'created_by', g.created_by,
                         'created_at', g.created_at,
                         'deleted_at', g.deleted_at,
+                        'completed_at', g.completed_at,
+                        'completed_by_member_id', g.completed_by_member_id,
                         'row_version', g.row_version
                     ))
                     FROM public.groups g
@@ -338,7 +350,12 @@ AS $$
                         'items', e.items,
                         'entry_date', e.entry_date,
                         'notes', e.notes,
-                        'recorded_via', e.recorded_via,
+                        'payment_status', e.payment_status,
+                        'payer_confirmed_at', e.payer_confirmed_at,
+                        'receiver_confirmed_at', e.receiver_confirmed_at,
+                        'confirmed_at', e.confirmed_at,
+                        'closed_at', e.closed_at,
+                        'close_note', e.close_note,
                         'created_by_member_id', e.created_by_member_id,
                         'updated_by_member_id', e.updated_by_member_id,
                         'created_at', e.created_at,
@@ -349,7 +366,12 @@ AS $$
                             SELECT jsonb_agg(jsonb_build_object(
                                 'member_id', s.member_id,
                                 'paid_cents', s.paid_cents,
-                                'owed_cents', s.owed_cents
+                                'owed_cents', s.owed_cents,
+                                'owed_to', COALESCE((
+                                    SELECT jsonb_object_agg(p.payer_member_id, p.owed_cents)
+                                    FROM public.ledger_share_parts p
+                                    WHERE p.entry_id = s.entry_id AND p.member_id = s.member_id
+                                ), '{}'::JSONB)
                             ) ORDER BY s.member_id)
                             FROM public.ledger_shares s
                             WHERE s.entry_id = e.id
