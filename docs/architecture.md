@@ -24,6 +24,19 @@ document for structure. Fix the other one in the same change.
 Removing the admin role changes spec decisions 8, 10 and 11, the mutation list (`member.setRole` is gone)
 and the screens. The spec has been updated to match.
 
+**Decisions of 2026-11-04** (architecture review, then the chat and payments design), all recorded in the
+spec's decisions 4, 8, 10, 17–20 and in `docs/chat-spec.md`:
+
+| #   | Question                    | Answer                                                                                                                                       |
+| --- | --------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------- |
+| 6   | Who writes locally?         | **One `commit(intent)`**, one transaction (§9.4).                                                                                            |
+| 7   | Who may do what?            | **One action matrix** on each side, held in step by a shared case table (ADR-007). Members add people and make invites.                      |
+| 8   | When does a payback count?  | **After a handshake**: one side records, the other confirms (ADR-008).                                                                       |
+| 9   | Debts?                      | **Between pairs**, visible to everyone; with several payers each payer absorbs their own items' cent (ADR-008).                              |
+| 10  | What does Pholio get?       | **Payments that count**, sent and received (ADR-004).                                                                                        |
+| 11  | Account deletion?           | **A confirmation dialog**; history keeps the name; allowed with open debts (spec decision 19).                                               |
+| 12  | Chat, nudges, live updates? | **Slice 8, after the MVP** (`docs/chat-spec.md`), with Realtime as a change signal only (ADR-009) and a newest-first message feed (ADR-010). |
+
 ## 2. System context
 
 ```mermaid
@@ -67,9 +80,8 @@ flowchart LR
 flowchart TB
 	subgraph client["Client (src/), the same on web and native"]
 		SCREENS["pages/*, components/*<br/>read only from Dexie via useLiveQuery"]
-		ACTIONS["lib/changes.ts<br/>planChange (pure) + commitChange"]
+		ACTIONS["lib/changes.ts<br/>commit(intent): read, planChange, apply, queue<br/>in one transaction"]
 		LEDGER["lib/ledger.ts<br/>computeShares, validateEntry, summarizeGroup (pure)"]
-		MUTATE["lib/sync/mutate.ts<br/>apply locally + queue, one transaction"]
 		LOCAL["lib/sync/local.ts<br/>applyMutation, mergePull (pure over LocalTables)"]
 		DEXIE[("Dexie / IndexedDB<br/>groups, members, entries, conflicts,<br/>invites, inviteTokens, outbox, cursors")]
 		ENGINE["lib/sync/engine.ts + controller.ts<br/>push then pull; on start, change, reconnect, focus, 1/min"]
@@ -84,11 +96,11 @@ flowchart TB
 		PUSHPULL["public.push_changes / pull_changes"]
 		ONLINE["public.preview_invite, join_group, upgrade_guest,<br/>create/list/revoke_api_token"]
 		PRIVATE["private.apply_* per mutation type,<br/>compute_shares, next_group_version, checks"]
-		APIFN["api.v1_me, v1_groups, v1_group, v1_entries"]
+		APIFN["api.v1_me, v1_groups, v1_group, v1_payments"]
 		TABLES[("groups, group_members, ledger_entries, ledger_shares,<br/>entry_conflicts, ledger_entry_versions, group_invites,<br/>api_tokens, sync_mutations, profiles")]
 	end
 
-	SCREENS --> ACTIONS --> MUTATE --> LOCAL --> DEXIE
+	SCREENS --> ACTIONS --> LOCAL --> DEXIE
 	SCREENS --> LEDGER
 	SCREENS -.-> DEXIE
 	ACTIONS --> LEDGER
@@ -100,7 +112,7 @@ flowchart TB
 ```
 
 `src/lib/ledger.ts` is imported by both the client and the API function, so the app and Pholio see the
-same balances and suggested payments. It has no runtime imports outside itself (see §8.3). §9 is the
+same balances and debts. It has no runtime imports outside itself (see §8.3). §9 is the
 module map: every module's interface, seam, adapters and test surface.
 
 ## 4. Data flow
@@ -110,16 +122,17 @@ module map: every module's interface, seam, adapters and test surface.
 ```mermaid
 sequenceDiagram
 	participant UI as Screen
-	participant M as mutate()
+	participant M as commit(intent)
 	participant D as Dexie
 	participant E as Sync engine
 	participant P as push_changes()
 	participant Q as pull_changes()
 
-	UI->>M: entry.create {entryId, items, shares, ...}
-	M->>D: applyMutation + outbox.add (one transaction)
+	UI->>M: addExpense {groupId, draft}
+	M->>D: one transaction: read group state, planChange,<br/>applyMutation + outbox.add per mutation
 	D-->>UI: useLiveQuery re-renders (balance changes at once)
-	M->>E: requestSync()
+	M-->>UI: Plan {ok, mutations, createdId} or a refusal
+	M->>E: requestSync() (only if something was queued)
 	Note over E: offline? stop; retry on 'online', focus, or the 1-minute timer
 	E->>P: outbox in batches of 50
 	P->>P: per mutation: savepoint, already in sync_mutations? skip,<br/>else private.apply_*(); stamp next_group_version()
@@ -132,8 +145,10 @@ sequenceDiagram
 
 Rules that hold the flow together (unchanged from `AGENTS.md`, restated because chats 2 and 3 extend them):
 
-1. **One way to change data.** Every change is a `Mutation`; `mutate()` is the only writer of Dexie
-   tables apart from `mergePull`, and `push_changes()` is the only writer of server tables.
+1. **One way to change data.** Every change starts as an intent and is carried out by `Mutation`s.
+   `commit(intent)` (§9.4, replacing today's `mutate()`) is the only writer of Dexie tables apart from
+   `mergePull`, and `push_changes()` is the only writer of server tables. Chat 3 updates `AGENTS.md` to
+   say so when it builds `commit`.
 2. **Exactly once.** A mutation id is recorded in `sync_mutations` in the same savepoint as its effect.
    A retried push reports it applied without applying it again.
 3. **Ordered versions.** Every server write takes `private.next_group_version(group_id)`, which locks the
@@ -179,21 +194,21 @@ sequenceDiagram
 	participant F as api.v1_*() (SECURITY DEFINER)
 	participant T as Tables
 
-	X->>H: GET /api/v1/entries?cursor=… <br/>Authorization: Bearer hsk_…
+	X->>H: GET /api/v1/payments?cursor=… <br/>Authorization: Bearer hsk_…
 	H->>H: token format check; SHA-256 hex; parse limit and cursor (400 if bad)
-	H->>S: entries(tokenHash, {groupId: null, cursor, limit})
-	S->>F: SELECT api.v1_entries($1, $2, $3, $4)
+	H->>S: payments(tokenHash, {groupId: null, cursor, limit})
+	S->>F: SELECT api.v1_payments($1, $2, $3, $4)
 	F->>T: authenticate: token row by hash, not revoked;<br/>rate window +1; last_used_at = now()
 	alt unknown or revoked
 		F-->>H: SQLSTATE HS401 → 401 invalid_token
 	else over 60 in this minute
 		F-->>H: SQLSTATE HS429 → 429 rate_limited + Retry-After
 	end
-	F->>T: one statement: the owner's groups, entries past the cursor,<br/>the owner's share of each, open-conflict flags
-	F-->>S: {entries, cursor, hasMore, removedGroupIds}
+	F->>T: one statement: the owner's groups, confirmed payments past the cursor<br/>that involve the owner, with direction and counterparty
+	F-->>S: {payments, cursor, hasMore, removedGroupIds}
 	S-->>H: typed rows
-	H->>H: netCents = paid − owed; encode cursor; ISO timestamps
-	H-->>X: 200 {entries, nextCursor, hasMore, removedGroupIds}<br/>Cache-Control: no-store
+	H->>H: encode cursor; ISO timestamps
+	H-->>X: 200 {payments, nextCursor, hasMore, removedGroupIds}<br/>Cache-Control: no-store
 ```
 
 - The API never sees Supabase's URL or keys and Pholio never sees Postgres. The only coupling to
@@ -201,9 +216,9 @@ sequenceDiagram
 - **Every `api.v1_*` function takes the token hash, not a user id.** It authenticates inside the same call
   and returns only that token owner's data. The `handshake_api` database password alone therefore reads
   nothing: a caller also needs a live token (ADR-003).
-- Balances and `settleUp` are worked out in the handler with `src/lib/ledger.ts` from per-member totals
-  that SQL sums. Per-entry amounts (the person's paid and owed) come straight from stored shares.
-- The entries feed pages with a **sync cursor**: an opaque token holding, per group, the last version
+- Balances and debts are worked out in the handler with `src/lib/ledger.ts` from per-member totals
+  and per-pair totals that SQL sums from stored shares and parts. Payments come straight from stored rows.
+- The payments feed pages with a **sync cursor**: an opaque token holding, per group, the last version
   Pholio has seen, exactly like the device's pull cursors. It is safe against commits landing out of
   timestamp order, picks up groups the person joins later, and reports groups they lost (ADR-004).
 
@@ -211,16 +226,17 @@ sequenceDiagram
 
 ### 5.1 Who talks to what
 
-| From                 | To                          | Credential                                          | Allowed                                                                |
-| -------------------- | --------------------------- | --------------------------------------------------- | ---------------------------------------------------------------------- |
-| Browser              | Vercel static               | none                                                | Download the app shell                                                 |
-| Any device           | Supabase Auth               | publishable key; email + 6-digit code, or anonymous | Get a JWT (1 h) and a rotating refresh token                           |
-| Signed-out device    | PostgREST (`anon`)          | publishable key                                     | `preview_invite` only                                                  |
-| Signed-in device     | PostgREST (`authenticated`) | publishable key + user JWT                          | `push_changes`, `pull_changes`, online functions; `SELECT` through RLS |
-| Pholio (its server)  | Vercel `/api/v1`            | `Authorization: Bearer hsk_…`                       | `GET` the token owner's data                                           |
-| Vercel API function  | Supavisor → Postgres        | `handshake_api` password (Vercel env, server only)  | `EXECUTE` on `api.*`, each call needing a valid token hash             |
-| Owner's machine      | Supabase project            | Supabase CLI login + database password              | `supabase db push` (migrations), dashboard settings                    |
-| Handshake (any part) | Pholio                      | —                                                   | **Never**                                                              |
+| From                       | To                            | Credential                                          | Allowed                                                                                                       |
+| -------------------------- | ----------------------------- | --------------------------------------------------- | ------------------------------------------------------------------------------------------------------------- |
+| Browser                    | Vercel static                 | none                                                | Download the app shell                                                                                        |
+| Any device                 | Supabase Auth                 | publishable key; email + 6-digit code, or anonymous | Get a JWT (1 h) and a rotating refresh token                                                                  |
+| Signed-out device          | PostgREST (`anon`)            | publishable key                                     | `preview_invite` only                                                                                         |
+| Signed-in device           | PostgREST (`authenticated`)   | publishable key + user JWT                          | `push_changes`, `pull_changes`, online functions; `SELECT` through RLS                                        |
+| Pholio (its server)        | Vercel `/api/v1`              | `Authorization: Bearer hsk_…`                       | `GET` the token owner's data                                                                                  |
+| Vercel API function        | Supavisor → Postgres          | `handshake_api` password (Vercel env, server only)  | `EXECUTE` on `api.*`, each call needing a valid token hash                                                    |
+| Owner's machine            | Supabase project              | Supabase CLI login + database password              | `supabase db push` (migrations), dashboard settings                                                           |
+| Signed-in device (slice 8) | Supabase Realtime (WebSocket) | user JWT                                            | Subscribe to `group:<id>` signals for its own groups (RLS on `realtime.messages`); receive `{ version }` only |
+| Handshake (any part)       | Pholio                        | —                                                   | **Never**                                                                                                     |
 
 No component uses the Supabase secret (service-role) key at runtime, and it is never deployed.
 
@@ -263,15 +279,16 @@ Every function in `private` and `api` is `SET search_path = ''` and schema-quali
 
 ### 5.5 Rate limits
 
-| Surface                        | Limit                                                                                       | Enforced by                   |
-| ------------------------------ | ------------------------------------------------------------------------------------------- | ----------------------------- |
-| Sign-in emails                 | `email_sent = 2` per hour locally; production needs custom SMTP and a higher limit          | Supabase Auth                 |
-| Sign-ins and code checks       | 30 per 5 minutes per IP (`sign_in_sign_ups`, `token_verifications`)                         | Supabase Auth                 |
-| Anonymous sign-ins             | 30 per hour per IP, plus Cloudflare Turnstile in production                                 | Supabase Auth                 |
-| `push_changes`, `pull_changes` | No app-level limit; devices sync on change, on reconnect, on focus and once a minute        | Supabase platform             |
-| `/api/v1`, per token           | **60 requests per minute** (fixed one-minute window); `429 rate_limited` with `Retry-After` | `api.*` in Postgres (ADR-003) |
-| `/api/v1`, malformed tokens    | Rejected with 401 before any database call                                                  | Handler                       |
-| `/api/v1`, per IP (optional)   | A Vercel Firewall rate-limit rule on `/api/v1/*` if the plan allows                         | Vercel                        |
+| Surface                        | Limit                                                                                             | Enforced by                   |
+| ------------------------------ | ------------------------------------------------------------------------------------------------- | ----------------------------- |
+| Sign-in emails                 | `email_sent = 2` per hour locally; production needs custom SMTP and a higher limit                | Supabase Auth                 |
+| Sign-ins and code checks       | 30 per 5 minutes per IP (`sign_in_sign_ups`, `token_verifications`)                               | Supabase Auth                 |
+| Anonymous sign-ins             | 30 per hour per IP, plus Cloudflare Turnstile in production                                       | Supabase Auth                 |
+| `push_changes`, `pull_changes` | No app-level limit; devices sync on change, on reconnect, on focus and once a minute              | Supabase platform             |
+| `/api/v1`, per token           | **60 requests per minute** (fixed one-minute window); `429 rate_limited` with `Retry-After`       | `api.*` in Postgres (ADR-003) |
+| `/api/v1`, malformed tokens    | Rejected with 401 before any database call                                                        | Handler                       |
+| `/api/v1`, per IP (optional)   | A Vercel Firewall rate-limit rule on `/api/v1/*` if the plan allows                               | Vercel                        |
+| Realtime (slice 8)             | Free: 200 concurrent connections, 100 messages/s, 2 million a month; Pro: 500, then $10 per 1,000 | Supabase Realtime             |
 
 ### 5.6 Environments and secrets
 
@@ -279,37 +296,39 @@ MVP has two environments: **local** and **production**. Vercel preview deploymen
 values (the client is public anyway, and the API role reads nothing without a token). A staging Supabase
 project can be added later without code changes.
 
-| Variable or setting                      | Local                                                                     | Production                                                                                  | Secret?                                                  |
-| ---------------------------------------- | ------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------- | -------------------------------------------------------- |
-| `VITE_SUPABASE_URL`                      | `http://127.0.0.1:55321` (`.env.local`)                                   | Project URL (Vercel env, all environments; baked into native builds)                        | No                                                       |
-| `VITE_SUPABASE_PUBLISHABLE_KEY`          | From `bunx supabase status`                                               | Project publishable key                                                                     | No (public)                                              |
-| `HANDSHAKE_API_DATABASE_URL`             | `postgresql://handshake_api:handshake_api_local@127.0.0.1:55322/postgres` | Supavisor transaction pooler, port 6543, user `handshake_api.<project-ref>`                 | **Yes** (Vercel "Sensitive", server only, never `VITE_`) |
-| `handshake_api` password                 | Set by `supabase/seed.sql` (local only)                                   | Set once by the owner: `ALTER ROLE handshake_api WITH LOGIN PASSWORD '…'` in the SQL editor | **Yes**                                                  |
-| Database password, Supabase access token | Not needed                                                                | Owner's machine only, for `supabase db push`                                                | **Yes**                                                  |
-| Auth: anonymous sign-ins, manual linking | `supabase/config.toml`                                                    | Dashboard → Authentication                                                                  | No                                                       |
-| Auth: Turnstile secret                   | Off                                                                       | Dashboard → Authentication → Bot protection                                                 | **Yes**                                                  |
-| Auth: SMTP credentials                   | Mailpit on 55324                                                          | Dashboard → Authentication → SMTP                                                           | **Yes**                                                  |
-| Supabase secret / service-role key       | Not used                                                                  | Not used, never stored in Vercel                                                            | —                                                        |
+| Variable or setting                           | Local                                                                     | Production                                                                                  | Secret?                                                  |
+| --------------------------------------------- | ------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------- | -------------------------------------------------------- |
+| `VITE_SUPABASE_URL`                           | `http://127.0.0.1:55321` (`.env.local`)                                   | Project URL (Vercel env, all environments; baked into native builds)                        | No                                                       |
+| `VITE_SUPABASE_PUBLISHABLE_KEY`               | From `bunx supabase status`                                               | Project publishable key                                                                     | No (public)                                              |
+| `HANDSHAKE_API_DATABASE_URL`                  | `postgresql://handshake_api:handshake_api_local@127.0.0.1:55322/postgres` | Supavisor transaction pooler, port 6543, user `handshake_api.<project-ref>`                 | **Yes** (Vercel "Sensitive", server only, never `VITE_`) |
+| `handshake_api` password                      | Set by `supabase/seed.sql` (local only)                                   | Set once by the owner: `ALTER ROLE handshake_api WITH LOGIN PASSWORD '…'` in the SQL editor | **Yes**                                                  |
+| Database password, Supabase access token      | Not needed                                                                | Owner's machine only, for `supabase db push`                                                | **Yes**                                                  |
+| Auth: anonymous sign-ins, manual linking      | `supabase/config.toml`                                                    | Dashboard → Authentication                                                                  | No                                                       |
+| Auth: Turnstile secret                        | Off                                                                       | Dashboard → Authentication → Bot protection                                                 | **Yes**                                                  |
+| Auth: SMTP credentials                        | Mailpit on 55324                                                          | Dashboard → Authentication → SMTP                                                           | **Yes**                                                  |
+| Supabase secret / service-role key            | Not used                                                                  | Not used, never stored in Vercel                                                            | —                                                        |
+| FCM service account, push secret (push stage) | Not used                                                                  | Vercel env (`FCM_SERVICE_ACCOUNT_JSON`, `HANDSHAKE_PUSH_SECRET`), server only               | **Yes**                                                  |
 
 Nothing from Pholio is stored in Handshake, and none of Pholio's keys or URLs appear in this repo.
 
 ## 6. Technology and platforms
 
-| Area                | Choice                                                          | Why                                                                                                  |
-| ------------------- | --------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------- |
-| Runtime and tooling | Bun 1.3, for every script, tool and the API function (ADR-006)  | One fast tool for install, scripts and tests; runs TypeScript directly.                              |
-| Node.js             | 26 LTS, only where a host needs it (ADR-006)                    | Vercel's build image, and the fallback runtime for the API function.                                 |
-| Client              | Vite 7, React 19, React Router 7, static SPA                    | A static build is what both the PWA and Capacitor need; no server rendering to host or keep offline. |
-| Local store         | Dexie (IndexedDB) with `useLiveQuery`                           | Screens re-render from local rows, so the app works the same with or without signal.                 |
-| Offline web         | `vite-plugin-pwa` (Workbox)                                     | Caches the app shell so the site opens offline and can be installed.                                 |
-| Mobile              | Capacitor 8 bundling `dist/`                                    | One codebase; the binary contains the app, so it opens offline; native share sheet.                  |
-| Backend             | Supabase: Postgres 17, RLS, Auth, PostgREST RPC                 | Postgres does the sync and validation in transactions; Auth covers email codes and anonymous guests. |
-| Sync                | Own mutation log + per-group versions, no Realtime              | Exactly-once, ordered, works offline, and keeps the backend swappable behind one transport file.     |
-| API for Pholio      | TypeScript on a Vercel Function (Bun runtime), OpenAPI 3.1      | Shares `ledger.ts`, same repo and deploy, testable in Bun (ADR-001, ADR-002, ADR-006).               |
-| API database driver | Bun's built-in `SQL` (`Bun.sql`), `prepare: false`              | No dependency; works with Supavisor transaction mode. `postgres` (porsager) v3 is the fallback.      |
-| UI                  | Tailwind 3.4 with Pholio's tokens, Radix, sonner, lucide        | Matches the owner's other app and stays accessible.                                                  |
-| Tests               | `bun test`, pgTAP (`supabase test db`), Ajv for contract checks | Pure logic in Bun, SQL in SQL, the HTTP contract checked against the YAML.                           |
-| Hosting             | Vercel (site + function), Supabase cloud                        | Free or cheap at friend-group scale; preview deploys per branch.                                     |
+| Area                   | Choice                                                                             | Why                                                                                                  |
+| ---------------------- | ---------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------- |
+| Runtime and tooling    | Bun 1.3, for every script, tool and the API function (ADR-006)                     | One fast tool for install, scripts and tests; runs TypeScript directly.                              |
+| Node.js                | 26 LTS, only where a host needs it (ADR-006)                                       | Vercel's build image, and the fallback runtime for the API function.                                 |
+| Client                 | Vite 7, React 19, React Router 7, static SPA                                       | A static build is what both the PWA and Capacitor need; no server rendering to host or keep offline. |
+| Local store            | Dexie (IndexedDB) with `useLiveQuery`                                              | Screens re-render from local rows, so the app works the same with or without signal.                 |
+| Offline web            | `vite-plugin-pwa` (Workbox)                                                        | Caches the app shell so the site opens offline and can be installed.                                 |
+| Mobile                 | Capacitor 8 bundling `dist/`                                                       | One codebase; the binary contains the app, so it opens offline; native share sheet.                  |
+| Backend                | Supabase: Postgres 17, RLS, Auth, PostgREST RPC                                    | Postgres does the sync and validation in transactions; Auth covers email codes and anonymous guests. |
+| Sync                   | Own mutation log + per-group versions, no Realtime                                 | Exactly-once, ordered, works offline, and keeps the backend swappable behind one transport file.     |
+| API for Pholio         | TypeScript on a Vercel Function (Bun runtime), OpenAPI 3.1                         | Shares `ledger.ts`, same repo and deploy, testable in Bun (ADR-001, ADR-002, ADR-006).               |
+| API database driver    | Bun's built-in `SQL` (`Bun.sql`), `prepare: false`                                 | No dependency; works with Supavisor transaction mode. `postgres` (porsager) v3 is the fallback.      |
+| UI                     | Tailwind 3.4 with Pholio's tokens, Radix, sonner, lucide                           | Matches the owner's other app and stays accessible.                                                  |
+| Tests                  | `bun test`, pgTAP (`supabase test db`), Ajv for contract checks                    | Pure logic in Bun, SQL in SQL, the HTTP contract checked against the YAML.                           |
+| Live updates (slice 8) | Supabase Realtime Broadcast as a change signal; `react-virtuoso` for the chat list | Already in the stack; the signal only triggers the existing pull (ADR-009).                          |
+| Hosting                | Vercel (site + function), Supabase cloud                                           | Free or cheap at friend-group scale; preview deploys per branch.                                     |
 
 ## 7. Architecture decisions
 
@@ -373,31 +392,35 @@ Nothing from Pholio is stored in Handshake, and none of Pholio's keys or URLs ap
 - **Rejected:** functions taking a user id (the DB password would read everything); Redis/Upstash for rate
   limits (another service and secret for one counter).
 
-### ADR-004: The entries feed pages with an opaque per-group version cursor
+### ADR-004: The payments feed pages with an opaque per-group version cursor
 
-- **Status:** Accepted (revises the spec's `updatedSince` timestamp and `updatedAt` ordering).
-- **Decision:** `GET /entries` and `GET /groups/{id}/entries` take `cursor` and `limit` and return
-  `{ entries, nextCursor, hasMore, removedGroupIds }`. The cursor is base64url JSON
-  `{"v":1,"scope":"all"|"<groupId>","groups":{"<groupId>":<version>}}`; Pholio treats it as opaque. An
-  entry's feed version is the greater of its `row_version` and the `row_version` of its conflicts, so
-  opening or resolving a conflict re-sends the entry with the new `hasConflict`.
+- **Status:** Accepted (revises the spec's `updatedSince` timestamp; on 2026-11-04 the feed became
+  payments only, replacing the entries feed, before anything shipped).
+- **Decision:** `GET /payments` and `GET /groups/{id}/payments` take `cursor` and `limit` and return
+  `{ payments, nextCursor, hasMore, removedGroupIds }`. Only payments that involve the person and count
+  are returned. The cursor is base64url JSON
+  `{"v":1,"scope":"all"|"<groupId>","groups":{"<groupId>":<version>}}`; Pholio treats it as opaque. A
+  payment's feed version is the `row_version` it took when it started to count; a payment that counts
+  never changes, so the feed only adds rows.
 - **Why:** `updated_at` is the writing transaction's start time, so a row can commit after a later
   timestamp has been read and a timestamp cursor would skip it. Per-group versions are already ordered by
   `next_group_version()`'s lock. The cursor also knows which groups Pholio has seen, so it can return a
-  new group's whole history and report groups the person left or that were deleted.
-- **Rules:** a page never splits the entries of one group version (it may return slightly more than
+  new group's whole history and report groups the person left or that were deleted. Payments only,
+  because Pholio records money that moved (owner, 2026-11-04).
+- **Rules:** a page never splits the payments of one group version (it may return slightly more than
   `limit`); `nextCursor` is always returned, and Pholio stores it for next time; `hasMore: true` means call
   again now.
 
 ### ADR-005: No admin role
 
-- **Status:** Accepted (owner, 2026-11-03; revises spec decision 8).
-- **Decision:** roles are `owner`, `member`, `guest`. The owner alone adds and removes people, renames
-  others, renames the group, makes and revokes invites, uses the settle-up tracker, completes and reopens
-  the group, and deletes it. When the owner leaves, ownership passes to the full member who joined first
-  (`joined_at`, then `id`); when no full member is left, the group is deleted.
-- **Trade-off:** if the owner is away, nobody else can invite or complete. A "Make owner" handover is a
-  possible later addition (a new mutation; no schema change).
+- **Status:** Accepted (owner, 2026-11-03; revises spec decision 8; widened on 2026-11-04).
+- **Decision:** roles are `owner`, `member`, `guest`. The owner alone removes people, renames others,
+  renames the group, completes and reopens it, and deletes it. Members can also add people by name and
+  make invites (revoking only their own). When the owner leaves, ownership passes to the full member who
+  joined first (`joined_at`, then `id`); when no full member is left, the group is deleted. The full
+  matrix is spec decision 8 (ADR-007).
+- **Trade-off:** if the owner is away, nobody else can complete the group or remove people. A "Make
+  owner" handover is a possible later addition (a new mutation; no schema change).
 
 ### ADR-006: Bun everywhere; Node 26 LTS only where a host needs it
 
@@ -430,6 +453,75 @@ Nothing from Pholio is stored in Handshake, and none of Pholio's keys or URLs ap
   and `engines` is what Vercel reads).
 - **Revisit:** when Vercel's Bun runtime leaves beta, and when moving to Bun 1.4.
 
+### ADR-007: One permission matrix, mirrored in TypeScript and SQL, held in step by a case table
+
+- **Status:** Accepted (architecture review candidate 2, 2026-11-04).
+- **Context:** who may do what was written as 15 role arrays passed to `require_member` across 004–008,
+  plus inline checks, and `planChange` would have written it a second time on the device.
+- **Decision:**
+  - The matrix of actions × roles, plus "allowed in a completed group", is spec decision 8's table.
+  - **SQL:** `private.may(action, role)` and `private.allowed_when_completed(action)` (immutable),
+    asked through `private.require(user, group, action)`, which replaces `require_member`'s role array.
+    Each `apply_*` works out which action it is doing (own or others', self or others) and asks once.
+  - **TypeScript:** M10 `src/lib/permissions.ts`, used by `planChange` and by screens to show or hide
+    buttons (§9.14).
+  - **One case table:** `tests/fixtures/permission-cases.ts`, transcribed by hand; generated into
+    `supabase/tests/permission_cases.test.sql` by `scripts/permission-cases-sql.ts`; the drift test covers
+    it like the ledger cases (§9.13).
+  - Only booleans and codes are pinned; each side words its own refusal reasons.
+  - 004–008 are edited in place: on 2026-11-04 they had run only on local stacks.
+- **Rejected:** generating the SQL function from the TypeScript matrix (production code generated into
+  migrations, and the TypeScript tested against itself); a seeded `permissions` table (rows, grants and
+  re-run safety for something that is code).
+
+### ADR-008: Payments are handshakes, and debts are worked out between pairs
+
+- **Status:** Accepted (owner, 2026-11-04).
+- **Decision:**
+  - A payment is `pending` until both sides agree (`payment.record`, then `payment.confirm`), or
+    `declined` / `undone`. Only `confirmed` payments count. A payment with a name-only person is
+    confirmed when recorded. Confirmed payments never change. Payments have their own mutations and never
+    enter the conflict flow (spec decision 17).
+  - A debt is between two people: what A owes B from bills minus what B owes A, adjusted by confirmed
+    payments between them. Nothing is simplified across the group (spec decision 18).
+  - To make that a sum over stored rows, shares gain `owedTo` (`ledger_share_parts` on the server), and
+    rounding is per payer: each payer absorbs the cent on their own items. Single-payer bills are
+    unchanged; one pinned case changes (spec Testing Checklist).
+  - Everything syncs to every member as before; pending payments and nudges are shown only to their two
+    people by the screens.
+- **Why:** the app is named for the handshake: a payback is real when both people agree. Pairwise debts
+  follow, because a handshake is always between two real people.
+- **Consequences:** `summarizeGroup` returns pairwise debts instead of greedy suggestions; the settle-up
+  tracker becomes a progress view; the API serves payments (ADR-004).
+
+### ADR-009: Live updates use Supabase Realtime as a change signal only
+
+- **Status:** Accepted (owner, 2026-11-04; slice 8; revises the "no Realtime" rule in `AGENTS.md`).
+- **Decision:** after `push_changes` (and any online function) changes a group, Postgres sends one
+  Broadcast `{ version }` on the private channel `group:<id>` with `realtime.send()`. Devices subscribe
+  to their groups while open and answer a signal with `requestSync()`. Data still arrives only through
+  `pull_changes` and the message feed. Members-only access is an RLS policy on `realtime.messages`.
+- **Why:** WhatsApp's model (a socket is the fast path, the stored log is the truth) with what the stack
+  already has. Exactly-once, ordering, offline use and the transport seam are untouched; a dropped socket
+  only costs latency.
+- **Rejected:** Postgres Changes (data bypassing the pull and merge); Ably, Pusher, PubNub (new vendor);
+  a self-hosted socket server (Vercel functions can't hold sockets); polling alone.
+- **Consequences:** `AGENTS.md` rule 6 and "Don't enable Supabase Realtime" are reworded when slice 8 is
+  built; a Free project's 200 concurrent connections become a limit to watch (§5.5).
+
+### ADR-010: Chat messages have their own newest-first feed and a 500-message cache
+
+- **Status:** Accepted (owner, 2026-11-04; slice 8).
+- **Decision:** messages are written through `push_changes` like everything else, but read through their
+  own feed, `pull_messages(group, since)` (newest first, up to 500, with a `gap` flag) and
+  `message_history(group, before, limit)`. `pull_changes` carries only each group's `message_version`,
+  its pins and its nudges. Each device keeps the newest 500 messages per group; older ones load on
+  scroll and are trimmed at the next start.
+- **Why:** a new device should see today's messages first, as in WhatsApp, and storage should stay
+  predictable. `pull_changes` returns oldest first, and a chat can outgrow everything else in a group.
+- **Rejected:** messages in `pull_changes` (oldest first; first sync of a busy chat would be slow); the
+  whole history on every device (the owner chose a cache).
+
 ## 8. The MVP
 
 ### 8.1 Scope boundary
@@ -437,13 +529,16 @@ Nothing from Pholio is stored in Handshake, and none of Pholio's keys or URLs ap
 **In the MVP:** all seven slices of the spec's Implementation Guide, for the database (chat 2) and the
 domain logic, sync and API (chat 3):
 
-| Slice | 1               | 2                      | 3                            | 4              | 5                        | 6                             | 7      |
-| ----- | --------------- | ---------------------- | ---------------------------- | -------------- | ------------------------ | ----------------------------- | ------ |
-| What  | Dollars, people | Bills, items, balances | Payments, suggested payments | Edit conflicts | Invites, guests, joining | Settle-up tracker, completing | API v1 |
+| Slice | 1               | 2                      | 3                         | 4              | 5                        | 6                                          | 7                 |
+| ----- | --------------- | ---------------------- | ------------------------- | -------------- | ------------------------ | ------------------------------------------ | ----------------- |
+| What  | Dollars, people | Bills, items, balances | Debts, handshake payments | Edit conflicts | Invites, guests, joining | Settle up, completing, deleting an account | API v1 (payments) |
 
 **Not in chats 2 and 3:** the screens. Chats 2 and 3 leave the app compiling and working as it does today
 (groups and rename), with every new capability reachable from `src/lib/*` and covered by tests. The
 screens in the spec's "Screens" section are a fourth piece of work that builds on chat 3.
+
+**After the MVP:** slice 8, the group chat, nudges and live updates (`docs/chat-spec.md`), in the same
+three passes; push notifications are its final stage.
 
 **Out of the MVP entirely:** everything in the spec's "Out of Scope", plus ownership handover, OAuth for
 the API, a staging Supabase project, and universal links.
@@ -456,7 +551,7 @@ flowchart LR
 		M4["004 people"] --> M5["005 ledger"] --> M6["006 conflicts"] --> M7["007 invites"] --> M8["008 complete"] --> M9["009 api"]
 	end
 	subgraph c3["Chat 3: logic, sync, API"]
-		L1["M7 money + M1 ledger"] --> L2["M3 local replica, wire, Dexie v2, M6"] --> L3["M2 change planner + M8 online functions"] --> L4["M9 API + ApiStore adapters"] --> L5["contract suites + vercel build"]
+		L1["M7 money + M1 ledger"] --> L2["M3 local replica, wire, Dexie v2"] --> L3["M2 planChange + commit, M8 online functions"] --> L4["M9 API + ApiStore adapters"] --> L5["contract suites + vercel build"]
 	end
 	c2 --> c3
 ```
@@ -477,14 +572,16 @@ src/server/api-v1/
   types.ts                     response types, matching docs/api-v1.openapi.yaml
 src/lib/
   ledger.ts                    M1, pure (client and API)
-  changes.ts                   M2 planChange + commitChange
+  changes.ts                   M2 planChange + createCommitter/commit + useCommit
+  permissions.ts               M10 may() and allowedWhenCompleted()
   groups.ts, members.ts, entries.ts, invites.ts   read hooks only
-  sync/                        M3–M6, M8: types, wire, local, dexie-store, engine, controller, mutate, transport
-scripts/ledger-cases-sql.ts    renders the shared case table into pgTAP (§9.13)
+  sync/                        M3–M5, M8: types, wire, local, dexie-store, engine, controller, transport
+scripts/ledger-cases-sql.ts    renders the shared ledger case table into pgTAP (§9.13)
+scripts/permission-cases-sql.ts renders the permission case table into pgTAP (ADR-007)
 supabase/migrations/004…009    see §11
 supabase/seed.sql              local-only: handshake_api login password
 supabase/tests/ledger_cases.test.sql   generated; never edited by hand
-tests/fixtures/ledger-cases.ts the shared pinned cases
+tests/fixtures/ledger-cases.ts, permission-cases.ts   the shared hand-written case tables
 tests/support/                 memory-tables.ts (LocalTables), memory-api-store.ts (ApiStore)
 tests/lib/…, tests/api/…, tests/server/…
 ```
@@ -519,40 +616,44 @@ Rules applied to every module below:
 
 ### 9.1 Overview
 
-| #   | Module           | Where                                                       | Interface                                         | Seam (adapters)                                                                                                                         | Test surface                                                    | Built by       |
-| --- | ---------------- | ----------------------------------------------------------- | ------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------- | -------------- |
-| M1  | Ledger           | `src/lib/ledger.ts`                                         | 3 pure functions                                  | none (in-process)                                                                                                                       | `tests/lib/ledger.test.ts` + shared case table                  | Chat 3         |
-| M2  | Change planner   | `src/lib/changes.ts`                                        | `planChange()` (pure) + `commitChange()`          | none (in-process)                                                                                                                       | `tests/lib/changes.test.ts`                                     | Chat 3         |
-| M3  | Local replica    | `src/lib/sync/local.ts`                                     | `applyMutation()`, `mergePull()`                  | **`LocalTables`** (`dexieTables`, `createMemoryTables`)                                                                                 | `tests/lib/sync/local.test.ts`, `merge.test.ts`                 | Chat 3         |
-| M4  | Sync engine      | `src/lib/sync/engine.ts`                                    | `syncOnce(store, transport)`                      | **`SyncStore`** (`createDexieSyncStore`, fake in `engine.test.ts`); **`SyncTransport`** (`supabaseTransport`, fake in `engine.test.ts`) | `tests/lib/sync/engine.test.ts`                                 | Exists; chat 3 |
-| M5  | Sync controller  | `src/lib/sync/controller.ts`                                | `startSync()`, `requestSync()`, `useSyncStatus()` | none                                                                                                                                    | By hand (offline → online)                                      | Exists         |
-| M6  | Local writer     | `src/lib/sync/mutate.ts`                                    | `mutate(mutations, userId)`                       | none (composition root of the write path)                                                                                               | Through M3; by hand                                             | Chat 3         |
-| M7  | Money            | `src/lib/money.ts`                                          | `parseAmount()`, `formatAmount()`                 | none                                                                                                                                    | `tests/lib/money.test.ts`                                       | Chat 3         |
-| M8  | Supabase adapter | `src/lib/sync/supabase-transport.ts` (+ internal `wire.ts`) | `SyncTransport` + 6 online functions              | is the production adapter at `SyncTransport`                                                                                            | `tests/lib/sync/wire.test.ts`; behaviour in pgTAP               | Chat 3         |
-| M9  | API v1           | `src/server/api-v1/`                                        | `createApiV1({ store }) → handle(request)`        | **`ApiStore`** (`createPostgresApiStore`, `createMemoryApiStore`)                                                                       | `tests/api/v1.*.test.ts` through `handle`; store contract suite | Chat 3         |
-| D1  | Push             | `public.push_changes()`                                     | mutations JSON → `{ applied, rejected }`          | behind M8                                                                                                                               | pgTAP through `push_changes` + `pull_changes`                   | Chat 2         |
-| D2  | Pull             | `public.pull_changes()`                                     | cursors JSON → changes JSON                       | behind M8                                                                                                                               | pgTAP                                                           | Chat 2         |
-| D3  | Shares in SQL    | `private.compute_shares()`                                  | items JSONB → shares                              | none; the SQL twin of M1's `computeShares`                                                                                              | Generated pgTAP from the shared case table                      | Chat 2         |
-| D4  | Online functions | `public.preview_invite()` … `revoke_api_token()`            | one function each                                 | behind M8                                                                                                                               | pgTAP, each through itself                                      | Chat 2         |
-| D5  | API SQL          | `api.v1_*()`                                                | 4 functions, token hash first                     | the SQL half of M9's Postgres adapter                                                                                                   | pgTAP (security); the store contract suite (shapes)             | Chat 2         |
+| #   | Module                    | Where                                                       | Interface                                           | Seam (adapters)                                                                                                                         | Test surface                                                    | Built by       |
+| --- | ------------------------- | ----------------------------------------------------------- | --------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------- | -------------- |
+| M1  | Ledger                    | `src/lib/ledger.ts`                                         | 3 pure functions                                    | none (in-process)                                                                                                                       | `tests/lib/ledger.test.ts` + shared case table                  | Chat 3         |
+| M2  | Change planner            | `src/lib/changes.ts`                                        | `planChange()` (pure) + `commit(intent)`            | none (in-process)                                                                                                                       | `changes.test.ts`, `changes.commit.test.ts`                     | Chat 3         |
+| M3  | Local replica             | `src/lib/sync/local.ts`                                     | `applyMutation()`, `mergePull()`                    | **`LocalTables`** (`dexieTables`, `createMemoryTables`)                                                                                 | `tests/lib/sync/local.test.ts`, `merge.test.ts`                 | Chat 3         |
+| M4  | Sync engine               | `src/lib/sync/engine.ts`                                    | `syncOnce(store, transport)`                        | **`SyncStore`** (`createDexieSyncStore`, fake in `engine.test.ts`); **`SyncTransport`** (`supabaseTransport`, fake in `engine.test.ts`) | `tests/lib/sync/engine.test.ts`                                 | Exists; chat 3 |
+| M5  | Sync controller           | `src/lib/sync/controller.ts`                                | `startSync()`, `requestSync()`, `useSyncStatus()`   | none                                                                                                                                    | By hand (offline → online)                                      | Exists         |
+| M7  | Money                     | `src/lib/money.ts`                                          | `parseAmount()`, `formatAmount()`                   | none                                                                                                                                    | `tests/lib/money.test.ts`                                       | Chat 3         |
+| M8  | Supabase adapter          | `src/lib/sync/supabase-transport.ts` (+ internal `wire.ts`) | `SyncTransport` + 6 online functions                | is the production adapter at `SyncTransport`                                                                                            | `tests/lib/sync/wire.test.ts`; behaviour in pgTAP               | Chat 3         |
+| M10 | Permissions               | `src/lib/permissions.ts`                                    | `may(action, role)`, `allowedWhenCompleted(action)` | none; the TS twin of `private.may()`                                                                                                    | `tests/lib/permissions.test.ts` + permission case table         | Chat 3         |
+| M11 | Message history (slice 8) | `src/lib/sync/messages.ts`                                  | `syncMessages()`, `loadOlder()`, `trimCache()`      | **`MessageFeed`** (Supabase feed functions, fake); reuses `LocalTables`                                                                 | `tests/lib/sync/messages.test.ts`                               | Slice 8        |
+| M9  | API v1                    | `src/server/api-v1/`                                        | `createApiV1({ store }) → handle(request)`          | **`ApiStore`** (`createPostgresApiStore`, `createMemoryApiStore`)                                                                       | `tests/api/v1.*.test.ts` through `handle`; store contract suite | Chat 3         |
+| D1  | Push                      | `public.push_changes()`                                     | mutations JSON → `{ applied, rejected }`            | behind M8                                                                                                                               | pgTAP through `push_changes` + `pull_changes`                   | Chat 2         |
+| D2  | Pull                      | `public.pull_changes()`                                     | cursors JSON → changes JSON                         | behind M8                                                                                                                               | pgTAP                                                           | Chat 2         |
+| D3  | Shares in SQL             | `private.compute_shares()`                                  | items JSONB → shares                                | none; the SQL twin of M1's `computeShares`                                                                                              | Generated pgTAP from the shared case table                      | Chat 2         |
+| D4  | Online functions          | `public.preview_invite()` … `revoke_api_token()`            | one function each                                   | behind M8                                                                                                                               | pgTAP, each through itself                                      | Chat 2         |
+| D6  | Permissions in SQL        | `private.may()`, `private.require()`                        | action × role → allowed                             | none; the SQL twin of M10                                                                                                               | Generated pgTAP from the permission case table                  | Chat 2         |
+| D5  | API SQL                   | `api.v1_*()`                                                | 4 functions, token hash first                       | the SQL half of M9's Postgres adapter                                                                                                   | pgTAP (security); the store contract suite (shapes)             | Chat 2         |
 
 ### 9.2 Seams and who owns them
 
-There are four real seams in TypeScript. Across the TypeScript–SQL divide there are four **wire contracts**:
+There are four real seams in TypeScript in the MVP, and a fifth in slice 8 (`MessageFeed`). Across the TypeScript–SQL divide there are four **wire contracts**:
 JSON shapes that one side writes and the other reads. This document fixes them, so chats 2 and 3 can build
 their sides without waiting on each other.
 
-| Seam or contract  | Kind              | Defined in                                    | Sides / adapters                                                             | Chat 2                                               | Chat 3                                                     |
-| ----------------- | ----------------- | --------------------------------------------- | ---------------------------------------------------------------------------- | ---------------------------------------------------- | ---------------------------------------------------------- |
-| `LocalTables`     | TS seam           | `src/lib/sync/local.ts`                       | `dexieTables(db)`; `createMemoryTables()` (`tests/support/memory-tables.ts`) | —                                                    | Owns; reshapes it (M3)                                     |
-| `SyncStore`       | TS seam           | `src/lib/sync/engine.ts`                      | `createDexieSyncStore()`; the fake store in `tests/lib/sync/engine.test.ts`  | —                                                    | Owns; **kept unchanged**                                   |
-| `SyncTransport`   | TS seam           | `src/lib/sync/engine.ts`                      | `supabaseTransport`; the fake transport in `tests/lib/sync/engine.test.ts`   | —                                                    | Owns; **kept unchanged**                                   |
-| `ApiStore`        | TS seam           | `src/server/api-v1/store.ts`                  | `createPostgresApiStore(sql)`; `createMemoryApiStore(fixture)`               | Writes the `api.v1_*` SQL the Postgres adapter calls | Owns the interface, both adapters and their contract suite |
-| Mutation JSON     | Wire contract     | `src/lib/sync/types.ts`, spec "New mutations" | Device writes; `push_changes` reads                                          | Reads it exactly                                     | Writes it                                                  |
-| Pull JSON         | Wire contract     | §11.2 (snake_case rows)                       | `pull_changes` writes; `wire.ts` reads                                       | Owns the shape                                       | Reads it                                                   |
-| `api.v1_*` JSON   | Wire contract     | §11.2 (camelCase)                             | `api.v1_*` writes; `postgres-store.ts` reads                                 | Owns the shape                                       | Reads it                                                   |
-| Ledger case table | Shared fixture    | `tests/fixtures/ledger-cases.ts`              | `tests/lib/ledger.test.ts`; generated `supabase/tests/ledger_cases.test.sql` | Creates it and the SQL generator                     | Runs `computeShares`/`summarizeGroup` against it           |
-| HTTP `/api/v1`    | External contract | `docs/api-v1.openapi.yaml`                    | M9 writes; Pholio reads                                                      | —                                                    | Owns; contract tests                                       |
+| Seam or contract        | Kind              | Defined in                                    | Sides / adapters                                                                                              | Chat 2                                               | Chat 3                                                     |
+| ----------------------- | ----------------- | --------------------------------------------- | ------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------- | ---------------------------------------------------------- |
+| `LocalTables`           | TS seam           | `src/lib/sync/local.ts`                       | `dexieTables(db)`; `createMemoryTables()` (`tests/support/memory-tables.ts`)                                  | —                                                    | Owns; reshapes it (M3)                                     |
+| `SyncStore`             | TS seam           | `src/lib/sync/engine.ts`                      | `createDexieSyncStore()`; the fake store in `tests/lib/sync/engine.test.ts`                                   | —                                                    | Owns; **kept unchanged**                                   |
+| `SyncTransport`         | TS seam           | `src/lib/sync/engine.ts`                      | `supabaseTransport`; the fake transport in `tests/lib/sync/engine.test.ts`                                    | —                                                    | Owns; **kept unchanged**                                   |
+| `ApiStore`              | TS seam           | `src/server/api-v1/store.ts`                  | `createPostgresApiStore(sql)`; `createMemoryApiStore(fixture)`                                                | Writes the `api.v1_*` SQL the Postgres adapter calls | Owns the interface, both adapters and their contract suite |
+| Mutation JSON           | Wire contract     | `src/lib/sync/types.ts`, spec "New mutations" | Device writes; `push_changes` reads                                                                           | Reads it exactly                                     | Writes it                                                  |
+| Pull JSON               | Wire contract     | §11.2 (snake_case rows)                       | `pull_changes` writes; `wire.ts` reads                                                                        | Owns the shape                                       | Reads it                                                   |
+| `api.v1_*` JSON         | Wire contract     | §11.2 (camelCase)                             | `api.v1_*` writes; `postgres-store.ts` reads                                                                  | Owns the shape                                       | Reads it                                                   |
+| Ledger case table       | Shared fixture    | `tests/fixtures/ledger-cases.ts`              | `tests/lib/ledger.test.ts`; generated `supabase/tests/ledger_cases.test.sql`                                  | Creates it and the SQL generator                     | Runs `computeShares`/`summarizeGroup` against it           |
+| Permission case table   | Shared fixture    | `tests/fixtures/permission-cases.ts`          | `tests/lib/permissions.test.ts`; generated `supabase/tests/permission_cases.test.sql`                         | Creates it and its generator                         | Runs `may()` against it                                    |
+| `MessageFeed` (slice 8) | TS seam           | `src/lib/sync/messages.ts`                    | `supabaseMessageFeed` (calls `pull_messages`, `message_history`); a fake in `tests/lib/sync/messages.test.ts` | Writes the feed functions                            | Owns the interface and both adapters                       |
+| HTTP `/api/v1`          | External contract | `docs/api-v1.openapi.yaml`                    | M9 writes; Pholio reads                                                                                       | —                                                    | Owns; contract tests                                       |
 
 **Seams considered and not drawn** (one adapter each, so they would be indirection only):
 
@@ -562,20 +663,28 @@ their sides without waiting on each other.
   seam already covers them.
 - A clock or event-source seam in the sync controller. Nothing but the browser would fill it; the
   controller is checked by hand.
+- A seam for the Realtime change signal (slice 8). Only Supabase Realtime fills it; the controller takes
+  a `subscribe(groupIds, onSignal)` function as a dependency, and a missed signal only costs latency.
 - A router or middleware seam in the API. There are five fixed routes; routing is part of the handler's
   implementation.
 
 ### 9.3 M1 Ledger (`src/lib/ledger.ts`)
 
-One deep, pure module shared by the app and the API. Callers: the expense editor, the change planner
-(M2), the Balances tab, the settle-up tracker, and the API (M9).
+One deep, pure module shared by the app and the API. Callers: the bill editor, the change planner (M2),
+the Balances tab, Settle up, nudges (slice 8), and the API (M9).
 
 **Interface:**
 
 ```ts
 type Item = { id: string; description?: string; amountCents: number; paidBy: string; splitAmong: string[] };
-type Share = { memberId: string; paidCents: number; owedCents: number };
-type LedgerMember = { id: string; displayName: string };
+type Share = { memberId: string; paidCents: number; owedCents: number; owedTo: Record<string, number> };
+type LedgerMember = { id: string; displayName: string; hasLogin: boolean };
+type LedgerEntry = {
+	kind: "expense" | "payment";
+	deletedAt: string | null;
+	paymentStatus: "pending" | "confirmed" | "declined" | "undone" | null; // null for bills
+	shares: Share[];
+};
 type EntryDraft = {
 	kind: "expense" | "payment";
 	description: string;
@@ -586,80 +695,85 @@ type EntryDraft = {
 	shares: Share[];
 };
 type EntryProblem = { field: string; reason: string };
+type Debt = { fromMemberId: string; toMemberId: string; amountCents: number }; // from owes to
 type PersonSummary = {
 	memberId: string;
-	paidCents: number;
-	owedCents: number;
 	balanceCents: number;
 	state: "owes" | "owed" | "settled";
 };
-type SuggestedPayment = { fromMemberId: string; toMemberId: string; amountCents: number };
-type GroupSummary = { people: PersonSummary[]; payments: SuggestedPayment[] };
+type GroupSummary = { people: PersonSummary[]; debts: Debt[] };
 
 function computeShares(items: Item[]): Share[];
 function validateEntry(entry: EntryDraft, members: LedgerMember[]): EntryProblem[];
-function summarizeGroup(shares: Iterable<Share>, members: LedgerMember[]): GroupSummary;
+function summarizeGroup(entries: Iterable<LedgerEntry>, members: LedgerMember[]): GroupSummary;
 ```
 
 - `computeShares`:
   - **Precondition:** items are well-formed, which `validateEntry` checks. That means at least one item,
     whole positive amounts, and a non-empty `splitAmong` with no repeats. If not, it throws `RangeError`:
     that is a programming error, not a user-facing problem.
-  - **Result:** Σ paid = Σ owed = total, and every owed ≥ 0. The same items always give the same shares,
-    in bill order.
-  - **Payments:** a payment is `computeShares([{ amountCents, paidBy: from, splitAmong: [to] }])`, so there
-    is no separate payment function.
+  - **Result:** Σ paid = Σ owed = total, every owed ≥ 0, and each share's `owedTo` adds up to its owed
+    (keys are payers; a payer's own part is included). The same items always give the same shares, in
+    bill order.
+  - **Payments:** a payment's shares are `computeShares([{ amountCents, paidBy: from, splitAmong: [to] }])`,
+    so there is no separate payment function.
 - `validateEntry`:
   - Returns `[]` when the entry would be accepted. Otherwise it returns one problem per failed check in the
     spec's "Entry checks on the server" `HS422` list, including "shares differ from `computeShares(items)`".
   - It never throws on bad input; problems are returned.
 - `summarizeGroup`:
-  - **Input:** shares of **not-deleted** entries; filtering them out is the caller's job. Per-member totals
-    are themselves `Share`-shaped, so the API passes the per-member sums from SQL and the device passes raw
-    shares. Every `memberId` in the input must be in `members`, otherwise it throws `RangeError`.
-  - **`people`:** everyone with a share, sorted by `displayName` (case-insensitive, then id).
-    Σ `balanceCents` = 0.
-  - **`payments`:** found by the greedy rule below, at most n − 1 of them, and applying them zeroes every
-    balance.
-  - **Tracker:** the settle-up tracker reads `people` (state) and `payments` (the suggestions under each
-    row). Nothing else is needed.
+  - **Input:** every entry of the group. It skips deleted bills and every payment that isn't
+    `confirmed` itself, so no caller has to filter (architecture review candidate 3). The API passes one
+    synthetic confirmed entry holding SQL's per-member and per-pair totals; they are `Share`-shaped. Every
+    `memberId` in the input must be in `members`, otherwise it throws `RangeError`.
+  - **`debts`:** one per pair with a non-zero debt, netted both ways (spec "Debts"), sorted by debtor
+    name then creditor name (case-insensitive, then id). Σ over a person of what they're owed − what they
+    owe = their `balanceCents`.
+  - **`people`:** everyone with a share, sorted by `displayName`. Σ `balanceCents` = 0.
+  - Pending payments don't change anything here; screens read them from the entries directly ("Waiting
+    for confirmation" in Settle up, the Confirm buttons on Balances).
 - **Seam:** none. Every dependency is in-process, so there is nothing to swap. **Adapters:** none.
 - **Depth and the deletion test:** three functions hide a lot:
-  - the whole-number rounding (lcm, `BigInt`, the absorber, the negative fallback);
+  - the whole-number rounding per payer (lcm, `BigInt`, each payer absorbing, the negative fallback);
   - every `HS422` rule;
-  - the greedy settle-up and every tie-break.
+  - which entries count, and the pairwise netting with every tie-break.
 
-  Delete the module, and rounding and settle-up reappear in the editor, the planner and the API, where
-  they would drift apart. Folded in from the earlier draft: `paymentShares` (a one-item `computeShares`),
-  and `memberTotals`, `balances`, `suggestPayments` and `settleUpRows` (now one `summarizeGroup`).
+  Delete the module, and rounding and debts reappear in the editor, the planner, nudges and the API,
+  where they would drift apart.
 
 - **Test surface:** `tests/lib/ledger.test.ts`, through these three functions only. It runs every case in
   the shared table (§9.13), the seeded invariants (§10.1), and one failing draft per `HS422` rule.
 - **Runtime imports:** none, so the Vercel function can load it (ADR-001).
 
-**Rounding (`computeShares`), exactly:**
+**Rounding (`computeShares`), exactly, for each payer `p` separately:**
 
 1. `paid[m]` = Σ amounts of items `m` paid.
-2. Let `D` = lcm of every item's `splitAmong.length`. `num[m]` = Σ over items `m` is in of
-   `amountCents × (D / n)`. All of this is `BigInt` in TypeScript and `NUMERIC` in SQL (`D` can exceed
-   2⁵³).
-3. `owed[m]` = ⌊(2·num[m] + D) / (2·D)⌋, i.e. `num/D` rounded half up.
-4. `diff` = total − Σ owed. If `diff ≠ 0`, the **absorber** is the payer with the largest `paid`; a tie goes
-   to whoever paid the earliest item among them. `owed[absorber] += diff`, even if the absorber is not in
-   any split (Sam pays 1000 split by three others → Sam owes 1).
-5. If that would make `owed[absorber]` negative, it goes to 0 and the remaining cents come off other shares,
-   one cent each, largest rounding excess (`owed·D − num`) first; ties go to **bill order** — the order in
-   which members first appear scanning items in order and each `splitAmong` in order.
-6. Result: one share per member who paid or is in any split (0/0 shares allowed), sorted by bill order
-   with payers not in any split last. Σ paid = Σ owed = total.
+2. Take `p`'s items. Let `D` = lcm of their `splitAmong.length`. `num[m]` = Σ over `p`'s items that `m` is
+   in of `amountCents × (D / n)`. All of this is `BigInt` in TypeScript and `NUMERIC` in SQL (`D` can
+   exceed 2⁵³).
+3. `part[m][p]` = ⌊(2·num[m] + D) / (2·D)⌋, i.e. `num/D` rounded half up.
+4. `diff` = Σ amounts of `p`'s items − Σ `part[·][p]`. `part[p][p] += diff`, even if `p` is not in any of
+   their own splits (Sam pays 1000 split by three others → Sam owes 1 to himself, which nets to nothing in
+   debts).
+5. If that would make `part[p][p]` negative, it goes to 0 and the remaining cents come off other people's
+   parts of `p`, one cent each, largest rounding excess (`part·D − num`) first; ties go to **bill order**
+   — the order in which members first appear scanning items in order and each `splitAmong` in order.
+6. `owed[m]` = Σ over payers `part[m][p]`, and `owedTo[m]` = the non-zero `part[m][·]`. Result: one share
+   per member who paid or is in any split (0/0 shares allowed), sorted by bill order with payers not in
+   any split last.
 
-**Suggested payments (`summarizeGroup`):** repeat until everyone is at 0: the debtor owing the most pays
-the creditor owed the most `min(debt, credit)`. Ties at each pick: name case-insensitive, then member id.
+**Debts (`summarizeGroup`):** for each pair (A, B): `Σ owedTo[A][B] − Σ owedTo[B][A]` over bills that
+aren't deleted and confirmed payments. A positive result is A owing B.
 
 ### 9.4 M2 Change planner (`src/lib/changes.ts`)
 
-This module turns what a person wants to do into the mutations that do it. It is pure, so every
-permission and validation rule the device mirrors from the server is testable without Dexie.
+This module turns an **intent** (what a person asks to do) into a **plan**, and **commits**
+it on the device. It has two functions: `planChange`, which is pure, so every permission and validation
+rule the device mirrors from the server is testable without Dexie; and `commit`, the only local writer,
+which reads, plans, applies and queues in one transaction. It replaces the earlier `commitChange` +
+`mutate()` pair, which read the group's state outside the write transaction: two quick taps in the
+settle-up tracker (in the design of the day) could plan against the same balances and record the same
+payments twice.
 
 **Interface:**
 
@@ -672,8 +786,8 @@ type GroupState = {
 	invites: InviteRow[];
 	me: { memberId: string; role: "owner" | "member" | "guest"; isAnonymous: boolean };
 };
-type Intent =
-	| { type: "createGroup"; name: string; displayName: string }
+type Intent = { type: "createGroup"; name: string; displayName: string } | ({ groupId: string } & GroupIntent);
+type GroupIntent =
 	| { type: "renameGroup"; name: string }
 	| { type: "deleteGroup" }
 	| { type: "addPerson"; displayName: string }
@@ -682,6 +796,9 @@ type Intent =
 	| { type: "addExpense"; draft: ExpenseDraft }
 	| { type: "editExpense"; entryId: string; draft: ExpenseDraft }
 	| { type: "recordPayment"; from: string; to: string; amountCents: number; entryDate: string; notes: string | null }
+	| { type: "confirmPayment"; entryId: string }
+	| { type: "declinePayment"; entryId: string; note: string | null }
+	| { type: "undoPayment"; entryId: string }
 	| { type: "deleteEntry"; entryId: string }
 	| {
 			type: "resolveConflict";
@@ -689,48 +806,84 @@ type Intent =
 			resolution: "kept_current" | "took_proposed" | "merged";
 			final: ExpenseDraft | "deleted";
 	  }
-	| { type: "tickSettleUp"; memberId: string }
-	| { type: "untickSettleUp"; memberId: string }
 	| { type: "completeGroup" }
 	| { type: "reopenGroup" }
 	| { type: "createInvite"; claimMemberId: string | null }
-	| { type: "revokeInvite"; inviteId: string };
-type Plan = { ok: true; mutations: Mutation[] } | { ok: false; code: "HS403" | "HS409" | "HS422"; reason: string };
+	| { type: "revokeInvite"; inviteId: string }
+	// slice 8 (docs/chat-spec.md):
+	| { type: "sendMessage"; body: string; replyToId: string | null }
+	| { type: "deleteMessage"; messageId: string }
+	| { type: "pinMessage"; messageId: string; pinned: boolean }
+	| { type: "nudge"; memberId: string };
+type Plan =
+	| { ok: true; mutations: Mutation[]; createdId: string | null } // the new group, entry or invite
+	| { ok: false; code: "HS403" | "HS409" | "HS422"; reason: string };
 
 function planChange(
 	state: GroupState | null, // null only for createGroup
 	intent: Intent,
 	ctx: { newId(): string; randomToken(): string; now: string; today: string }
 ): Plan;
-function commitChange(intent: Intent): Promise<Plan>; // app composition root
+
+function createCommitter(deps: {
+	db: LocalDb;
+	userId: string;
+	isAnonymous: boolean;
+	requestSync(): void;
+	newId(): string;
+	randomToken(): string;
+	now(): Date;
+}): (intent: Intent) => Promise<Plan>; // commit
+function useCommit(): (intent: Intent) => Promise<Plan>; // from React context
 ```
 
 - **Invariants:**
   - `planChange` is pure: the same inputs give the same plan.
-  - Its permission checks follow spec decision 8 and its validation follows `validateEntry` (M1). Both use
-    the server's codes, so the device refuses exactly what `push_changes` would.
+  - Its permission checks ask M10 `may()` (spec decision 8) and its validation follows `validateEntry`
+    (M1). Both use the server's codes, so the device refuses exactly what `push_changes` would.
   - `baseVersion` comes from the entry's `rowVersion` in `state`.
-  - Shares come from `computeShares`, and `tickSettleUp`'s payments come from `summarizeGroup`.
-- **Ordering:** mutations come back in the order they must be applied. A tick is one `entry.create` per
-  suggested payment; an untick is one `entry.delete` per live `settle_up` payment that involves the member.
+  - Shares come from `computeShares`; a payment's default amount and a nudge's amount come from
+    `summarizeGroup`'s debts.
+  - `recordPayment` plans a payment that counts at once when the other side has no login (or neither side
+    has one and you are a full member), and a pending one otherwise.
+- **Ordering:** mutations come back in the order they must be applied.
 - **Error modes:** refusals are returned (`ok: false`), never thrown.
-- **`commitChange`:** reads `GroupState` from Dexie, calls `planChange` with `newId` and
-  `crypto.getRandomValues`, passes the mutations to `mutate()` (M6) in one call, and returns the plan, so
-  the screen can show `reason`.
+- **Idempotent answers:** confirming, declining or undoing a payment this device already shows as
+  answered plans `ok: true` with no mutations, so a double tap is invisible. `recordPayment` is refused
+  (`HS409`) while the same pair already has a pending payment, so a double tap can't record it twice.
+- **`commit(intent)`**, built once per signed-in session by `createCommitter`:
+  - **One Dexie read-write transaction** over every table: read the whole group named by
+    `intent.groupId` (none for `createGroup`) into `GroupState`, with `me` from the member row for
+    `userId` plus `isAnonymous`; `planChange`; then for each mutation, in order, `applyMutation` (M3) and
+    `outbox.add`. Nothing inside awaits anything but Dexie, so the transaction stays open.
+  - After the transaction commits, `requestSync()`, only if at least one mutation was queued.
+  - Returns the `Plan`, so the screen can show `reason` or use `createdId` (open the new group or entry,
+    share the new invite; its token is in `inviteTokens` by `inviteId`).
+  - **Storage failures** (quota full, IndexedDB closed or blocked) throw and roll the transaction back;
+    the signed-in layout shows "Couldn't save on this device". Screens branch only on `Plan`.
+  - **Wiring:** the signed-in layout builds the committer and provides it through React context; it
+    rebuilds it when the user id or `isAnonymous` changes (a guest adding their email).
+  - **Server side unchanged:** `push_changes` still accepts or rejects each mutation on its own. If a
+    commit's mutations are partly rejected, the next pull shows the true state and the rejection toast
+    explains it.
 - **Invite tokens:** the token travels inside `invite.create`, and `applyMutation` (M3) stores it in
   `inviteTokens`. The planner stays pure.
-- **Seam:** none. `ctx` is how it accepts its dependencies (ids, randomness, time) instead of creating
-  them. That is a parameter, not a seam.
+- **Seam:** none. `ctx` and `createCommitter`'s `deps` are how it accepts its dependencies (database,
+  ids, randomness, time, sync) instead of creating them. IndexedDB is local-substitutable
+  (`fake-indexeddb`), so tests run the real Dexie code rather than a second adapter.
 - **Deletion test:** without this module, every screen would build its own mutations, permissions, shares
-  and settle-up expansion. Folded in: the per-area action files from the earlier draft (`members.ts`,
-  `entries.ts`, `invites.ts` and `api-tokens.ts` actions, each a pass-through to `mutate`), and today's
-  `createGroup` and `renameGroup` from `groups.ts`.
+  and settle-up expansion, and would have to get the transaction right. Folded in: the per-area action
+  files from the earlier draft (each a pass-through), today's `createGroup` and `renameGroup` from
+  `groups.ts`, and `src/lib/sync/mutate.ts`, which is deleted.
 - **Reads:** the hooks (`useGroups`, `useEntries`, …) stay as thin per-area read files. They are
   `useLiveQuery` plus the alphabetical sort, so they have no logic to test and no seam.
-- **Test surface:** `tests/lib/changes.test.ts`, through `planChange` with plain `GroupState` objects:
-  - the role matrix from spec decision 8, one row per intent;
-  - each intent's mutations;
-  - each refusal.
+- **Test surface:**
+  - `tests/lib/changes.test.ts`, through `planChange` with plain `GroupState` objects: the role matrix from
+    spec decision 8, one row per intent; each intent's mutations; each refusal; idempotent answers.
+  - `tests/lib/changes.commit.test.ts`, through `commit`, built with a `LocalDb` on `fake-indexeddb` and a
+    `requestSync` spy: two taps on Record payment queue one payment; a failing write rolls back both the
+    rows and the outbox; the outbox holds a commit's mutations in plan order; `requestSync` runs only when
+    something was queued; `createdId` names the new row.
 
 ### 9.5 M3 Local replica (`src/lib/sync/local.ts`)
 
@@ -802,7 +955,10 @@ function mergePull(tables: LocalTables, pull: PullResult, pending: Mutation[], u
   Neither seam gains a method.
 - **Test surface:** `tests/lib/sync/engine.test.ts`.
 
-### 9.7 M5 Sync controller, M6 Local writer, M7 Money
+### 9.7 M5 Sync controller, M7 Money
+
+(M6, the local writer `mutate()`, was folded into M2's `commit` after the architecture review on
+2026-11-04.)
 
 - **M5 `controller.ts` (exists):**
   - **Interface:** `startSync(store, transport, onRejected) → stop`, `requestSync()`, `useSyncStatus()`.
@@ -811,13 +967,6 @@ function mergePull(tables: LocalTables, pull: PullResult, pending: Mutation[], u
   - **Dependencies:** it accepts `store` and `transport` but reads `window`, `document` and `navigator`
     directly. No seam is drawn there (see §9.2), and it is checked by hand.
   - **Deletion test:** delete it, and the scheduling would spread into the layout.
-- **M6 `mutate.ts`:**
-  - **Interface:** `mutate(mutations: Mutation[], userId)` changes from one mutation to a list. It applies
-    and queues them all, in order, in **one** Dexie transaction, then calls `requestSync()`. A settle-up
-    tick is therefore all-or-nothing.
-  - It is the composition root of the write path, so it has no seam and no test of its own; its logic is
-    M3's.
-  - **Deletion test:** delete it, and the transaction-plus-outbox rule would spread to every caller.
 - **M7 `money.ts`:**
   - **Interface:** `parseAmount(input): number | null` and `formatAmount(cents): string`. It is pure and
     tested through those two functions.
@@ -841,7 +990,7 @@ The handler has to satisfy these constraints:
 
 - It turns an HTTP `Request` into a `Response` that matches the OpenAPI contract.
 - Exactly one database call per request (ADR-003).
-- It computes balances and `settleUp` with M1.
+- It computes balances and debts with M1.
 - It can be tested with no database.
 
 Its dependencies are Postgres, which is local-substitutable (a `postgres` client against the local
@@ -913,8 +1062,7 @@ function createApiV1(deps: { store: ApiStore; now?: () => Date }): (request: Req
 
 - **Invariants:** it never throws. Anything unexpected is a 500 `server_error`, logged without the token
   or its hash. Every response carries the headers in §10.2. Bodies match `docs/api-v1.openapi.yaml`.
-  `netCents` = paid − owed. Balances and `settleUp` come from `summarizeGroup` (M1), filtered to the
-  person. Timestamps go through `toISOString()`.
+  The person's `debts` and `balanceCents` come from `summarizeGroup` (M1), filtered to the person. Timestamps go through `toISOString()`.
 - **Implementation (not interface):** `http.ts` (JSON, errors, headers), `cursor.ts` and `token.ts` are
   internal files with no tests of their own. Tests reach them through `handle`.
 - **Composition root:** `api/v1/[...path].ts` creates the `postgres` client and the Postgres store once per
@@ -950,17 +1098,17 @@ class ApiStoreError extends Error {
   refused with `HS429` don't count.
 - A call returns only the token owner's data, read from one snapshot.
 - `HS404` means a group that is unknown, deleted or not the owner's.
-- In `entries`, a page never splits a group version and may exceed `limit` to finish one. A fully read
+- In `payments`, only payments that involve the owner and count are returned; a page never splits a group version and may exceed `limit` to finish one. A fully read
   group's cursor value is its head version. `removedGroupIds` lists cursor groups that are no longer
   accessible, and those groups are left out of the returned cursor.
 - Row shapes are the `api.v1_*` JSON in §11.2.
 
 **Adapters:**
 
-| Adapter                         | Where                                 | Implementation                                                                                                                                                         |
-| ------------------------------- | ------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `createPostgresApiStore(sql)`   | `src/server/api-v1/postgres-store.ts` | One `SELECT api.v1_*(…)` per method; maps SQLSTATE, and a NULL from `v1_group`/`v1_entries`, to `ApiStoreError`. A small adapter over a large SQL implementation (D5). |
-| `createMemoryApiStore(fixture)` | `tests/support/memory-api-store.ts`   | Holds tokens (by hash), groups, members, entries and versions in memory and applies the same invariants, including the rate window.                                    |
+| Adapter                         | Where                                 | Implementation                                                                                                                                                          |
+| ------------------------------- | ------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `createPostgresApiStore(sql)`   | `src/server/api-v1/postgres-store.ts` | One `SELECT api.v1_*(…)` per method; maps SQLSTATE, and a NULL from `v1_group`/`v1_payments`, to `ApiStoreError`. A small adapter over a large SQL implementation (D5). |
+| `createMemoryApiStore(fixture)` | `tests/support/memory-api-store.ts`   | Holds tokens (by hash), groups, members, payments that count and versions in memory and applies the same invariants, including the rate window.                         |
 
 **One contract suite holds both adapters to the interface:** `tests/api/store.contract.ts` exports
 `describeApiStore(name, makeStore)`, which seeds the same scenario through each adapter and asserts the
@@ -1009,12 +1157,12 @@ hand-written table keeps them in step:
 
 - **The table:** `tests/fixtures/ledger-cases.ts` exports
   `LEDGER_CASES: { name, members: string[], items: { amountCents, paidBy, splitAmong }[], paid, owed,
-balances, payments }[]`, with people by name and expected values worked out by hand. It starts with
+parts, balances, debts }[]`, with people by name and expected values worked out by hand. It starts with
   every case in the spec's Testing Checklist: Scenario A, the $10 and $20 splits by three, Scenarios B and
   C, several payers with and without a cent, the payer not sharing, and two items of 1000. New cases are
   only ever added here.
 - **TypeScript side:** `tests/lib/ledger.test.ts` loops over the table, comparing `computeShares` with
-  `paid`/`owed`, and `summarizeGroup` with `balances`/`payments`.
+  `paid`/`owed`/`parts`, and `summarizeGroup` with `balances`/`debts`.
 - **SQL side:** `scripts/ledger-cases-sql.ts` renders the table into `supabase/tests/ledger_cases.test.sql`.
   That file holds one pgTAP `results_eq` per case against `private.compute_shares`, with names mapped to
   fixed UUIDs. `bun run gen:ledger-cases` writes it.
@@ -1026,16 +1174,104 @@ The generator only formats; it computes nothing, so the expected values stay han
 requires. Chat 2 creates the table, the generator, the generated file and the drift guard, because
 `compute_shares` is built first. Chat 3's ledger tests run on the same table.
 
+### 9.14 M10 Permissions (`src/lib/permissions.ts`)
+
+**Interface:**
+
+```ts
+type Role = "owner" | "member" | "guest";
+type Action =
+	| "group.rename"
+	| "group.delete"
+	| "group.complete"
+	| "group.reopen"
+	| "member.add"
+	| "member.rename.self"
+	| "member.rename.others"
+	| "member.remove.self"
+	| "member.remove.others"
+	| "entry.create"
+	| "entry.update"
+	| "entry.delete.own"
+	| "entry.delete.others"
+	| "conflict.resolve"
+	| "invite.create"
+	| "invite.revoke.own"
+	| "invite.revoke.others"
+	| "payment.record.own"
+	| "payment.record.others"
+	| "payment.respond"
+	| "payment.undo"
+	// slice 8:
+	| "message.send"
+	| "message.delete.own"
+	| "message.pin"
+	| "nudge.send";
+
+function may(action: Action, role: Role): boolean;
+function allowedWhenCompleted(action: Action): boolean;
+```
+
+- **Invariants:** it is the spec's decision 8 table (plus the chat rows in `docs/chat-spec.md`), nothing
+  more. Working out _which_ action an intent is (your own entry or someone else's, yourself or another
+  person) is the caller's job: `planChange`, or a screen deciding whether to show a button.
+- **Seam:** none. Its twin is D6 `private.may()` in SQL; the permission case table (ADR-007) holds the two
+  in step.
+- **Deletion test:** delete it, and every screen and `planChange` re-derive the matrix; the drift ADR-007
+  exists to prevent.
+- **Test surface:** `tests/lib/permissions.test.ts` loops over `tests/fixtures/permission-cases.ts`.
+
+### 9.15 M11 Message history and live signals (slice 8)
+
+**Interface** (`src/lib/sync/messages.ts`):
+
+```ts
+interface MessageFeed {
+	pull(
+		groupId: string,
+		since: number,
+		limit: number
+	): Promise<{ messages: MessageRow[]; version: number; gap: boolean }>;
+	history(groupId: string, beforeSeq: number, limit: number): Promise<MessageRow[]>;
+}
+function syncMessages(
+	tables: LocalTables,
+	feed: MessageFeed,
+	groups: { groupId: string; messageVersion: number }[]
+): Promise<void>;
+function loadOlder(
+	tables: LocalTables,
+	feed: MessageFeed,
+	groupId: string
+): Promise<{ loaded: number; atStart: boolean }>;
+function trimCache(tables: LocalTables, keep: number): Promise<void>; // 500, at app start
+```
+
+- **Invariants:** `syncMessages` runs after `pull_changes` in a sync, only for groups whose
+  `message_version` is past the device's message cursor; it moves the cursor only after writing the
+  messages; a `gap` drops the group's older cached messages first. `loadOlder` never moves the cursor.
+  `trimCache` keeps each group's newest `keep` messages plus every message still waiting to send.
+- **Seam: `MessageFeed`** (real): `supabaseMessageFeed` in `supabase-transport.ts` (calling
+  `pull_messages` and `message_history`) and a fake in `tests/lib/sync/messages.test.ts`. Local storage
+  goes through the existing `LocalTables` seam, which gains `messages`, `messageCursors`, `nudges` and
+  `chatReads` rows.
+- **Live signals:** `supabase-transport.ts` also exports `subscribeToGroups(groupIds, onSignal) →
+unsubscribe`, Supabase Realtime private channels `group:<id>`. `startSync` takes it as a dependency and
+  calls `requestSync()` on every signal, resubscribing when the group list changes or the app returns to
+  the foreground. No seam is drawn (§9.2): only Realtime fills it, and a missed signal only costs latency.
+- **Test surface:** `tests/lib/sync/messages.test.ts`, through the three functions with the fake feed and
+  memory tables.
+
 ## 10. Testing strategy
 
 | Layer               | Tool                                        | Lives in                                                                                 | Proves                                                                                                                                                        |
 | ------------------- | ------------------------------------------- | ---------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | M1 ledger, M7 money | `bun test`                                  | `tests/lib/ledger.test.ts`, `money.test.ts`                                              | The shared case table (§9.13), invariants over seeded random bills, one draft per `HS422` rule                                                                |
-| M2 change planner   | `bun test`                                  | `tests/lib/changes.test.ts`                                                              | Role matrix per intent, each intent's mutations, each refusal                                                                                                 |
+| M2 change planner   | `bun test` (+ `fake-indexeddb`)             | `tests/lib/changes.test.ts`, `changes.commit.test.ts`                                    | Role matrix per intent, each intent's mutations, each refusal; `commit` is atomic and idempotent under double taps                                            |
 | M3, M4, M8 sync     | `bun test` with memory tables and fakes     | `tests/lib/sync/*.test.ts`                                                               | `applyMutation` per type, `mergePull` (shares replaced, stale updates not replayed, dropped groups take their children), engine order, wire mapping           |
 | D1–D5 SQL           | pgTAP                                       | `supabase/tests/*.test.sql`                                                              | Generated case table through `compute_shares`; each mutation through `push_changes`; conflicts; invites; completing; API security and `handshake_api`'s reach |
 | Case-table drift    | `bun test`                                  | `tests/lib/ledger-cases-sql.test.ts`                                                     | The generated pgTAP file matches the case table                                                                                                               |
-| M9 through `handle` | `bun test` + memory store                   | `tests/api/v1.handler.test.ts`                                                           | Auth header and token format, routing, params, error mapping (SQLSTATE → HTTP), balances and `settleUp`, headers                                              |
+| M9 through `handle` | `bun test` + memory store                   | `tests/api/v1.handler.test.ts`                                                           | Auth header and token format, routing, params, error mapping (SQLSTATE → HTTP), balances and debts, headers                                                   |
 | M9 contract         | `bun test` + Ajv                            | `tests/api/v1.contract.test.ts`                                                          | Every response validates against `docs/api-v1.openapi.yaml` with closed schemas; golden JSON for the pinned examples                                          |
 | `ApiStore` adapters | `bun test` (memory always; Postgres opt-in) | `tests/api/store.contract.ts` run by `memory-store.test.ts` and `postgres-store.test.ts` | Both adapters honour the seam's invariants (§9.11); the Postgres run skips without `HANDSHAKE_API_DATABASE_URL`                                               |
 | Guards              | `bun test`                                  | `tests/server/import-paths.test.ts`                                                      | No runtime `@/` imports in the function's import graph                                                                                                        |
@@ -1050,7 +1286,7 @@ under test.
 Invariant tests use a fixed-seed PRNG (no new dependency): 1 000 random bills of 1–8 items, 1–6 members,
 amounts 1–100 000 cents. For each: Σ paid = Σ owed = total, owed ≥ 0, every share other than the
 absorber's is within 1 cent of its exact share, and the same items always give the same shares. For
-suggested payments: ≤ n − 1 payments, and applying them zeroes every balance.
+debts: each person's debts net to their balance.
 
 ### 10.2 Contract tests pin what Pholio relies on
 
@@ -1059,8 +1295,8 @@ suggested payments: ≤ n − 1 payments, and applying them zeroes every balance
   429 `rate_limited`, 500 `server_error`.
 - Headers: `Content-Type: application/json; charset=utf-8`, `Cache-Control: no-store`, CORS headers,
   `Retry-After` on 429.
-- Golden JSON: `GET /groups/{id}` for Sam after the $10 dinner (paid 1000, owed 334, balance 666, two
-  `settleUp` rows of 333), byte-for-byte after sorting keys.
+- Golden JSON: `GET /groups/{id}` for Sam after the $10 dinner and Alex's confirmed 333 (balance 333, one
+  debt: Jo owes Sam 333) and `GET /payments` (one `received` payment), byte-for-byte after sorting keys.
 - A change that fails a contract test is either a bug or a contract change. A contract change within v1 is
   additive only (`docs/api-v1.md`, Versioning) and updates the YAML in the same commit.
 
@@ -1395,6 +1631,103 @@ name) and `22P02` (a `groupId`, `memberId` or similar that isn't a UUID).
 `bun run build` still pass (no changes to `src/`). Report any place the SQL or a wire contract had to differ
 from this section, so chat 3 builds against what exists, and update §11.2.
 
+### 11.4 Change list of 2026-11-04 (chat 2: edit 004–009 in place)
+
+These supersede §11.2 where they differ. The migrations had run only on local stacks, so they are
+edited in place rather than followed by a new migration; `bun run db:reset` rebuilds them. Work on a
+branch with a PR (the owner's rule).
+
+1. **Permission matrix (ADR-007).**
+   - Add `private.may(p_action TEXT, p_role TEXT) RETURNS BOOLEAN` and
+     `private.allowed_when_completed(p_action TEXT) RETURNS BOOLEAN` (both `IMMUTABLE`, one `CASE` each)
+     implementing spec decision 8's table, in 004.
+   - Replace `private.require_member(user, group, roles[], allow_completed)` with
+     `private.require(p_user, p_group_id, p_action) RETURNS public.group_members`: lock the group row,
+     active member, not deleted, `allowed_when_completed` if completed, then `may`. Every `apply_*` works
+     out its action (own/others, self/others) and calls it once; the inline role checks go.
+   - Changes of rule: `member.add` and `invite.create` for members too; `invite.revoke` split into own
+     (`created_by` is the caller) and others; leaving (`member.remove.self`) works in a completed group.
+   - Create `tests/fixtures/permission-cases.ts` (hand-transcribed from decision 8), a
+     `scripts/permission-cases-sql.ts` generator, the generated `supabase/tests/permission_cases.test.sql`,
+     and extend the drift test to it; `package.json` script `gen:permission-cases`. In the per-area pgTAP
+     files, keep one allowed and one refused call per action through `push_changes` (wiring), and drop
+     the rest of the role checks there.
+2. **Per-payer rounding and share parts (ADR-008).**
+   - `private.compute_shares()` rounds per payer (architecture §9.3) and returns parts:
+     `(member_id, payer_member_id, owed_cents)` plus each member's `paid_cents`.
+   - Add `ledger_share_parts (entry_id, group_id, member_id, payer_member_id, owed_cents)`, PK
+     `(entry_id, member_id, payer_member_id)`, RLS like shares, written with every entry. Validation
+     compares shares **and** parts. Mutations' shares carry `owedTo` (camelCase map payer → cents).
+   - Update `tests/fixtures/ledger-cases.ts`: add `parts` to each case, change "Several payers, with a
+     cent" (owed P1 734, P2 733, P3 733, P4 400, P5 400; parts in the spec's Testing Checklist), and
+     replace `payments` with pairwise `debts`; regenerate the pgTAP file.
+3. **Handshake payments (ADR-008, spec decision 17).**
+   - Drop `recorded_via`. Add `payment_status`, `payer_confirmed_at`, `receiver_confirmed_at`,
+     `confirmed_at`, `closed_at`, `close_note` (≤ 200) to `ledger_entries`, with a check that bills have
+     a NULL status and payments a non-NULL one.
+   - New `apply_payment_record`, `apply_payment_confirm`, `apply_payment_decline`, `apply_payment_undo`.
+     Record: two different members of the group; the caller is one side (`payment.record.own`), or
+     neither side has a login and the caller is a full member (`payment.record.others`); the shares are
+     built from from/to/amount; status `confirmed` at once (with `confirmed_at`) when the other side, or
+     both sides, have no login, else `pending` with the caller's side time set; refuse with `HS409` when
+     the pair already has a pending payment. Confirm and decline: the caller is the side that hasn't
+     agreed, else `HS403`; not pending → `HS409`; confirm sets the other time and `confirmed_at`. Undo:
+     the starter (`created_by_member_id`), pending only. Allowed in a completed group: confirm and decline.
+   - `entry.create`, `entry.update` and `entry.delete` refuse payments (`HS422`); payments never enter the
+     conflict branch.
+   - Every payment write stamps the next group version; `confirmed_at`'s version is the payment's feed
+     version for the API.
+   - Tests: new `supabase/tests/payments.test.sql` (the spec's handshake cases).
+4. **Completing.** `group.complete` no longer cares about settle-up payments; pending payments stay pending.
+5. **Account deletion (spec decision 19).** `public.delete_account() RETURNS VOID` for `authenticated`
+   (guests included), in 008: name-only rows, ownership hand-over or group deletion, pending payments to
+   `undone` (with `closed_at`), API tokens deleted, `auth.users` row deleted, versions stamped. Tests:
+   `supabase/tests/delete-account.test.sql`.
+6. **API (ADR-004).** Replace `api.v1_entries` with `api.v1_payments(p_token_hash, p_group_id, p_cursor,
+p_limit) → { "payments": [{ "id", "groupId", "groupName", "direction", "counterpartyMemberId",
+"counterpartyName", "amountCents", "entryDate", "notes", "confirmedAt" }], "cursor", "hasMore",
+"removedGroupIds" }` over confirmed payments involving the owner. `api.v1_groups` drops `paidCents` and
+   `owedCents` in favour of per-member totals the handler sums; `api.v1_group` returns `members` with
+   `paidCents`, `owedCents` and `owedTo` (per-pair totals over live bills and confirmed payments), from
+   which the handler gets debts with `summarizeGroup`. Keep the NULL-for-not-found rule.
+7. **Pull.** Entries carry `shares[].owed_to` and the payment fields; no `recorded_via`.
+
+#### As built (chat 2, 2026-11-04/05, branch `chat2/handshake-payments-permissions`)
+
+Where the SQL differs from the list above. Chat 3 builds against these.
+
+- `private.compute_shares` returns one row per share: `(member_id, paid_cents, owed_cents, owed_to JSONB)`,
+  with `owed_to` = the non-zero parts (payer id → cents), in bill order. That is the same shape as
+  TypeScript's `Share.owedTo`. `ledger_share_parts` is written from it, with positive parts only.
+- `groups.completed_at` and `completed_by_member_id` are added in 004, where `private.require` checks them.
+  `pull_changes` is defined once, in 007. Bill `entry.update` and `entry.delete` live only in 006.
+- `groups.created_by` and `group_invites.created_by` are nullable `ON DELETE SET NULL`, so
+  `delete_account()` works for people who made groups or links. Pulled `created_by` and `preview_invite`'s
+  `invitedBy` can therefore be null, and a link whose maker is gone can only be revoked by the owner.
+- `api.v1_groups` keeps the owner's own `paidCents` and `owedCents`, over live bills and confirmed
+  payments only; the handler's `balanceCents` = paid − owed (**confirmed**). `api.v1_group` members are
+  `{ memberId, displayName, active, paidCents, owedCents, owedTo }`. `api.v1_payments` rows are as in
+  `docs/api-v1.md`; the feed version is the `row_version` of the write that confirmed the payment.
+- "Can answer a handshake" means **an active member row with a `user_id`** (corrected 2026-11-05; the first
+  build used "has a `user_id`, even if they left"). A payment with someone who has left, has no login or
+  deleted their account is confirmed when recorded. `member.remove` (leaving or being removed) undoes that
+  person's pending payments in the group, with `closed_at` set, as `delete_account()` does. Built as
+  `private.can_answer(member)`, which `payment.record` uses for both "confirmed at once" and `.others`, and
+  `private.undo_pending_payments(member, version)`, called by `member.remove` and `delete_account()`.
+- `payment.record` takes an optional `description` (default "Payment", ≤ 120). The one-pending-per-pair
+  `HS409` applies in either direction. A payment recorded for two people who can't answer sets only
+  `confirmed_at`.
+- Order of checks when answering or undoing: an unknown id is accepted and does nothing; then a payment of
+  another group or a bill gives `HS422`; then not pending gives `HS409`; then the wrong side or not the
+  starter gives `HS403`.
+- Decline `note` is trimmed, ≤ 200 characters, and blank is stored as NULL. Bill `entry.create` may omit
+  `kind`, and `kind: "payment"` gives `HS422`. Each share's `owedTo` must match `compute_shares` exactly.
+- `delete_account()` also undoes pending payments in groups the person had left. API tokens go with the
+  `auth.users` cascade. It shares `private.hand_over()` with leaving.
+- The permission drift test is its own file, `tests/lib/permission-cases-sql.test.ts`. The ledger case table
+  replaces "payers tie" with "Two payers, one item each" (Alex 666, Jo 667, Sam 667; debts Alex→Jo 333,
+  Alex→Sam 333).
+
 ## 12. Handoff to chat 3 (domain logic, sync, API, tests)
 
 Read first: `AGENTS.md`, the spec, §§4 and 7–10 here (§9 is the module map you build to), `docs/api-v1.md`, `docs/api-v1.openapi.yaml`, and chat
@@ -1402,7 +1735,7 @@ Read first: `AGENTS.md`, the spec, §§4 and 7–10 here (§9 is the module map 
 
 ### 12.1 Logic and sync (client)
 
-Chat 3 builds and tests modules M1–M4 and M6–M8. Each one is tested only through the interface in §9.
+Chat 3 builds and tests modules M1–M4, M7 and M8. Each one is tested only through the interface in §9.
 
 1. **M7** `src/lib/money.ts`:
    - `parseAmount(input)` and `formatAmount(cents)` (`"$1,234.50"`, `"−$3.33"`, en-US, with the U+2212
@@ -1431,21 +1764,27 @@ Chat 3 builds and tests modules M1–M4 and M6–M8. Each one is tested only thr
    - `tests/support/memory-tables.ts` becomes one generic `Rows<T>` over a `Map`; `dexieTables(db)` becomes
      one line per table.
    - Tests: `tests/lib/sync/local.test.ts` and `merge.test.ts`.
-6. **M6** and Dexie:
+6. Dexie:
    - `src/lib/local-db.ts`: Dexie version 2 with the stores from the spec.
-   - `mutate(mutations: Mutation[], userId)` applies and queues the whole list in one transaction across
-     every table.
    - `createDexieSyncStore`'s transaction covers the new tables.
-7. **M2** `src/lib/changes.ts`: `planChange` and `commitChange` exactly as in §9.4.
-   - Move `createGroup` and `renameGroup` out of `groups.ts` into it, and update their two callers.
+7. **M2** `src/lib/changes.ts`: `planChange`, `createCommitter` (`commit`) and `useCommit` exactly as in
+   §9.4.
+   - Delete `src/lib/sync/mutate.ts`; `commit` is the only local writer.
+   - Move `createGroup` and `renameGroup` out of `groups.ts` into intents, and update their two callers.
    - `groups.ts`, `members.ts`, `entries.ts` and `invites.ts` hold read hooks only.
-   - Tests: `tests/lib/changes.test.ts`, covering the role matrix, each intent and each refusal.
+   - `signed-in-layout.tsx` builds the committer (rebuilt when the user id or `isAnonymous` changes),
+     provides it through context, and shows "Couldn't save on this device" when `commit` throws.
+   - Add `fake-indexeddb` as a dev dependency.
+   - Tests: `tests/lib/changes.test.ts` (role matrix, each intent, each refusal, idempotent answers) and
+     `tests/lib/changes.commit.test.ts` (the five cases in §9.4).
+   - Update `AGENTS.md` in the same change: rule 2 of "How data works" and "Adding a new kind of change"
+     name `commit(intent)` and `planChange()` instead of `mutate()`, and the Layout block loses `mutate`.
 8. **M8** `supabase-transport.ts` gains the six online functions (§9.8), each throwing `TransportError`.
    `src/lib/auth.tsx` gains guest sign-in and "keep my data".
 9. Leave the UI almost untouched:
    - `signed-in-layout.tsx`: toast text per `code` (the spec's rejection toasts).
-   - `pages/group.tsx` and `pages/groups.tsx`: drop the currency label, and call `commitChange` for create
-     and rename.
+   - `pages/group.tsx` and `pages/groups.tsx`: drop the currency label, and call `useCommit()` for create
+     and rename (navigating with `createdId` after create).
    - Nothing else.
 10. `tests/lib/sync/engine.test.ts`: still passes, untouched, which proves the seams held.
 
@@ -1495,6 +1834,23 @@ idleTimeout: 20, connectionTimeout: 10 })` from `bun`. It runs on Vercel's Bun r
 online. The report lists anything that differs from `docs/api-v1.md` (which must then be updated) and the
 manual checks for the owner.
 
+### 12.4 Change list of 2026-11-04 (chat 3)
+
+These supersede §§12.1–12.2 where they differ. Build against chat 2's report on §11.4.
+
+1. **M1:** the interface in §9.3: `Share.owedTo`, per-payer rounding, `summarizeGroup(entries, members)`
+   returning `people` and pairwise `debts`, skipping deleted bills and payments that don't count.
+2. **M10:** `src/lib/permissions.ts` and `tests/lib/permissions.test.ts` over the permission case table.
+3. **M2:** the payment intents (`recordPayment`, `confirmPayment`, `declinePayment`, `undoPayment`) and
+   their rules (§9.4); no tick or untick; `deleteAccount` is not an intent (it is online only).
+4. **Sync types:** the payment mutations from spec "New mutations"; `EntryRow` gains the payment fields;
+   shares gain `owedTo`; `entry.create` loses `kind` (bills only) and `recordedVia`.
+5. **M8:** `deleteAccount()` in `supabase-transport.ts`; after it succeeds, `clearLocalData()` and sign out.
+6. **M9:** `/payments` and `/groups/{id}/payments` replace the entries routes; `GET /groups/{id}` returns
+   `debts`; `ApiStore.entries` becomes `payments`; the memory store, the store contract suite and the
+   golden JSON follow `docs/api-v1.md` (2026-11-04).
+7. Slice 8 (chat, nudges, signals, M11) is not part of this pass.
+
 ## 13. Risks specific to this design
 
 - **Vercel import resolution.** Mitigated by relative runtime imports and a guard test (ADR-001).
@@ -1506,4 +1862,7 @@ manual checks for the owner.
   settings; check before enabling anonymous sign-ins in production.
 - **Cursor size.** The feed cursor grows by about 50 characters per group; fine for dozens of groups. If a
   person reaches hundreds, move the cursor server-side (a cursor id), which is invisible to Pholio.
-- **Single owner.** With no admins, an absent owner blocks invites and completing (ADR-005).
+- **Single owner.** With no admins, an absent owner blocks completing and removing people (ADR-005).
+- **Two copies of the permission rule.** Mitigated by the shared case table and its drift test (ADR-007).
+- **Handshakes left waiting.** A pending payment never counts until the other side answers; Settle up and
+  nudges (slice 8) keep it visible.

@@ -2,13 +2,15 @@
 
 - **Status:** Contract for the MVP. Pholio's side is built against this document.
 - **Created:** 2026-11-03
+- **Updated:** 2026-11-04 (payments feed replaces the entries feed; nothing had shipped)
 - **Machine-readable:** `docs/api-v1.openapi.yaml` (OpenAPI 3.1). Where prose and YAML differ, the YAML is
   right and this document is fixed.
 - **Design:** `docs/architecture.md` (ADR-001 to ADR-004), `docs/shared-ledger-spec.md` (the money model)
 
-Handshake tracks who owes who inside friend groups. No money moves; Handshake only keeps the record. This
-API lets another app (first, Pholio) read what one person paid, owes and is owed, read-only. Handshake
-never calls the other app.
+Handshake tracks who owes who inside friend groups. No money moves through it; it only keeps the record.
+This API lets another app (first, Pholio) read **the money one person sent and received**: the payments
+they made to friends and the payments friends made to them, once both sides have confirmed them (a
+handshake). Bills stay in Handshake. Handshake never calls the other app.
 
 ## Basics
 
@@ -18,9 +20,9 @@ never calls the other app.
 - **Money:** whole cents in fields ending `Cents` (integers, never floats). Dollars only; there is no
   currency field.
 - **Dates:** `entryDate` is a calendar date `YYYY-MM-DD` chosen by the person. Timestamps are ISO 8601 in
-  UTC with milliseconds: `2026-11-03T18:20:00.000Z`.
+  UTC with milliseconds: `2026-11-04T18:20:00.000Z`.
 - **IDs:** UUID strings. They never change and are never reused.
-- **Whose view:** every response is about the person who owns the token. Amounts are **their** share.
+- **Whose view:** every response is about the person who owns the token.
 
 ## Authentication
 
@@ -33,20 +35,21 @@ Authorization: Bearer hsk_3q2-7wZ…
 
 - Send it only in the `Authorization` header, never in a URL.
 - A token can read exactly what its owner can see in Handshake, and nothing can be written with it.
-- Tokens don't expire. The person can revoke one at any time; from then on it gets `401 invalid_token`.
-  Pholio should then ask the person to connect again.
+- Tokens don't expire. The person can revoke one at any time, and deleting their Handshake account
+  deletes every token; from then on it gets `401 invalid_token`. Pholio should then ask the person to
+  connect again.
 - Keep the token on Pholio's server. CORS is open (`Access-Control-Allow-Origin: *`) because the API uses no
   cookies, but a token held in a browser can be stolen by any script on that page.
 
 ## Endpoints
 
-| Method and path                 | Returns                                                  |
-| ------------------------------- | -------------------------------------------------------- |
-| `GET /me`                       | The token's owner                                        |
-| `GET /groups`                   | Their groups, each with their paid, owed and balance     |
-| `GET /groups/{groupId}`         | One group, plus the suggested payments that involve them |
-| `GET /groups/{groupId}/entries` | That group's entries, as a change feed                   |
-| `GET /entries`                  | Entries across all their groups, as a change feed        |
+| Method and path                  | Returns                                                |
+| -------------------------------- | ------------------------------------------------------ |
+| `GET /me`                        | The token's owner                                      |
+| `GET /groups`                    | Their groups, each with their balance                  |
+| `GET /groups/{groupId}`          | One group, plus their own debts in it                  |
+| `GET /groups/{groupId}/payments` | That group's payments involving them, as a change feed |
+| `GET /payments`                  | Their payments across all groups, as a change feed     |
 
 ### `GET /me`
 
@@ -67,33 +70,29 @@ they left or that were deleted are not listed.
 			"name": "Banff trip",
 			"role": "member",
 			"memberId": "c4d2…",
-			"paidCents": 1000,
-			"owedCents": 334,
-			"balanceCents": 666,
+			"balanceCents": 333,
 			"completedAt": null,
-			"updatedAt": "2026-11-03T18:20:00.000Z"
+			"updatedAt": "2026-11-04T18:20:00.000Z"
 		}
 	]
 }
 ```
 
-| Field          | Meaning                                                                                      |
-| -------------- | -------------------------------------------------------------------------------------------- |
-| `role`         | `owner`, `member` or `guest`. New values may be added in v1; treat unknown ones as `member`. |
-| `memberId`     | The person's member id in this group; entries and `settleUp` refer to members by this id.    |
-| `paidCents`    | Total the person paid across the group's entries that aren't deleted.                        |
-| `owedCents`    | Total the person owes from those entries.                                                    |
-| `balanceCents` | `paidCents − owedCents`. Positive: others owe them. Negative: they owe.                      |
-| `completedAt`  | When the owner completed the group (read-only from then on), or `null`.                      |
-| `updatedAt`    | The last time the group, its people or its entries changed.                                  |
+| Field          | Meaning                                                                                          |
+| -------------- | ------------------------------------------------------------------------------------------------ |
+| `role`         | `owner`, `member` or `guest`. New values may be added in v1; treat unknown ones as `member`.     |
+| `memberId`     | The person's member id in this group.                                                            |
+| `balanceCents` | What everyone in the group owes the person minus what they owe everyone. Positive: they're owed. |
+| `completedAt`  | When the owner completed the group (read-only from then on), or `null`.                          |
+| `updatedAt`    | The last time the group, its people or its entries changed.                                      |
 
 ### `GET /groups/{groupId}`
 
-The group as in `GET /groups`, plus `settleUp`: the suggested payments that settle the group, filtered to
-the ones that involve the person. Suggestions come from everyone's balances with Handshake's own rule
-(the person owing most pays the person owed most, repeated), so they match what the app shows.
+The group as in `GET /groups`, plus `debts`: the person's own debts in it, one per other person, worked
+out between the two of them. People they're square with aren't listed.
 
-Sam after a $10.00 dinner Sam paid, split by Alex, Jo and Sam:
+Sam after a $10.00 dinner Sam paid, split by Alex, Jo and Sam, and a $3.33 payment from Alex that both
+confirmed:
 
 ```json
 {
@@ -101,49 +100,46 @@ Sam after a $10.00 dinner Sam paid, split by Alex, Jo and Sam:
 	"name": "Banff trip",
 	"role": "member",
 	"memberId": "c4d2…",
-	"paidCents": 1000,
-	"owedCents": 334,
-	"balanceCents": 666,
+	"balanceCents": 333,
 	"completedAt": null,
-	"updatedAt": "2026-11-03T18:20:00.000Z",
-	"settleUp": [
-		{ "fromMemberId": "a1…", "fromName": "Alex", "toMemberId": "c4d2…", "toName": "Sam", "amountCents": 333 },
-		{ "fromMemberId": "b7…", "fromName": "Jo", "toMemberId": "c4d2…", "toName": "Sam", "amountCents": 333 }
-	]
+	"updatedAt": "2026-11-04T18:20:00.000Z",
+	"debts": [{ "memberId": "b7…", "name": "Jo", "direction": "owes_you", "amountCents": 333 }]
 }
 ```
 
-Sam owes 334 rather than 333 because the person who paid absorbs the rounding cent.
+| Field       | Meaning                                        |
+| ----------- | ---------------------------------------------- |
+| `direction` | `owes_you` (they owe the person) or `you_owe`. |
+| `name`      | The other person's name in this group.         |
 
 `404 not_found` if the group doesn't exist, the person isn't in it, or it was deleted.
 
-### `GET /entries` and `GET /groups/{groupId}/entries`
+### `GET /payments` and `GET /groups/{groupId}/payments`
 
-A **change feed** of entries: the first call returns everything, later calls return only what changed.
+A **change feed** of the payments that involve the person and **count**: both sides confirmed them, or
+the other side has no Handshake login (someone tracked by name only), in which case recording it was
+enough. The first call returns everything; later calls return only what's new. A payment that counts
+never changes, so the feed only ever adds payments.
 
 | Parameter | Default | Meaning                                                                                |
 | --------- | ------- | -------------------------------------------------------------------------------------- |
 | `cursor`  | none    | The `nextCursor` from the previous response. Leave it out to start from the beginning. |
-| `limit`   | 100     | 1 to 500. A page can hold slightly more when several entries changed together.         |
+| `limit`   | 100     | 1 to 500. A page can hold slightly more when several payments counted together.        |
 
 ```json
 {
-	"entries": [
+	"payments": [
 		{
 			"id": "e81f…",
 			"groupId": "9b1e…",
-			"kind": "expense",
-			"description": "Dinner",
-			"entryDate": "2026-11-02",
-			"totalCents": 1000,
-			"involved": true,
-			"paidCents": 1000,
-			"owedCents": 334,
-			"netCents": 666,
-			"hasConflict": false,
-			"createdAt": "2026-11-03T18:20:00.000Z",
-			"updatedAt": "2026-11-03T18:20:00.000Z",
-			"deletedAt": null
+			"groupName": "Banff trip",
+			"direction": "received",
+			"counterpartyMemberId": "a1…",
+			"counterpartyName": "Alex",
+			"amountCents": 333,
+			"entryDate": "2026-11-04",
+			"notes": null,
+			"confirmedAt": "2026-11-04T18:20:00.000Z"
 		}
 	],
 	"nextCursor": "eyJ2IjoxLCJzY29wZSI6ImFsbCIsImdyb3VwcyI6eyI5YjFlLi4uIjo3fX0",
@@ -152,41 +148,33 @@ A **change feed** of entries: the first call returns everything, later calls ret
 }
 ```
 
-| Field             | Meaning                                                                                                                                                                                                              |
-| ----------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `kind`            | `expense` (a bill) or `payment` (someone paying someone back). No other values in v1.                                                                                                                                |
-| `description`     | Up to 120 characters; payments default to "Payment".                                                                                                                                                                 |
-| `totalCents`      | The whole bill or payment.                                                                                                                                                                                           |
-| `involved`        | Whether the person has a share in it. Entries they aren't in come through with `false` and zeros.                                                                                                                    |
-| `paidCents`       | What the person paid towards it. For a payment, the person paying back has `paidCents` = the amount.                                                                                                                 |
-| `owedCents`       | What the person owes from it. For a payment, the person receiving has `owedCents` = the amount.                                                                                                                      |
-| `netCents`        | `paidCents − owedCents`: this entry's effect on their balance.                                                                                                                                                       |
-| `hasConflict`     | Two people edited it at once and the group hasn't resolved it yet. The amounts are the current version and may change when it is resolved; the entry then comes through again.                                       |
-| `deletedAt`       | Set when the entry was deleted. Remove it on Pholio's side.                                                                                                                                                          |
-| `nextCursor`      | Always present. Store it and send it next time.                                                                                                                                                                      |
-| `hasMore`         | `true`: call again now with `nextCursor`; more changes are waiting.                                                                                                                                                  |
-| `removedGroupIds` | Groups Pholio has seen through this cursor that the person has since left, or that were deleted. Drop their entries. They don't appear again unless the person rejoins, which sends the group's whole history again. |
+| Field              | Meaning                                                                                                                                                                                                                                                         |
+| ------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `direction`        | `sent` (the person paid someone back: money out) or `received` (someone paid them back: money in).                                                                                                                                                              |
+| `counterpartyName` | The other person's name in that group.                                                                                                                                                                                                                          |
+| `amountCents`      | The amount paid back, always positive.                                                                                                                                                                                                                          |
+| `entryDate`        | The day the payment happened, as recorded.                                                                                                                                                                                                                      |
+| `notes`            | The note on the payment, or `null`.                                                                                                                                                                                                                             |
+| `confirmedAt`      | When it started to count.                                                                                                                                                                                                                                       |
+| `nextCursor`       | Always present. Store it and send it next time.                                                                                                                                                                                                                 |
+| `hasMore`          | `true`: call again now with `nextCursor`; more payments are waiting.                                                                                                                                                                                            |
+| `removedGroupIds`  | Groups Pholio has seen through this cursor that the person has since left, or that were deleted. Pholio decides what to do with their payments; the money did move. They don't appear again unless the person rejoins, which sends that group's payments again. |
 
-For any group, the sum of `netCents` over its entries without `deletedAt` equals that group's
-`balanceCents`.
-
-The cursor is opaque. Don't parse it or build one; it only works on the endpoint that issued it (a
-`/groups/{id}/entries` cursor sent to `/entries` gets `400 bad_request`). Entries in a page are not in date
-order; treat a page as a set of changes. An entry can appear more than once across pages when it changed
-again in between; the later copy wins.
+Pending, declined and undone payments are never returned. The cursor is opaque. Don't parse it or build
+one; it only works on the endpoint that issued it (a `/groups/{id}/payments` cursor sent to `/payments`
+gets `400 bad_request`). Payments in a page are not in date order.
 
 #### Keeping Pholio in sync
 
 ```
 cursor = stored cursor (or none)
 repeat:
-    page = GET /entries?cursor=cursor
-    upsert every entry by id; delete the ones with deletedAt
-    delete every entry whose groupId is in page.removedGroupIds
+    page = GET /payments?cursor=cursor
+    add every payment by id (an id already seen can be skipped)
+    handle page.removedGroupIds
     cursor = page.nextCursor
 until page.hasMore is false
 store cursor
-GET /groups for current balances
 ```
 
 Once a minute or less often is plenty; the rate limit is 60 requests a minute per token.
@@ -221,7 +209,7 @@ Branch on `code`, not on `message`; messages are for people and may change.
 
 - Within v1, changes are **additive only**: new endpoints, new optional parameters, new response fields,
   new `role` values. Pholio must ignore fields it doesn't know.
-- Never in v1: removing or renaming a field, changing a type or meaning, new `kind` values, or a new
+- Never in v1: removing or renaming a field, changing a type or meaning, new `direction` values, or a new
   required parameter. Those go in `/api/v2`, and v1 keeps working for at least 6 months after v2 ships.
 - Every change to this contract updates `docs/api-v1.openapi.yaml` in the same commit, and Handshake's
   contract tests check every response against it.
@@ -229,4 +217,5 @@ Branch on `code`, not on `message`; messages are for people and may change.
 ## Not in v1
 
 Writing anything, webhooks, OAuth ("Sign in with Handshake"; it would change only how the bearer token is
-issued), bill items, other people's shares, member lists, and trip planning.
+issued), bills and their items, other people's debts, pending payments, chat and nudges, and trip
+planning.
