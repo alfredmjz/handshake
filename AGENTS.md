@@ -22,17 +22,19 @@ Handshake's database (see `docs/shared-ledger-spec.md`).
 
 ## Commands
 
-| Command             | Purpose                                                              |
-| ------------------- | -------------------------------------------------------------------- |
-| `bun run db:start`  | Start the local Supabase (Docker); migrations apply on start         |
-| `bun run db:reset`  | Rebuild the local database from `supabase/migrations/`               |
-| `bun run dev`       | Vite dev server on http://localhost:5173                             |
-| `bun run typecheck` | `tsc --noEmit` — must exit 0                                         |
-| `bun test`          | Unit tests in `tests/`                                               |
-| `bun run test:db`   | pgTAP tests in `supabase/tests/` against the local Supabase          |
-| `bun run build`     | Production build into `dist/` — must exit 0                          |
-| `bun run format`    | Prettier                                                             |
-| `bun run mobile:*`  | Capacitor: `mobile:sync`, `mobile:add:ios`, `mobile:open:android`, … |
+| Command               | Purpose                                                                                     |
+| --------------------- | ------------------------------------------------------------------------------------------- |
+| `bun run db:start`    | Start the local Supabase (Docker); migrations apply on start                                |
+| `bun run db:reset`    | Rebuild the local database from `supabase/migrations/`                                      |
+| `bun run dev`         | Vite dev server on http://localhost:5173                                                    |
+| `bun run typecheck`   | `tsc --noEmit` — must exit 0                                                                |
+| `bun test`            | Unit tests in `tests/`                                                                      |
+| `bun run test:db`     | pgTAP tests in `supabase/tests/` against the local Supabase                                 |
+| `bun run test:api-db` | The ApiStore contract suite against the local Supabase (needs `HANDSHAKE_API_DATABASE_URL`) |
+| `bun run api:lint`    | Lint `docs/api-v1.openapi.yaml` with Redocly                                                |
+| `bun run build`       | Production build into `dist/` — must exit 0                                                 |
+| `bun run format`      | Prettier                                                                                    |
+| `bun run mobile:*`    | Capacitor: `mobile:sync`, `mobile:add:ios`, `mobile:open:android`, …                        |
 
 Local ports are shifted so this stack runs next to Pholio's: API 55321, DB 55322, Studio 55323,
 Mailpit (sign-in emails) 55324. Do not move them back to 543xx.
@@ -46,9 +48,14 @@ src/
   components/ui/           primitives copied from Pholio (button, input, card, label, sonner)
   lib/
     local-db.ts            Dexie schema; the app reads only from here
-    sync/                  types, local apply/merge, engine, controller, transport, mutate
-    groups.ts              hooks and actions for groups
+    changes.ts             planChange(intent) and commit(intent): the only local writer
+    ledger.ts              computeShares, validateEntry, summarizeGroup (pure; the API uses it too)
+    permissions.ts         may(action, role): the twin of private.may()
+    groups.ts, members.ts, entries.ts, invites.ts   read hooks only
+    sync/                  types, wire, local apply/merge, engine, controller, transport
     auth.tsx, money.ts, ids.ts, supabase.ts
+  server/api-v1/           API v1 for Pholio: createApiV1({ store }) and the ApiStore adapters
+api/v1/[...path].ts        the Vercel function (composition root); runtime imports are relative
 supabase/
   migrations/              numbered SQL, applied in filename order
   tests/                   pgTAP
@@ -58,8 +65,10 @@ tests/                     bun unit tests, mirroring src/ paths; fakes in tests/
 ## How data works (offline-first)
 
 1. **Screens read only from Dexie** (`useLiveQuery`). They never query Supabase.
-2. **Every change is a mutation** (`src/lib/sync/types.ts`). `mutate()` applies it to Dexie at once and
-   queues it in `outbox`, in one transaction. Never write to Dexie tables any other way.
+2. **Every change is an intent, carried out by mutations** (`src/lib/sync/types.ts`). Screens call
+   `commit(intent)` (`useCommit()`, `src/lib/changes.ts`): in one Dexie transaction it reads the group,
+   plans with `planChange()` (the same permission and validation rules as the server), applies each
+   mutation to Dexie and queues it in `outbox`. Never write to Dexie tables any other way.
 3. **The server is written only through `push_changes()`**, which applies each mutation in its own
    savepoint, records its id in `sync_mutations` so a retry is not applied twice, and rejects what the
    caller may not do. Clients have `SELECT` only on tables; keep it that way.
@@ -74,8 +83,10 @@ tests/                     bun unit tests, mirroring src/ paths; fakes in tests/
 7. **IDs are made on the device** with `newId()`, so rows exist before the server sees them.
 8. **Deletes are soft** (`deleted_at`), so other devices receive them as rows.
 
-Adding a new kind of change: add it to the `Mutation` union, handle it in `applyMutation()`
-(`src/lib/sync/local.ts`) and in `private.apply_mutation()` (new migration), then add unit and pgTAP tests.
+Adding a new kind of change: add an intent to `planChange()` (`src/lib/changes.ts`), checking its action
+with `may()` (`src/lib/permissions.ts`); add the mutation to the `Mutation` union and handle it in
+`applyMutation()` (`src/lib/sync/local.ts`) and in a `private.apply_<area>_<verb>()` function (new
+migration); then add unit tests (`changes.test.ts`, `local.test.ts`) and pgTAP tests.
 `supabase-transport.ts` is the only file that talks to Supabase about data; keep it that way so the
 backend can change later.
 
@@ -91,10 +102,8 @@ backend can change later.
 
 ## Money and dates
 
-- Amounts are **integers in the currency's minor unit** (`src/lib/money.ts`); never store or add floats.
-  Splits must add up to the total exactly (`splitEvenly`).
-- Each group has a `base_currency`. Expenses in other currencies will store the original amount, its
-  currency, and the rate used.
+- Amounts are **whole cents**, dollars only (`src/lib/money.ts`); never store or add floats. Shares come
+  from `computeShares()` (`src/lib/ledger.ts`) and add up to the total exactly.
 - Calendar dates are `YYYY-MM-DD` strings; timestamps are ISO strings.
 - Balances are computed on the device from local rows (they must work offline), in pure TypeScript
   with unit tests. The server validates what it stores (e.g. splits summing to the amount).

@@ -89,7 +89,8 @@ they left or that were deleted are not listed.
 ### `GET /groups/{groupId}`
 
 The group as in `GET /groups`, plus `debts`: the person's own debts in it, one per other person, worked
-out between the two of them. People they're square with aren't listed.
+out between the two of them, sorted by the other person's name. People they're square with aren't
+listed.
 
 Sam after a $10.00 dinner Sam paid, split by Alex, Jo and Sam, and a $3.33 payment from Alex that both
 confirmed:

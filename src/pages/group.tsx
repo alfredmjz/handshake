@@ -1,17 +1,21 @@
 import { useState, type FormEvent } from "react";
 import { ArrowLeft, Pencil } from "lucide-react";
 import { Link, useParams } from "react-router";
+import { toast } from "sonner";
 
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { useCurrentUser } from "@/lib/auth";
-import { renameGroup, useGroup, useMembers } from "@/lib/groups";
+import { useCommit } from "@/lib/changes";
+import { useGroup } from "@/lib/groups";
+import { useMembers } from "@/lib/members";
 
 export function GroupPage() {
 	const { groupId = "" } = useParams();
 	const user = useCurrentUser();
+	const commit = useCommit();
 	const group = useGroup(groupId);
 	const members = useMembers(groupId);
 	const [draft, setDraft] = useState<string | null>(null);
@@ -32,7 +36,10 @@ export function GroupPage() {
 	async function onRename(event: FormEvent) {
 		event.preventDefault();
 		const name = draft?.trim();
-		if (name && name !== group?.name) await renameGroup(user, groupId, name);
+		if (name && name !== group?.name) {
+			const plan = await commit({ type: "renameGroup", groupId, name });
+			if (!plan.ok) toast.error("Couldn't rename the group", { description: plan.reason });
+		}
 		setDraft(null);
 	}
 
@@ -47,10 +54,7 @@ export function GroupPage() {
 				<div className="flex items-start justify-between gap-3">
 					<div className="min-w-0">
 						<h1 className="type-h2 break-words">{group.name}</h1>
-						<p className="type-body-sm text-muted-foreground">
-							{group.baseCurrency}
-							{group.rowVersion === 0 ? " · Not synced yet" : ""}
-						</p>
+						<p className="type-body-sm text-muted-foreground">{group.rowVersion === 0 ? "Not synced yet" : ""}</p>
 					</div>
 					<Button variant="outline" size="sm" onClick={() => setDraft(group.name)}>
 						<Pencil aria-hidden />

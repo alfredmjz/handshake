@@ -312,7 +312,7 @@ components:
           properties:
             debts:
               type: array
-              description: The person's own debts in the group, one per other person they aren't square with.
+              description: The person's own debts in the group, one per other person they aren't square with, sorted by that person's name.
               items:
                 $ref: "#/components/schemas/Debt"
     Payment:

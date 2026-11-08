@@ -1,16 +1,19 @@
 import { useState, type FormEvent } from "react";
 import { Plus } from "lucide-react";
 import { Link, useNavigate } from "react-router";
+import { toast } from "sonner";
 
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { useCurrentUser } from "@/lib/auth";
-import { createGroup, useGroups } from "@/lib/groups";
+import { defaultDisplayName, useCurrentUser } from "@/lib/auth";
+import { useCommit } from "@/lib/changes";
+import { useGroups } from "@/lib/groups";
 
 export function GroupsPage() {
 	const user = useCurrentUser();
+	const commit = useCommit();
 	const groups = useGroups();
 	const navigate = useNavigate();
 	const [name, setName] = useState("");
@@ -19,9 +22,13 @@ export function GroupsPage() {
 		event.preventDefault();
 		const trimmed = name.trim();
 		if (!trimmed) return;
-		const groupId = await createGroup(user, trimmed);
+		const plan = await commit({ type: "createGroup", name: trimmed, displayName: defaultDisplayName(user.email) });
+		if (!plan.ok) {
+			toast.error("Couldn't create the group", { description: plan.reason });
+			return;
+		}
 		setName("");
-		navigate(`/groups/${groupId}`);
+		navigate(`/groups/${plan.createdId}`);
 	}
 
 	return (
@@ -62,7 +69,7 @@ export function GroupsPage() {
 								>
 									<span className="type-body-lg truncate font-medium">{group.name}</span>
 									<span className="type-caption shrink-0 text-muted-foreground">
-										{group.rowVersion === 0 ? "Not synced yet" : group.baseCurrency}
+										{group.rowVersion === 0 ? "Not synced yet" : null}
 									</span>
 								</Link>
 							</li>
