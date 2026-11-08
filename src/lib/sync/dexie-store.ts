@@ -1,29 +1,40 @@
+import type { Table } from "dexie";
+
 import type { LocalDb } from "@/lib/local-db";
 import type { SyncStore } from "@/lib/sync/engine";
-import { mergePull, type LocalTables } from "@/lib/sync/local";
+import { mergePull, type LocalTables, type Rows } from "@/lib/sync/local";
 import type { Mutation } from "@/lib/sync/types";
+
+// `groupIndex` names the index that holds the group id: the primary key for groups and cursors.
+function rows<T>(table: Table<T, string, unknown>, groupIndex = "groupId"): Rows<T> {
+	return {
+		get: (id) => table.get(id),
+		byGroup: (groupId) => table.where(groupIndex).equals(groupId).toArray(),
+		put: async (list) => {
+			if (list.length > 0) await table.bulkPut(list);
+		},
+		delete: async (ids) => {
+			if (ids.length > 0) await table.bulkDelete(ids);
+		},
+	};
+}
 
 export function dexieTables(db: LocalDb): LocalTables {
 	return {
-		getGroup: (id) => db.groups.get(id),
-		putGroups: async (rows) => {
-			await db.groups.bulkPut(rows);
-		},
-		putMembers: async (rows) => {
-			await db.members.bulkPut(rows);
-		},
-		setCursor: async (groupId, version) => {
-			await db.cursors.put({ groupId, version });
-		},
-		keepOnlyGroups: async (groupIds) => {
-			const keep = new Set(groupIds);
-			const gone = (await db.groups.toCollection().primaryKeys()).filter((id) => !keep.has(id));
-			if (gone.length === 0) return;
-			await db.groups.bulkDelete(gone);
-			await db.members.where("groupId").anyOf(gone).delete();
-			await db.cursors.bulkDelete(gone);
-		},
+		groups: rows(db.groups, "id"),
+		members: rows(db.members),
+		entries: rows(db.entries),
+		conflicts: rows(db.conflicts),
+		invites: rows(db.invites),
+		inviteTokens: rows(db.inviteTokens),
+		cursors: rows(db.cursors),
+		groupIds: async () => (await db.groups.toCollection().primaryKeys()) as string[],
 	};
+}
+
+// Every table a local write touches: the synced rows, the outbox and the cursors.
+export function writeTables(db: LocalDb) {
+	return [db.groups, db.members, db.entries, db.conflicts, db.invites, db.inviteTokens, db.cursors, db.outbox];
 }
 
 async function pendingMutations(db: LocalDb): Promise<Mutation[]> {
@@ -38,7 +49,7 @@ export function createDexieSyncStore(db: LocalDb, userId: string): SyncStore {
 		},
 		cursors: async () => Object.fromEntries((await db.cursors.toArray()).map((c) => [c.groupId, c.version])),
 		applyPull: (pull) =>
-			db.transaction("rw", [db.groups, db.members, db.cursors, db.outbox], async () => {
+			db.transaction("rw", writeTables(db), async () => {
 				await mergePull(dexieTables(db), pull, await pendingMutations(db), userId);
 			}),
 	};

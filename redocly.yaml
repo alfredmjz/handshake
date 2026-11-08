@@ -1,0 +1,3 @@
+rules:
+  # The API is private and has no license.
+  info-license: off

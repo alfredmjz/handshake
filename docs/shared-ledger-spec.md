@@ -975,8 +975,8 @@ TypeScript and the SQL rounding.
 - [ ] Settle up states: in the Dinner example after Sam's pending payment, Alex "Is owed 6000", Sam
       "Waiting for confirmation", Jo "Owes 3000"; once confirmed, Sam "Settled".
 - [ ] `planChange` handshakes: the payer or the receiver can record; only the other side can confirm or
-      decline (`HS403` otherwise); only the starter can undo; answering a payment that isn't pending
-      plans `HS409`; with a name-only counterpart the payment plans as confirmed at once; between two
+      decline (`HS403` otherwise); only the starter can undo; answering a payment someone else has
+      already answered or undone plans `HS409`, while repeating your own answer plans nothing; with a name-only counterpart the payment plans as confirmed at once; between two
       name-only people a member can record and a guest can't.
 - [ ] Permission cases (`tests/fixtures/permission-cases.ts`): every action × role matches decision 8,
       and every "allowed in a completed group" mark.

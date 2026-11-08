@@ -1,36 +1,24 @@
-// Amounts are whole numbers of the currency's smallest unit (cents for CAD, yen for JPY), never floats.
+// Amounts are whole cents, never floats. Handshake is dollars only.
 
-export function minorUnitDigits(currency: string): number {
-	return new Intl.NumberFormat("en", { style: "currency", currency }).resolvedOptions().maximumFractionDigits ?? 2;
-}
+const WHOLE_DOLLARS = new Intl.NumberFormat("en-US", { maximumFractionDigits: 0 });
 
-// Parses what someone typed ("12", "12.5", "1,234.50") into minor units; null when it isn't a valid amount.
-export function parseAmount(input: string, currency: string): number | null {
-	const digits = minorUnitDigits(currency);
+// Parses what someone typed ("12", "12.5", "1,234.50") into cents; null when it isn't a valid amount.
+export function parseAmount(input: string): number | null {
 	const match = /^(\d*)(?:\.(\d*))?$/.exec(input.trim().replace(/,/g, ""));
 	if (!match) return null;
 
 	const [, whole = "", fraction = ""] = match;
 	if (whole === "" && fraction === "") return null;
-	if (fraction.length > digits) return null;
+	if (fraction.length > 2) return null;
 
-	const minor = Number(whole || "0") * 10 ** digits + Number(fraction.padEnd(digits, "0") || "0");
-	return Number.isSafeInteger(minor) ? minor : null;
+	const cents = Number(whole || "0") * 100 + Number(fraction.padEnd(2, "0"));
+	return Number.isSafeInteger(cents) ? cents : null;
 }
 
-export function formatAmount(minor: number, currency: string, locale?: string): string {
-	return new Intl.NumberFormat(locale, { style: "currency", currency }).format(minor / 10 ** minorUnitDigits(currency));
-}
-
-// Shares always add up to the total exactly. Leftover units go to the first shares, so 1000 split
-// three ways is 334, 333, 333 (and -1000 is -334, -333, -333).
-export function splitEvenly(totalMinor: number, count: number): number[] {
-	if (!Number.isSafeInteger(totalMinor) || !Number.isInteger(count) || count <= 0) {
-		throw new RangeError("splitEvenly needs a whole-unit total and a positive share count");
-	}
-	const sign = totalMinor < 0 ? -1 : 1;
-	const total = Math.abs(totalMinor);
-	const base = Math.floor(total / count);
-	const leftover = total - base * count;
-	return Array.from({ length: count }, (_, i) => sign * (base + (i < leftover ? 1 : 0)));
+// "$1,234.50", and "−$3.33" with a real minus sign (U+2212).
+export function formatAmount(cents: number): string {
+	const abs = Math.abs(cents);
+	const dollars = WHOLE_DOLLARS.format(Math.floor(abs / 100));
+	const rest = String(abs % 100).padStart(2, "0");
+	return `${cents < 0 ? "−" : ""}$${dollars}.${rest}`;
 }

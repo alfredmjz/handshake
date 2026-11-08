@@ -1,61 +1,46 @@
 import { describe, expect, test } from "bun:test";
 
-import { formatAmount, minorUnitDigits, parseAmount, splitEvenly } from "@/lib/money";
-
-describe("minorUnitDigits", () => {
-	test("follows the currency", () => {
-		expect(minorUnitDigits("CAD")).toBe(2);
-		expect(minorUnitDigits("JPY")).toBe(0);
-		expect(minorUnitDigits("KWD")).toBe(3);
-	});
-});
+import { formatAmount, parseAmount } from "@/lib/money";
 
 describe("parseAmount", () => {
-	test("reads whole and decimal amounts as minor units", () => {
-		expect(parseAmount("12", "CAD")).toBe(1200);
-		expect(parseAmount("12.5", "CAD")).toBe(1250);
-		expect(parseAmount("12.05", "CAD")).toBe(1205);
-		expect(parseAmount(" 1,234.50 ", "CAD")).toBe(123450);
-		expect(parseAmount(".75", "CAD")).toBe(75);
-		expect(parseAmount("3000", "JPY")).toBe(3000);
+	test("reads whole and decimal dollars as cents", () => {
+		expect(parseAmount("12")).toBe(1200);
+		expect(parseAmount("12.5")).toBe(1250);
+		expect(parseAmount("12.05")).toBe(1205);
+		expect(parseAmount("1,234.50")).toBe(123450);
+		expect(parseAmount(" 1,234.50 ")).toBe(123450);
+		expect(parseAmount(".75")).toBe(75);
+		expect(parseAmount("12.")).toBe(1200);
 	});
 
-	test("rejects amounts the currency can't hold", () => {
-		expect(parseAmount("12.345", "CAD")).toBeNull();
-		expect(parseAmount("300.5", "JPY")).toBeNull();
+	test("rejects more than two decimals", () => {
+		expect(parseAmount("1.234")).toBeNull();
+		expect(parseAmount("12.345")).toBeNull();
 	});
 
 	test("rejects things that aren't amounts", () => {
-		for (const input of ["", ".", "-5", "abc", "1.2.3", "12e3"]) expect(parseAmount(input, "CAD")).toBeNull();
+		for (const input of ["", ".", "-5", "abc", "1.2.3", "12e3", "$5"]) expect(parseAmount(input)).toBeNull();
 	});
 
 	test("avoids float drift", () => {
-		expect(parseAmount("0.29", "CAD")).toBe(29);
-		expect(parseAmount("1.15", "CAD")).toBe(115);
+		expect(parseAmount("0.29")).toBe(29);
+		expect(parseAmount("1.15")).toBe(115);
+	});
+
+	test("rejects amounts too big to count exactly", () => {
+		expect(parseAmount("99999999999999999")).toBeNull();
 	});
 });
 
 describe("formatAmount", () => {
-	test("formats minor units in the currency", () => {
-		expect(formatAmount(123450, "CAD", "en-CA")).toBe("$1,234.50");
-		expect(formatAmount(3000, "JPY", "en-CA")).toBe("JP¥3,000");
-	});
-});
-
-describe("splitEvenly", () => {
-	test("shares always add up to the total", () => {
-		expect(splitEvenly(1000, 3)).toEqual([334, 333, 333]);
-		expect(splitEvenly(1001, 3)).toEqual([334, 334, 333]);
-		expect(splitEvenly(900, 3)).toEqual([300, 300, 300]);
-		expect(splitEvenly(2, 3)).toEqual([1, 1, 0]);
+	test("formats cents as dollars with thousands separators", () => {
+		expect(formatAmount(123450)).toBe("$1,234.50");
+		expect(formatAmount(0)).toBe("$0.00");
+		expect(formatAmount(5)).toBe("$0.05");
+		expect(formatAmount(100000000000)).toBe("$1,000,000,000.00");
 	});
 
-	test("refunds split the same way", () => {
-		expect(splitEvenly(-1000, 3)).toEqual([-334, -333, -333]);
-	});
-
-	test("rejects fractional totals and empty splits", () => {
-		expect(() => splitEvenly(10.5, 2)).toThrow(RangeError);
-		expect(() => splitEvenly(1000, 0)).toThrow(RangeError);
+	test("negative amounts use a real minus sign", () => {
+		expect(formatAmount(-333)).toBe("−$3.33");
 	});
 });
