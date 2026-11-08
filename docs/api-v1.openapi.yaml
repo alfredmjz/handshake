@@ -2,11 +2,12 @@ openapi: 3.1.0
 info:
   title: Handshake API
   version: 1.0.0
-  summary: Read-only access to one person's shared expenses in Handshake.
+  summary: Read-only access to the money one person sent and received in Handshake.
   description: |
-    Every response is about the person who owns the bearer token: what they paid, what they owe and
-    their balance in each group. Amounts are whole cents (dollars only). See docs/api-v1.md for the
-    behaviour behind each field. Within v1, changes are additive only; clients must ignore unknown fields.
+    Every response is about the person who owns the bearer token. The payments feed returns the
+    payments that involve them and count (both sides confirmed them, or the other side has no login).
+    Amounts are whole cents (dollars only). See docs/api-v1.md for the behaviour behind each field.
+    Within v1, changes are additive only; clients must ignore unknown fields.
 servers:
   - url: https://{domain}/api/v1
     variables:
@@ -60,7 +61,7 @@ paths:
   /groups/{groupId}:
     get:
       operationId: getGroup
-      summary: One group, with the suggested payments that involve the person
+      summary: One group, with the person's own debts in it
       parameters:
         - $ref: "#/components/parameters/GroupId"
       responses:
@@ -81,24 +82,24 @@ paths:
           $ref: "#/components/responses/RateLimited"
         "500":
           $ref: "#/components/responses/ServerError"
-  /groups/{groupId}/entries:
+  /groups/{groupId}/payments:
     get:
-      operationId: listGroupEntries
-      summary: Change feed of one group's entries
+      operationId: listGroupPayments
+      summary: Change feed of one group's payments that involve the person and count
       parameters:
         - $ref: "#/components/parameters/GroupId"
         - $ref: "#/components/parameters/Cursor"
         - $ref: "#/components/parameters/Limit"
       responses:
         "200":
-          description: A page of changed entries.
+          description: A page of payments.
           headers:
             Cache-Control:
               $ref: "#/components/headers/CacheControl"
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/EntryPage"
+                $ref: "#/components/schemas/PaymentPage"
         "400":
           $ref: "#/components/responses/BadRequest"
         "401":
@@ -109,23 +110,23 @@ paths:
           $ref: "#/components/responses/RateLimited"
         "500":
           $ref: "#/components/responses/ServerError"
-  /entries:
+  /payments:
     get:
-      operationId: listEntries
-      summary: Change feed of entries across all the person's groups
+      operationId: listPayments
+      summary: Change feed of the person's payments that count, across all their groups
       parameters:
         - $ref: "#/components/parameters/Cursor"
         - $ref: "#/components/parameters/Limit"
       responses:
         "200":
-          description: A page of changed entries.
+          description: A page of payments.
           headers:
             Cache-Control:
               $ref: "#/components/headers/CacheControl"
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/EntryPage"
+                $ref: "#/components/schemas/PaymentPage"
         "400":
           $ref: "#/components/responses/BadRequest"
         "401":
@@ -160,7 +161,7 @@ components:
       name: limit
       in: query
       required: false
-      description: Entries per page. A page can hold slightly more when several entries changed together.
+      description: Payments per page. A page can hold slightly more when several payments counted together.
       schema:
         type: integer
         minimum: 1
@@ -236,7 +237,7 @@ components:
       type: string
       format: date-time
       pattern: "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$"
-      examples: ["2026-11-03T18:20:00.000Z"]
+      examples: ["2026-11-04T18:20:00.000Z"]
     Me:
       type: object
       required: [userId, displayName]
@@ -254,7 +255,7 @@ components:
       enum: [owner, member, guest]
     Group:
       type: object
-      required: [id, name, role, memberId, paidCents, owedCents, balanceCents, completedAt, updatedAt]
+      required: [id, name, role, memberId, balanceCents, completedAt, updatedAt]
       properties:
         id:
           type: string
@@ -269,17 +270,9 @@ components:
           type: string
           format: uuid
           description: The person's member id in this group.
-        paidCents:
-          allOf: [{ $ref: "#/components/schemas/Cents" }]
-          minimum: 0
-          description: Total the person paid across the group's entries that aren't deleted.
-        owedCents:
-          allOf: [{ $ref: "#/components/schemas/Cents" }]
-          minimum: 0
-          description: Total the person owes from those entries.
         balanceCents:
           allOf: [{ $ref: "#/components/schemas/Cents" }]
-          description: paidCents − owedCents. Positive means others owe the person.
+          description: What everyone in the group owes the person minus what they owe everyone.
         completedAt:
           oneOf:
             - $ref: "#/components/schemas/Timestamp"
@@ -294,20 +287,20 @@ components:
           type: array
           items:
             $ref: "#/components/schemas/Group"
-    SuggestedPayment:
+    Debt:
       type: object
-      required: [fromMemberId, fromName, toMemberId, toName, amountCents]
+      required: [memberId, name, direction, amountCents]
       properties:
-        fromMemberId:
+        memberId:
           type: string
           format: uuid
-        fromName:
+          description: The other person's member id.
+        name:
           type: string
-        toMemberId:
+          description: The other person's name in this group.
+        direction:
           type: string
-          format: uuid
-        toName:
-          type: string
+          enum: [owes_you, you_owe]
         amountCents:
           allOf: [{ $ref: "#/components/schemas/Cents" }]
           minimum: 1
@@ -315,30 +308,26 @@ components:
       allOf:
         - $ref: "#/components/schemas/Group"
         - type: object
-          required: [settleUp]
+          required: [debts]
           properties:
-            settleUp:
+            debts:
               type: array
-              description: The suggested payments that settle the group, only those involving the person.
+              description: The person's own debts in the group, one per other person they aren't square with.
               items:
-                $ref: "#/components/schemas/SuggestedPayment"
-    Entry:
+                $ref: "#/components/schemas/Debt"
+    Payment:
       type: object
       required:
         - id
         - groupId
-        - kind
-        - description
+        - groupName
+        - direction
+        - counterpartyMemberId
+        - counterpartyName
+        - amountCents
         - entryDate
-        - totalCents
-        - involved
-        - paidCents
-        - owedCents
-        - netCents
-        - hasConflict
-        - createdAt
-        - updatedAt
-        - deletedAt
+        - notes
+        - confirmedAt
       properties:
         id:
           type: string
@@ -346,57 +335,45 @@ components:
         groupId:
           type: string
           format: uuid
-        kind:
+        groupName:
           type: string
-          enum: [expense, payment]
-        description:
+        direction:
           type: string
-          minLength: 1
-          maxLength: 120
+          description: "`sent`: the person paid someone back (money out). `received`: someone paid them back (money in)."
+          enum: [sent, received]
+        counterpartyMemberId:
+          type: string
+          format: uuid
+        counterpartyName:
+          type: string
+        amountCents:
+          allOf: [{ $ref: "#/components/schemas/Cents" }]
+          minimum: 1
         entryDate:
           type: string
           format: date
-        totalCents:
-          allOf: [{ $ref: "#/components/schemas/Cents" }]
-          minimum: 1
-        involved:
-          type: boolean
-          description: Whether the person has a share in this entry.
-        paidCents:
-          allOf: [{ $ref: "#/components/schemas/Cents" }]
-          minimum: 0
-        owedCents:
-          allOf: [{ $ref: "#/components/schemas/Cents" }]
-          minimum: 0
-        netCents:
-          allOf: [{ $ref: "#/components/schemas/Cents" }]
-          description: paidCents − owedCents.
-        hasConflict:
-          type: boolean
-          description: An edit conflict is open; amounts are the current version.
-        createdAt:
-          $ref: "#/components/schemas/Timestamp"
-        updatedAt:
-          $ref: "#/components/schemas/Timestamp"
-        deletedAt:
+        notes:
           oneOf:
-            - $ref: "#/components/schemas/Timestamp"
+            - type: string
+              maxLength: 1000
             - type: "null"
-    EntryPage:
+        confirmedAt:
+          $ref: "#/components/schemas/Timestamp"
+    PaymentPage:
       type: object
-      required: [entries, nextCursor, hasMore, removedGroupIds]
+      required: [payments, nextCursor, hasMore, removedGroupIds]
       properties:
-        entries:
+        payments:
           type: array
           items:
-            $ref: "#/components/schemas/Entry"
+            $ref: "#/components/schemas/Payment"
         nextCursor:
           type: string
           pattern: "^[A-Za-z0-9_-]+$"
           description: Opaque. Send it as `cursor` next time.
         hasMore:
           type: boolean
-          description: More changes are waiting; call again now with nextCursor.
+          description: More payments are waiting; call again now with nextCursor.
         removedGroupIds:
           type: array
           description: Groups seen through this cursor that the person has left or that were deleted.
