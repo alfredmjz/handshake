@@ -359,8 +359,10 @@ Nothing from Pholio is stored in Handshake, and none of Pholio's keys or URLs ap
     decision 3).
   - Vercel's function builder does not reliably resolve the `@/` path alias at runtime. Files the function
     loads at runtime use **relative** imports; `import type` may still use `@/` (types are erased). A unit
-    test guards this (§10.3). Chat 3 confirms once with `bunx vercel build` and may drop the rule if aliases
-    resolve.
+    test guards this (`tests/server/import-paths.test.ts`). `bunx vercel build` needs the owner's Vercel
+    login, so chat 3 could not run it (2026-11-08); `bun build --target=bun` bundles the function with
+    relative imports, and the bundle answers requests against the local stack. Keep the rule until a real
+    Vercel build shows aliases resolve.
 
 ### ADR-002: The contract is written first, as OpenAPI 3.1, and tests hold the code to it
 
@@ -369,8 +371,9 @@ Nothing from Pholio is stored in Handshake, and none of Pholio's keys or URLs ap
   behaviour in prose. Response types in `src/server/api-v1/types.ts` are written by hand to match. Contract
   tests load the YAML and validate every response the handler produces with Ajv (JSON Schema 2020-12, which
   OpenAPI 3.1 uses). In the tests every response schema is closed (`unevaluatedProperties: false` on each
-  object and each `allOf`, which works with composed schemas such as `GroupDetail`), so a field the handler
-  adds without documenting it fails, even though Pholio must tolerate extra fields.
+  object and on each `allOf`, leaving the `allOf` branches themselves open, because a closed branch would
+  reject the fields its siblings define, such as `GroupDetail`'s `debts`), so a field the handler adds
+  without documenting it fails, even though Pholio must tolerate extra fields.
 - **Why:** with five read-only routes a framework adds weight without much gain. A hand-reviewed YAML
   makes every contract change a visible diff, and the closed-schema tests stop code and contract drifting.
 - **Rejected:** generating the YAML from code (contract changes become a side effect of refactors);
@@ -784,7 +787,7 @@ type GroupState = {
 	entries: EntryRow[];
 	conflicts: ConflictRow[];
 	invites: InviteRow[];
-	me: { memberId: string; role: "owner" | "member" | "guest"; isAnonymous: boolean };
+	me: { memberId: string; userId: string; role: "owner" | "member" | "guest" } | null; // null: not in the group
 };
 type Intent = { type: "createGroup"; name: string; displayName: string } | ({ groupId: string } & GroupIntent);
 type GroupIntent =
@@ -822,7 +825,7 @@ type Plan =
 function planChange(
 	state: GroupState | null, // null only for createGroup
 	intent: Intent,
-	ctx: { newId(): string; randomToken(): string; now: string; today: string }
+	ctx: { newId(): string; randomToken(): string; now: string; today: string; isAnonymous: boolean }
 ): Plan;
 
 function createCommitter(deps: {
@@ -1046,7 +1049,7 @@ rows or throws `ApiStoreError`).
 ### 9.10 M9 API v1: the chosen interface (`src/server/api-v1/`)
 
 ```ts
-function createApiV1(deps: { store: ApiStore; now?: () => Date }): (request: Request) => Promise<Response>;
+function createApiV1(deps: { store: ApiStore }): (request: Request) => Promise<Response>;
 ```
 
 - **Order of checks:**
@@ -1056,7 +1059,8 @@ function createApiV1(deps: { store: ApiStore; now?: () => Date }): (request: Req
   4. A missing or malformed bearer token → 401.
   5. Bad params → 400.
   6. One store call; then `ApiStoreError` maps `HS401` → 401, `HS404` → 404 and `HS429` → 429 (with
-     `Retry-After` from `now`).
+     `Retry-After` from the error's `retryAfterSeconds`, which the Postgres store reads from `HS429`'s
+     `DETAIL`; 60 if missing). The handler needs no clock.
 
   Steps 1–5 never touch the store.
 
@@ -1082,13 +1086,19 @@ interface ApiStore {
 	me(tokenHash: string): Promise<MeRow>;
 	groups(tokenHash: string): Promise<GroupRowApi[]>;
 	group(tokenHash: string, groupId: string): Promise<GroupDetailRow>; // members with paid/owed totals
-	entries(
+	payments(
 		tokenHash: string,
 		query: { groupId: string | null; cursor: Record<string, number>; limit: number }
-	): Promise<{ entries: EntryRowApi[]; cursor: Record<string, number>; hasMore: boolean; removedGroupIds: string[] }>;
+	): Promise<{
+		payments: PaymentRowApi[];
+		cursor: Record<string, number>;
+		hasMore: boolean;
+		removedGroupIds: string[];
+	}>;
 }
 class ApiStoreError extends Error {
 	code: "HS401" | "HS404" | "HS429";
+	retryAfterSeconds: number | null; // HS429 only
 }
 ```
 
@@ -1875,6 +1885,41 @@ These supersede §§12.1–12.2 where they differ. Build against chat 2's report
    `debts`; `ApiStore.entries` becomes `payments`; the memory store, the store contract suite and the
    golden JSON follow `docs/api-v1.md` (2026-11-04).
 7. Slice 8 (chat, nudges, signals, M11) is not part of this pass.
+
+#### As built (chat 3, 2026-11-08; client half replaced 2026-11-09)
+
+The API half of chat 3 ships as built in PR #3. The client half (M1–M3, M7, M8, M10) ships from the
+screens branch (`feature/many-hands-ui`), which built the same interfaces in parallel and adds migration 010. Where that code differs from §§9 and 12:
+
+- **`planChange` context.** `ctx` carries `isAnonymous` (only `createGroup` needs it); `GroupState.me` is
+  `{ memberId, role, isAnonymous }`, and a caller with no active row gets `HS403` for every group intent.
+- **Answering a payment that is no longer pending** plans nothing, on this device, whoever answered it;
+  the screens hide the buttons then, and the server's `HS409` covers an answer that raced another device.
+- **Refusals the server words differently.** Name lengths (`23514` on the server) and an unknown conflict
+  (`HS404`) plan `HS422`, since `Plan`'s codes are `HS403`, `HS409` and `HS422`.
+- **`ExpenseDraft`** is `{ description, entryDate, notes, category, items }`; `planChange` works out the
+  amount and shares from the items. `createdId` also names a person added with `addPerson`.
+- **Read hooks:** `groups.ts` (`useGroups`, `useGroup`, `useWaitingChanges`, `useUnsyncedIds`),
+  `members.ts` (`useMembers`, `useMyMember`), `entries.ts` (`useEntries`, `useEntry`, `useGroupSummary`,
+  `usePendingPayments`, `useConflicts`, `useOpenConflicts`, `useGroupCategory`, `useGroupCategories`),
+  `invites.ts` (`useInvites`, `useInviteToken`).
+- **Dexie versions 2 and 3.** `inviteTokens` is indexed by `groupId` too. Version 3 adds `note` and
+  `category`; each upgrade clears the cursors so the next pull sends every group whole.
+- **A rejected change leaves no trace.** After any rejection the device clears its cursors and pulls again;
+  a pull from cursor 0 replaces the group's rows with the server's, then replays what is still unsent.
+- **`RejectedMutation.code`** is optional, so `engine.test.ts` stays untouched.
+- **Online functions** throw `TransportError { code, message }` with the SQLSTATE, or `"network"`.
+  `auth.tsx` has guest sign-in, "keep my data", `deleteMyAccount()`, and `endIfAccountGone()`, which signs a
+  device out when its login was deleted (a guest's, by completing a group).
+- **API.** `createApiV1({ store })`, with no clock (see §9.10). A group id that isn't a UUID is an unknown
+  path (404) and never reaches the store. A person's `debts` are sorted by the other person's name. The
+  YAML is read with Bun's built-in `Bun.YAML`, so `yaml` is not a dependency; `ajv` and `ajv-formats` are.
+- **Store contract suite.** Each adapter is seeded through its own `ApiSeeder`: the Postgres one through
+  `push_changes`, `join_group` and `create_api_token` as each signed-in user, over an admin connection
+  (`HANDSHAKE_TEST_ADMIN_DATABASE_URL`, local `postgres` by default). Expected cursor values come from each
+  group's head version, since the two adapters stamp different absolute versions.
+- **Not checked:** `Bun.sql` through Supavisor's transaction mode (the local pooler is off; the suite ran
+  on the direct connection), and `bunx vercel build` (needs the owner's Vercel login; see ADR-001).
 
 ## 13. Risks specific to this design
 

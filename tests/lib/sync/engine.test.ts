@@ -74,13 +74,16 @@ describe("syncOnce", () => {
 	test("rejected changes leave the queue and are reported", async () => {
 		const { store, queue } = fakeStore([rename("good"), rename("bad")]);
 		const { transport } = fakeTransport(
-			() => ({ applied: ["good"], rejected: [{ id: "bad", reason: "You are not a member of this group" }] }),
+			() => ({
+				applied: ["good"],
+				rejected: [{ id: "bad", code: "HS403", reason: "You are not a member of this group" }],
+			}),
 			EMPTY_PULL
 		);
 
 		expect(await syncOnce(store, transport)).toEqual({
 			pushed: 1,
-			rejected: [{ id: "bad", reason: "You are not a member of this group" }],
+			rejected: [{ id: "bad", code: "HS403", reason: "You are not a member of this group" }],
 		});
 		expect(queue).toEqual([]);
 	});

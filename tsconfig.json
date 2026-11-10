@@ -17,5 +17,5 @@
 			"@/*": ["./src/*"]
 		}
 	},
-	"include": ["src", "tests", "scripts", "vite.config.ts", "tailwind.config.ts", "capacitor.config.ts"]
+	"include": ["src", "api", "tests", "scripts", "vite.config.ts", "tailwind.config.ts", "capacitor.config.ts"]
 }

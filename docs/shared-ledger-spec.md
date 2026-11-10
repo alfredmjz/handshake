@@ -993,7 +993,8 @@ TypeScript and the SQL rounding.
       "Waiting for confirmation", Jo "Owes 3000"; once confirmed, Sam "Settled".
 - [ ] `planChange` handshakes: the payer or the receiver can record; only the other side can confirm or
       decline (`HS403` otherwise); only the starter can undo; answering a payment that isn't pending
-      plans `HS409`; with a name-only counterpart the payment plans as confirmed at once; between two
+      plans nothing on the device (the server gives `HS409` if another device answered first); with a
+      name-only counterpart the payment plans as confirmed at once; between two
       name-only people a member can record and a guest can't.
 - [ ] Permission cases (`tests/fixtures/permission-cases.ts`): every action × role matches decision 8,
       and every "allowed in a completed group" mark.

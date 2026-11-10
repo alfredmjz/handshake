@@ -22,6 +22,8 @@ export default defineConfig({
 			},
 			workbox: {
 				navigateFallback: "/index.html",
+				// The API is served by the Vercel function, never by the app shell.
+				navigateFallbackDenylist: [/^\/api\//],
 				globPatterns: ["**/*.{js,css,html,svg,woff2}"],
 			},
 		}),

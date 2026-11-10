@@ -8,31 +8,33 @@ Handshake's database (see `docs/shared-ledger-spec.md`).
 
 ## Stack
 
-| Area     | Technology                                                                         |
-| -------- | ---------------------------------------------------------------------------------- |
-| Runtime  | **Bun 1.3** for everything (`bun install`, `bun run …`, `bun --bun <tool>`)        |
-| Node.js  | **26 LTS**, only where a host needs it (Vercel's build, API fallback)              |
-| Client   | **Vite 7 + React 19 + React Router 7**, a static single-page app                   |
-| Offline  | **Dexie** (IndexedDB) on the device, `vite-plugin-pwa` service worker on the web   |
-| Server   | **Supabase**: Postgres + RLS, Auth with 6-digit email codes                        |
-| Mobile   | **Capacitor 8**, bundling `dist/` (not loading a hosted URL)                       |
-| UI       | **shadcn/ui** on Tailwind 3.4 and Radix, sonner, lucide; Funnel Display + Sans     |
-| Language | TypeScript 5.9, `strict`                                                           |
-| Format   | Prettier: tabs, width 120, CRLF, double quotes, trailing commas es5                |
+| Area     | Technology                                                                       |
+| -------- | -------------------------------------------------------------------------------- |
+| Runtime  | **Bun 1.3** for everything (`bun install`, `bun run …`, `bun --bun <tool>`)      |
+| Node.js  | **26 LTS**, only where a host needs it (Vercel's build, API fallback)            |
+| Client   | **Vite 7 + React 19 + React Router 7**, a static single-page app                 |
+| Offline  | **Dexie** (IndexedDB) on the device, `vite-plugin-pwa` service worker on the web |
+| Server   | **Supabase**: Postgres + RLS, Auth with 6-digit email codes                      |
+| Mobile   | **Capacitor 8**, bundling `dist/` (not loading a hosted URL)                     |
+| UI       | **shadcn/ui** on Tailwind 3.4 and Radix, sonner, lucide; Funnel Display + Sans   |
+| Language | TypeScript 5.9, `strict`                                                         |
+| Format   | Prettier: tabs, width 120, CRLF, double quotes, trailing commas es5              |
 
 ## Commands
 
-| Command             | Purpose                                                              |
-| ------------------- | -------------------------------------------------------------------- |
-| `bun run db:start`  | Start the local Supabase (Docker); migrations apply on start         |
-| `bun run db:reset`  | Rebuild the local database from `supabase/migrations/`               |
-| `bun run dev`       | Vite dev server on http://localhost:5173                             |
-| `bun run typecheck` | `tsc --noEmit` — must exit 0                                         |
-| `bun test`          | Unit tests in `tests/`                                               |
-| `bun run test:db`   | pgTAP tests in `supabase/tests/` against the local Supabase          |
-| `bun run build`     | Production build into `dist/` — must exit 0                          |
-| `bun run format`    | Prettier                                                             |
-| `bun run mobile:*`  | Capacitor: `mobile:sync`, `mobile:add:ios`, `mobile:open:android`, … |
+| Command               | Purpose                                                                                               |
+| --------------------- | ----------------------------------------------------------------------------------------------------- |
+| `bun run db:start`    | Start the local Supabase (Docker); migrations apply on start                                          |
+| `bun run db:reset`    | Rebuild the local database from `supabase/migrations/`                                                |
+| `bun run dev`         | Vite dev server on http://localhost:5173                                                              |
+| `bun run typecheck`   | `tsc --noEmit` — must exit 0                                                                          |
+| `bun test`            | Unit tests in `tests/`                                                                                |
+| `bun run test:db`     | pgTAP tests in `supabase/tests/` against the local Supabase                                           |
+| `bun run test:api-db` | The ApiStore contract suite against the local Supabase (`HANDSHAKE_API_DATABASE_URL` in `.env.local`) |
+| `bun run api:lint`    | Lint `docs/api-v1.openapi.yaml` with Redocly                                                          |
+| `bun run build`       | Production build into `dist/` — must exit 0                                                           |
+| `bun run format`      | Prettier                                                                                              |
+| `bun run mobile:*`    | Capacitor: `mobile:sync`, `mobile:add:ios`, `mobile:open:android`, …                                  |
 
 Local ports are shifted so this stack runs next to Pholio's: API 55321, DB 55322, Studio 55323,
 Mailpit (sign-in emails) 55324. Do not move them back to 543xx.
@@ -54,6 +56,8 @@ src/
     permissions.ts         the role matrix (mirrors private.may)
     groups.ts              read hooks, with members.ts, entries.ts and invites.ts
     auth.tsx, money.ts, ids.ts, supabase.ts
+  server/api-v1/           API v1 for Pholio: createApiV1({ store }) and the ApiStore adapters
+api/v1/[...path].ts        the Vercel function (composition root); runtime imports are relative
 supabase/
   migrations/              numbered SQL, applied in filename order
   tests/                   pgTAP
