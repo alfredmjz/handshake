@@ -1,17 +1,17 @@
 import { useLiveQuery } from "dexie-react-hooks";
 
-import { defaultDisplayName, type CurrentUser } from "@/lib/auth";
-import { newId } from "@/lib/ids";
 import { db } from "@/lib/local-db";
-import { mutate } from "@/lib/sync/mutate";
+import type { Mutation } from "@/lib/sync/types";
 
-export const DEFAULT_CURRENCY = "CAD";
+export const byLabel = (a: string, b: string) => a.localeCompare(b, undefined, { sensitivity: "base" });
 
-const byName = (a: { name: string }, b: { name: string }) =>
-	a.name.localeCompare(b.name, undefined, { sensitivity: "base" });
-
+// Groups this device has, not deleted, by name.
 export function useGroups() {
-	return useLiveQuery(async () => (await db.groups.filter((g) => !g.deletedAt).toArray()).sort(byName));
+	return useLiveQuery(async () =>
+		(await db.groups.filter((g) => !g.deletedAt).toArray()).sort(
+			(a, b) => byLabel(a.name, b.name) || byLabel(a.id, b.id)
+		)
+	);
 }
 
 // undefined while loading, null when this device doesn't have the group.
@@ -19,42 +19,36 @@ export function useGroup(groupId: string) {
 	return useLiveQuery(async () => (await db.groups.get(groupId)) ?? null, [groupId]);
 }
 
-export function useMembers(groupId: string) {
-	return useLiveQuery(
-		async () =>
-			(
-				await db.members
-					.where("groupId")
-					.equals(groupId)
-					.filter((m) => !m.deletedAt)
-					.toArray()
-			).sort((a, b) => a.displayName.localeCompare(b.displayName, undefined, { sensitivity: "base" })),
-		[groupId]
-	);
-}
-
 export function useWaitingChanges() {
 	return useLiveQuery(() => db.outbox.count(), [], 0);
 }
 
-export async function createGroup(user: CurrentUser, name: string, baseCurrency = DEFAULT_CURRENCY) {
-	const groupId = newId();
-	await mutate(
-		{
-			id: newId(),
-			at: new Date().toISOString(),
-			type: "group.create",
-			groupId,
-			memberId: newId(),
-			name,
-			baseCurrency,
-			displayName: defaultDisplayName(user.email),
-		},
-		user.id
-	);
-	return groupId;
+// The row a mutation writes: what shows "Not synced yet" while it waits in the outbox.
+function rowIds(m: Mutation): string[] {
+	switch (m.type) {
+		case "group.create":
+			return [m.groupId, m.memberId];
+		case "group.rename":
+		case "group.describe":
+		case "group.delete":
+		case "group.complete":
+		case "group.reopen":
+			return [m.groupId];
+		case "member.add":
+		case "member.rename":
+		case "member.remove":
+			return [m.memberId];
+		case "conflict.resolve":
+			return [m.conflictId, m.entryId];
+		case "invite.create":
+		case "invite.revoke":
+			return [m.inviteId];
+		default:
+			return [m.entryId];
+	}
 }
 
-export async function renameGroup(user: CurrentUser, groupId: string, name: string) {
-	await mutate({ id: newId(), at: new Date().toISOString(), type: "group.rename", groupId, name }, user.id);
+// Ids of groups, people, entries, conflicts and invites with a change not yet accepted by the server.
+export function useUnsyncedIds() {
+	return useLiveQuery(async () => new Set((await db.outbox.toArray()).flatMap((e) => rowIds(e.mutation))));
 }

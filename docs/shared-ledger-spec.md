@@ -1,9 +1,10 @@
 # Shared ledger: people, bills, payments, guests, conflicts, completing a group and the Pholio API
 
-- **Status:** Agreed for the MVP (third draft: every open decision answered, no admin role; system design
-  and build handoffs in `docs/architecture.md`, the API contract in `docs/api-v1.md`)
+- **Status:** Agreed for the MVP (fourth draft, 2026-11-04: handshake payments, debts between pairs, the
+  permission matrix and account deletion; system design and build handoffs in `docs/architecture.md`, the
+  API contract in `docs/api-v1.md`, the group chat in `docs/chat-spec.md`)
 - **Created:** 2026-11-03
-- **Updated:** 2026-11-03
+- **Updated:** 2026-11-04
 - **Author:** Claude Code, for Alfred Mah
 - **Estimated Time:** about 10½ days, in seven slices that each ship on their own (see Implementation Guide)
 
@@ -34,110 +35,138 @@ A group can be created, but nothing can be recorded in it. A friend group on a t
 1. Add everyone, including friends who never install the app.
 2. Record a bill as items: each item has who paid it and who shares it, and the app works out who owes
    whom.
-3. See who owes whom, and the fewest payments that settle everyone up.
-4. Record a payback ("Sam paid Alex $30"). No money moves; Handshake only keeps the record.
+3. See who owes whom, between each pair of people.
+4. Record a payback ("Sam paid Alex $30") that both of them confirm, a handshake. No money moves; Handshake only keeps the record.
 5. Invite friends with a link. Each one either creates an account or continues as a guest.
 6. Sort out the rare case where two people edit the same bill before syncing, together, like a merge
    conflict.
 7. Do all of it with no signal, except joining a group, which needs the server.
-8. Let the owner check off who has paid, then mark the group completed.
-9. Let Pholio read what the person paid and owes, without Handshake knowing anything about Pholio.
+8. Let the owner see who has settled, then mark the group completed.
+9. Let Pholio read the money the person sent and received, without Handshake knowing anything about Pholio.
 
 ## How the money works
 
 All amounts are dollars and cents, stored as whole cents. The app shows `$` and nothing else: no
 currency codes, pickers or exchange rates.
 
+**Everyone in a group sees everything:** every bill with every item and share, every debt, and every
+payment once it counts. The only things that belong to two people alone are the buttons that settle a
+debt between them, a payment still waiting for its handshake, and nudges (`docs/chat-spec.md`).
+
 ### Entries and shares
 
-Everything recorded in a group is an **entry**: an expense (a bill) or a payment. An entry has one
-**share** per member it involves, saying how much that member **paid** and how much they **owe** from it.
+Everything recorded in a group is an **entry**: a bill (`kind = expense`) or a payment. An entry has one
+**share** per member it involves, saying how much that member **paid** and how much they **owe** from it,
+and **whom** they owe it to: `owedTo` splits what they owe by the person who paid for it.
 
-- For every entry, Σ paid = total and Σ owed = total.
-- A member's **balance** is Σ paid − Σ owed over the group's entries that are not deleted. Positive:
-  others owe them. Negative: they owe. A group's balances always add up to 0.
+- For every entry, Σ paid = total and Σ owed = total, and each share's `owedTo` adds up to its owed.
+- A member's **balance** is Σ paid − Σ owed over the group's bills that are not deleted and its payments
+  that count. Positive: others owe them. Negative: they owe. A group's balances always add up to 0.
 
 Example with Alex, Sam and Jo:
 
-| Entry                                   | Alex                                | Sam                     | Jo                      |
-| --------------------------------------- | ----------------------------------- | ----------------------- | ----------------------- |
-| Dinner $90.00, Alex paid, split equally | paid 90.00, owes 30.00 → **+60.00** | owes 30.00 → **−30.00** | owes 30.00 → **−30.00** |
-| Payment: Sam paid Alex $30.00           | owes 30.00 → **+30.00**             | paid 30.00 → **0.00**   | **−30.00**              |
+| Entry                                   | Alex                                | Sam                          | Jo                           |
+| --------------------------------------- | ----------------------------------- | ---------------------------- | ---------------------------- |
+| Dinner $90.00, Alex paid, split equally | paid 90.00, owes 30.00 → **+60.00** | owes Alex 30.00 → **−30.00** | owes Alex 30.00 → **−30.00** |
+| Payment: Sam paid Alex $30.00 (counts)  | owes 30.00 → **+30.00**             | paid 30.00 → **0.00**        | **−30.00**                   |
 
-A payment is an entry where the person paying back "paid" and the person receiving "owes", which moves
-both balances towards zero.
+A payment is an entry where the person paying back "paid" and the person receiving "owes" them, which
+moves both towards zero.
 
 ### Bills are made of items
 
 A bill holds one or more **items**. Each item has an amount, **one payer**, and the people it is
-**split among**, equally. A simple expense is a bill with one item; the editor only shows items when
-someone taps **Add item**.
+**split among**, equally. A simple bill has one item; the editor only shows items when someone taps
+**Add item**.
 
 - Different items can have different payers: Item A paid by Person 1, Item B paid by Person 2.
 - An amount one person owes in full ("Jo's drink, $7") is an item split among just that person. So there
-  is no separate "exact amounts" mode: one item per person does the same job. Percentages and weighted
-  shares (a couple counting as 2) are left out of this version (decision 2).
+  is no separate "exact amounts" mode. Percentages and weighted shares are left out (decision 2).
 
-The stored shares (paid and owed per member) are the result. The items are kept so the editor reopens
-as it was left, and so the server can check the shares (decision 3).
+The stored shares are the result. The items are kept so the editor reopens as it was left, and so the
+server can check the shares (decision 3).
 
 ### Rounding
 
+Rounding is worked out **for each payer separately**, so every cent of a debt points at a person.
+
 1. **Paid** is exact: each member's paid amount is the sum of the items they paid.
-2. **Owed** is worked out across the whole bill, not item by item: each person's exact share is the sum
-   of item amount ÷ number of people splitting it, over the items they are in.
-3. Each person's exact share is **rounded once, normally, to the cent** (half a cent rounds up).
-4. If the rounded shares don't add up to the total, **the payer covers the difference**: their own share
-   takes the missing or extra cents. With several payers, it is the one who paid the most; a tie goes to
-   whoever paid the earliest item among them.
-5. If that would make the payer's share negative (they paid for others and aren't sharing), the extra
-   cents come off the other shares instead, one cent each, starting with the shares that were rounded up
-   the most; ties go to whoever is listed first on the bill.
+2. For each payer, each person's **exact share of that payer's items** is the sum of item amount ÷
+   number of people splitting it, over that payer's items the person is in.
+3. Each of those is **rounded once, normally, to the cent** (half a cent rounds up).
+4. If the rounded parts don't add up to what that payer paid, **that payer covers the difference**: their
+   own part takes the missing or extra cents.
+5. If that would make the payer's own part negative (they paid for others and aren't sharing), the extra
+   cents come off the other people's parts of that payer instead, one cent each, starting with the parts
+   rounded up the most; ties go to whoever is listed first on the bill.
+6. A person's **owed** is the sum of their parts; `owedTo` keeps them per payer.
 
-The device does this with whole numbers only: the exact shares are fractions with a common denominator,
-so nothing is ever a float.
+A bill with one payer gives exactly what the earlier single rule gave. The device works in whole numbers
+only: the exact shares are fractions with a common denominator, so nothing is ever a float.
 
-Examples (the last two are pinned in the Testing Checklist):
+| Bill                                                                                          | Result                                                                                                                                      |
+| --------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Scenario A:** $50.00, split evenly by 5                                                     | $10.00 each                                                                                                                                 |
+| $10.00 split by Alex, Jo and Sam; Sam paid                                                    | Alex $3.33, Jo $3.33. Sam's own part is $3.34: Sam covers the 1¢                                                                            |
+| $20.00 split by Alex, Jo and Sam; Sam paid                                                    | Alex $6.67, Jo $6.67. Sam's own part is $6.66: the extra 1¢ comes off Sam's part                                                            |
+| **Scenario B:** Item 1 $5 and Item 2 $10 split by all 3, Item 3 $8 by Person 3                | Person 1 $5, Person 2 $5, Person 3 $13 (total $23)                                                                                          |
+| **Scenario C:** Items 1 and 2 as in B, Item 3 $8 split by Persons 2 and 3                     | Person 1 $5, Persons 2 and 3 $5 + $4 = $9 each (total $23)                                                                                  |
+| **Several payers, with a cent:** $10 paid by P1 split by P1–P3; $20 paid by P2 split by P1–P5 | P1's item: P2 and P3 owe P1 $3.33 each, P1 covers 1¢ ($3.34). P2's item: $4.00 each. Owed: P1 $7.34, P2 $7.33, P3 $7.33, P4 $4.00, P5 $4.00 |
 
-| Bill                                                                           | Result                                                                         |
-| ------------------------------------------------------------------------------ | ------------------------------------------------------------------------------ |
-| **Scenario A:** $50.00, split evenly by 5                                      | $10.00 each                                                                    |
-| $10.00 split by Alex, Jo and Sam; Sam paid                                     | Alex $3.33, Jo $3.33. Sam's share is $3.34: Sam covers the 1¢                  |
-| $20.00 split by Alex, Jo and Sam; Sam paid                                     | Alex $6.67, Jo $6.67. Sam's share is $6.66: the extra 1¢ comes off Sam's share |
-| **Scenario B:** Item 1 $5 and Item 2 $10 split by all 3, Item 3 $8 by Person 3 | Person 1 $5, Person 2 $5, Person 3 $13 (total $23)                             |
-| **Scenario C:** Items 1 and 2 as in B, Item 3 $8 split by Persons 2 and 3      | Person 1 $5, Persons 2 and 3 $5 + $4 = $9 each (total $23)                     |
-
-Rounding once per person matters: two $10 items split three ways give each person exactly $6.67 (6.666…
-rounded once), where rounding per item would give $3.33 + $3.33 = $6.66.
+Rounding once per person per payer matters: two $10 items split three ways and paid by the same person
+give each person exactly $6.67 (6.666… rounded once), where rounding per item would give $6.66.
 
 In the editor and on the entry, the line reads "$3.33 each"; Sam's line in the detail says "$3.34, incl.
 1¢ rounding", so nobody is surprised by the odd cent.
 
-### Who pays whom (several payers)
+### Debts
 
-Each person's balance in a bill is paid − owed. Example: groceries $60 paid by Person 1 and gas $40 paid
+A **debt** is worked out between two people only:
+
+> what A owes B from bills − what B owes A from bills − payments A made to B that count + payments B made
+> to A that count
+
+If that is positive, A owes B; if negative, B owes A; if 0, they're square. Debts are never moved around
+the group: Jo pays back whoever Jo actually owes. Example, groceries $60 paid by Person 1 and gas $40 paid
 by Person 2, both split among Persons 1–5:
 
-| Person | Paid   | Owes   | Balance    |
-| ------ | ------ | ------ | ---------- |
-| 1      | $60.00 | $20.00 | **+40.00** |
-| 2      | $40.00 | $20.00 | **+20.00** |
-| 3      | $0.00  | $20.00 | **−20.00** |
-| 4      | $0.00  | $20.00 | **−20.00** |
-| 5      | $0.00  | $20.00 | **−20.00** |
+| Debt                          | From the bills           | Debt            |
+| ----------------------------- | ------------------------ | --------------- |
+| Person 2 → Person 1           | 12.00 − 8.00 (other way) | **$4.00**       |
+| Persons 3, 4 and 5 → Person 1 | 12.00 each               | **$12.00** each |
+| Persons 3, 4 and 5 → Person 2 | 8.00 each                | **$8.00** each  |
 
-Settling up: Person 3 pays Person 1 $20, Person 4 pays Person 1 $20, Person 5 pays Person 2 $20.
+A person's balance is what everyone owes them minus what they owe everyone: Person 1 +40.00, Person 2
++20.00, Persons 3–5 −20.00.
 
-### Settling up
+### Paying back: the handshake
 
-Suggested payments come from the balances with a greedy match: the person who owes the most pays the
-person owed the most, as much as fits, and repeat. That never takes more than n − 1 payments for n
-people. Ties go alphabetically by name. Tapping a suggestion opens Record payment, filled in.
+No money moves through Handshake. A payment records that someone paid someone back outside the app, and
+it counts only when **both** of them say so.
 
-Example: Alex +60, Sam −10, Jo −50 gives "Jo pays Alex $50" and "Sam pays Alex $10".
+- If X owes Y $10, X sees **Record $10.00 paid to Y** and Y sees **Record $10.00 received from X**.
+  Either can start; the amount defaults to the whole debt and can be any positive amount (partial
+  payments are fine).
+- The other side then sees **Confirm** or **Decline** (with an optional note: "I didn't get this"). The
+  person who started sees "Waiting for Y" and can **Undo** while it waits.
+- While it waits, the payment is a **pending payment**: only the two of them see it, and debts don't
+  change.
+- Once both have confirmed, it **counts**: debts and balances move, and everyone in the group sees it.
+- A declined or undone payment never counts. It stays in the two people's history, marked as such.
+- **No handshake when the other side can't answer.** If the other side has no login (someone added by
+  name, or an account that was deleted) or has left the group, the person with the app records it alone
+  and it counts at once. Between two such people, any full member (owner or member) records it, and it
+  shows "Recorded by Alex". Leaving a group undoes the leaver's pending payments there, as deleting an
+  account does.
+- A payment that counts can't be edited or deleted. A mistake is put right with a payment back the other
+  way, which needs its own handshake.
+- Pholio sees a payment when it counts (`docs/api-v1.md`).
 
-When the group is done, the owner opens the **settle-up tracker**, ticks off each person as they pay
-(each tick records their payments, decision 10), and then **completes the group** (decision 11).
+### Settling up and completing
+
+The owner's **Settle up** screen shows progress, not buttons for other people: "3 of 5 settled", and each
+person as **Settled**, **Owes $20.00**, **Is owed $40.00** or **Waiting for confirmation**. When the trip
+is done, the owner **completes the group** (decision 11).
 
 ## Design Decisions
 
@@ -175,11 +204,13 @@ When the group is done, the owner opens the **settle-up tracker**, ticks off eac
   through); a separate `ledger_items` table (more rows and sync code for data that is only read by the
   editor).
 
-### 4. Rounding: once per person, the payer covers the difference
+### 4. Rounding: once per person and payer, the payer covers the difference
 
 - **Chosen Solution:** the rule in "Rounding" above. Confirmed by the owner on 2026-11-03: in $10 split
-  three ways, the two who pay back each pay $3.33 and the payer absorbs the cent. The exact integer
-  algorithm is in `docs/architecture.md` §9.
+  three ways, the two who pay back each pay $3.33 and the payer absorbs the cent. On 2026-11-04 it became
+  per payer: with several payers, each payer absorbs the rounding on their own items (it was "the
+  biggest payer"), so every cent of a debt points at the person it is owed to (decision 18). The exact
+  integer algorithm is in `docs/architecture.md` §9.3.
 - **Why:** it is what people expect when they check a bill with a calculator: everyone else's share is
   their exact share, rounded normally. The person who paid is the one holding the receipt, so they take
   the odd cent.
@@ -234,40 +265,56 @@ by someone else is not replayed on top; the server turns it into a conflict when
 ### 8. Roles and permissions
 
 - **Chosen Solution:** three roles on `group_members.role`: `owner`, `member`, `guest`. **There is no
-  admin role** (owner, 2026-11-03). A **non-member** is a person the owner added by name who hasn't joined
-  yet (a member row with no `user_id`).
+  admin role** (owner, 2026-11-03). A **name-only person** is someone added by name who hasn't joined, or
+  whose login is gone (a member row with no `user_id`). What each role may do is **one matrix of
+  actions** (decision 20), the same in SQL and TypeScript:
 
-| Action                                                                    | Owner | Member | Guest           |
-| ------------------------------------------------------------------------- | ----- | ------ | --------------- |
-| View entries, balances and people                                         | ✓     | ✓      | ✓               |
-| Add entries and payments                                                  | ✓     | ✓      | ✓               |
-| Remove entries                                                            | ✓     | ✓      | Ones they added |
-| Edit entries                                                              | ✓     | ✓      |                 |
-| Resolve conflicts                                                         | ✓     | ✓      |                 |
-| Rename themselves                                                         | ✓     | ✓      | ✓               |
-| Rename the group, add non-members, rename anyone, make and revoke invites | ✓     |        |                 |
-| Remove non-members, guests and members                                    | ✓     |        |                 |
-| Use the settle-up tracker; complete or reopen the group                   | ✓     |        |                 |
-| Delete the group                                                          | ✓     |        |                 |
-| Leave the group                                                           | ✓     | ✓      | ✓               |
+| Action                                                    | Owner | Member | Guest | Allowed in a completed group |
+| --------------------------------------------------------- | ----- | ------ | ----- | ---------------------------- |
+| `group.rename`                                            | ✓     |        |       |                              |
+| `group.delete`                                            | ✓     |        |       | ✓                            |
+| `group.complete`                                          | ✓     |        |       |                              |
+| `group.reopen`                                            | ✓     |        |       | ✓ (only then)                |
+| `member.add` (by name)                                    | ✓     | ✓      |       |                              |
+| `member.rename.self`                                      | ✓     | ✓      | ✓     |                              |
+| `member.rename.others`                                    | ✓     |        |       |                              |
+| `member.remove.self` (leave)                              | ✓     | ✓      | ✓     | ✓                            |
+| `member.remove.others`                                    | ✓     |        |       |                              |
+| `entry.create` (bills)                                    | ✓     | ✓      | ✓     |                              |
+| `entry.update`                                            | ✓     | ✓      |       |                              |
+| `entry.delete.own`                                        | ✓     | ✓      | ✓     |                              |
+| `entry.delete.others`                                     | ✓     | ✓      |       |                              |
+| `conflict.resolve`                                        | ✓     | ✓      |       |                              |
+| `invite.create`                                           | ✓     | ✓      |       |                              |
+| `invite.revoke.own`                                       | ✓     | ✓      |       |                              |
+| `invite.revoke.others`                                    | ✓     |        |       |                              |
+| `payment.record.own` (you are one side)                   | ✓     | ✓      | ✓     |                              |
+| `payment.record.others` (two name-only people)            | ✓     | ✓      |       |                              |
+| `payment.respond` (confirm or decline, as the other side) | ✓     | ✓      | ✓     | ✓                            |
+| `payment.undo` (you started it, still pending)            | ✓     | ✓      | ✓     |                              |
+
+Chat actions (`message.*`, `nudge.send`) are in `docs/chat-spec.md`. Everyone can view everything in
+the group. Two account rules sit outside the matrix: guests can't create groups or API tokens.
 
 - When the owner leaves, ownership passes to the full member who joined first (`joined_at`, then id).
   When the last full member leaves, the group is deleted, even if guests remain.
-- Removing someone keeps their history: their shares stay, their balance shows with "(left)" until it
-  is settled, and pickers stop offering them. Nothing deletes entries except deleting them.
+- Removing someone keeps their history: their shares stay, their debts show with "(left)" until settled,
+  and pickers stop offering them. Nothing deletes entries except deleting them.
 - Deleting a group is a soft delete; it disappears for everyone on their next sync.
-- **Why:** the owner decided that adding people and completing the group are their job alone. Entries
-  stay open to everyone, because friend groups trust each other and the app works best when whoever has
-  the receipt adds it.
+- **Why:** the owner decided that completing the group and removing people are their job alone. Adding
+  people by name and inviting are open to members too (owner, 2026-11-04), because whoever adds "Jo" to a
+  bill usually wants to send Jo the link. Bills stay open to everyone, because friend groups trust each
+  other and the app works best when whoever has the receipt adds it.
 - **Later:** a "Make owner" handover, so an owner who is away can pass the job on (a new mutation, no
   schema change).
 
-### 9. Non-members, invite links and guests
+### 9. Name-only people, invite links and guests
 
 - **Chosen Solution:**
-  - The owner adds non-members by name, so bills can include them at once.
+  - The owner or any member adds name-only people, so bills can include them at once.
   - An invite link is valid for **14 days**, can be used many times, and can be revoked. It can be tied
-    to a non-member ("Invite Jo"), so whoever opens it becomes Jo.
+    to a name-only person ("Invite Jo"), so whoever opens it becomes Jo. The owner and members make
+    invites; members revoke the ones they made, and the owner revokes any.
   - Opening the link shows the group and two choices: **Create an account** (6-digit email code; joins
     as a member) or **Continue as guest** (joins as a guest, no email).
   - Guests use **Supabase anonymous sign-in** (`signInAnonymously()`). An anonymous user is a real
@@ -293,41 +340,36 @@ by someone else is not replayed on top; the server turns it into a conflict when
 - **Alternatives considered:** guests without any sign-in (a link that acts as a password; would need a
   second permission path through every function); one link per person (more tapping).
 
-### 10. Settle-up tracker: ticking someone off records their payments
+### 10. Settle up is a progress view
 
 - **Chosen Solution:**
-  - Before completing, the owner opens **Settle up**. It lists each person with what they
-    owe or are owed right now, and the suggested payments under each one ("owes $20.00 to Person 1").
-  - **Ticking someone who owes records their suggested payments as payment entries**, one per payment,
-    dated today, with `recorded_via = 'settle_up'`. Their balance drops to $0, so they show as **Paid**.
-    Ticking someone who is owed records every suggested payment to them, and they show as **Received**.
-  - **Unticking** deletes the settle-up payments that involve that person.
-  - The ticks are not stored separately: a row is ticked when the person's balance is $0. So a payment
-    recorded the normal way ticks the row too, and a new expense added later unticks it.
-  - If someone paid differently from the suggestion (Jo paid Sam, not Alex), the owner records that
-    payment with Record payment instead, and the tracker follows.
-  - The tracker shows "3 of 5 settled" at the top.
-- **Why:** one source of truth. Balances, the Entries list and the Pholio API all agree with the
-  tracker, because a tick is a real payment. A separate checklist could say "paid" while balances still
-  said "owes $20".
-- **Trade-off:** a tick records the full amount. Partial payments go through Record payment.
-- **Alternatives considered:** ticks as checklist marks only (a second, disagreeing record of who has
-  paid); ticks that ask for each payment's details (slower, and Record payment already does that).
+  - Before completing, the owner opens **Settle up**: "3 of 5 settled" at the top, then one row per
+    person with their state: **Settled**, **Owes $20.00**, **Is owed $40.00**, or **Waiting for
+    confirmation** when one of their payments is pending. Tapping a row shows that person's debts.
+  - Nothing on this screen records payments. Each payment is settled by the two people involved, with a
+    handshake (decision 17); the owner can only record payments between two name-only people.
+  - Everything it shows is worked out on the device from synced rows, like every other screen.
+  - At the bottom: **Complete group** (decision 11).
+- **Why:** with handshakes, the owner can't pay on someone's behalf, so the tracker's job is to show who
+  is done. It changed on 2026-11-04 from "ticking someone off records their payments".
+- **Alternatives considered:** the owner ticking people off (bypasses the handshake); no tracker at all
+  (the owner would have to read every person's debts to know when to complete).
 
 ### 11. Completing a group deletes guests' logins
 
 - **Chosen Solution:**
   - **"Completed" applies to the whole group**, not to a single bill. A friend group or trip ends as a
     whole, and a guest belongs to a group, so deleting a guest per bill doesn't make sense.
-  - The owner taps **Complete group** at the bottom of the settle-up tracker. If anyone
-    still owes money, the confirmation says so ("Jo still owes $20.00. Complete anyway?"). It also names
-    the guests who will lose access: "Kim and Lee are guests. They will lose access to this group. Their
-    names and history stay."
+  - The owner taps **Complete group** at the bottom of Settle up. If anyone still owes money, the
+    confirmation says so ("Jo still owes Sam $20.00. Complete anyway?"). It also names the guests who will
+    lose access: "Kim and Lee are guests. They will lose access to this group. Their names and history
+    stay."
   - `group.complete` sets `completed_at` and `completed_by_member_id`. A completed group is read-only:
-    nobody can add, edit or delete entries or make invites (`HS403`). It moves to a **Completed**
-    section on the Groups list.
+    only the actions marked in decision 8's matrix still work (reopen, delete, leave, and answering a
+    pending payment's handshake); everything else gives `HS403`, the chat included. It moves to a
+    **Completed** section on the Groups list.
   - In the same transaction, every guest in the group who hasn't added an email has their data deleted:
-    - Their member row becomes a name-only non-member again (`user_id` NULL, role `member`), so every
+    - Their member row becomes a name-only person again (`user_id` NULL, role `member`), so every
       entry and balance still adds up and shows their name.
     - If they are no longer in any group, their anonymous `auth.users` row is deleted, which also
       removes their profile and `sync_mutations` rows. A guest still in another group keeps their login
@@ -336,7 +378,7 @@ by someone else is not replayed on top; the server turns it into a conflict when
       survives.
   - Guests who added an email before completion are members by then, so nothing happens to them.
   - **Reopen group** (owner) makes it editable again. Deleted guest logins don't come back; the
-    owner can invite those names again, and whoever joins takes over the non-member and its history.
+    owner can invite those names again, and whoever joins takes over the name-only person and their history.
   - Completing works offline like any mutation; the guests lose access when it reaches the server.
 - **Why:** the owner's rule: the split is completed when the owner marks it so, after checking who has
   paid. Doing it in the same transaction means there is no window where a completed group still has
@@ -403,12 +445,90 @@ by someone else is not replayed on top; the server turns it into a conflict when
   already resolved, `HS422` invalid. The device shows a toast per code, with `reason` as the detail.
   The scaffold's existing `group.rename` membership check moves to `HS403`. The `api.v1_*` functions add
   `HS401` (unknown or revoked token) and `HS429` (rate limited), which the API maps to HTTP 401 and 429.
+  `HS409` also covers answering a payment that is no longer pending (someone confirmed, declined or
+  undid it first).
+
+### 17. Payments count only after a handshake
+
+- **Chosen Solution** (owner, 2026-11-04; the app is named for it):
+  - A payment is recorded by one side and confirmed by the other. Its state is `pending` until then,
+    `confirmed` once both agree, or `declined` / `undone` if it never happened.
+  - Either side can start (`payment.record`): the payer ("I paid Y") or the receiver ("X paid me"), for
+    any positive amount, defaulting to the whole debt. Starting counts as that side's confirmation.
+  - The other side answers with `payment.confirm` or `payment.decline` (with an optional note up to 200
+    characters). The starter can `payment.undo` while it is pending. Whichever answer reaches the server
+    first wins; a later one gets `HS409`.
+  - Only `confirmed` payments count in debts, balances and the API. A pending payment is shown only to its
+    two people; the row syncs to the whole group, and screens show it to the two (decision 18 makes
+    every confirmed payment visible to all).
+  - **No handshake when the other side can't answer.** When the other side has no active member row with a
+    login (name-only, account deleted, or left the group), the payment is `confirmed` the moment it is
+    recorded. Between two such people any full member records it. Leaving undoes the leaver's pending
+    payments in that group (2026-11-05, so none is left waiting for someone who can't answer).
+  - A confirmed payment can't be edited or deleted; a mistake is corrected with a payment the other way.
+- **Why:** "dual side validation": a payback is real when both people agree it happened, and that is
+  the record Pholio takes.
+- **Alternatives considered:** recording alone (the earlier draft; one person's word moves the other's
+  balance); only the receiver confirming (the payer has no say over what was recorded in their name).
+
+### 18. Debts are between pairs, and everyone sees them
+
+- **Chosen Solution** (owner, 2026-11-04):
+  - A debt is worked out between two people from their bills and their confirmed payments ("Debts"
+    above). It is never simplified across the group: nobody is told to pay someone they don't owe.
+  - Everyone in the group sees every bill, every debt and every confirmed payment. What's personal is
+    only the buttons: X sees **Record $10.00 paid to Y**, Y sees **Record $10.00 received from X**, and
+    each sees the other's pending payment to answer.
+  - Shares store `owedTo` (what each person owes each payer), so debts are sums over stored rows on every
+    device and in the API, never a re-run of the rounding.
+- **Why:** with handshakes, each payment is between two real people. Group-simplified suggestions
+  ("Jo pays Alex", when Jo's debt is to Sam) would make people hand-shake about debts they don't
+  recognise.
+- **Trade-off:** more payments than the fewest possible. A group of five with two payers settles in up to
+  seven payments instead of four.
+- **Alternatives considered:** the greedy "fewest payments" suggestions of the earlier draft.
+
+### 19. Deleting an account
+
+- **Chosen Solution** (owner, 2026-11-04):
+  - **Settings → Delete account**, then one confirmation dialog. If they still owe or are owed money,
+    the dialog names it ("You still owe Sam $10.00 in Banff trip"), and deleting is still allowed.
+  - `delete_account()` (online only) does it all in one transaction:
+    - every member row of theirs becomes a name-only person with the same name, so every bill, payment
+      and message still shows who it was;
+    - groups they own pass to the full member who joined first; a group with no full member left is
+      deleted;
+    - their pending payments are `undone`;
+    - their API tokens are deleted, so Pholio's connection stops;
+    - their `auth.users` row is deleted, which removes their profile and `sync_mutations` rows.
+  - The device then clears its local data and signs out. Guests can delete too (the same dialog).
+  - Their debts stay with their name. Because they have no login any more, anyone they owed (or who owed
+    them) can record payments with them alone (decision 17).
+- **Why:** store rules require deleting an account inside the app, and the group's shared record must
+  still add up.
+- **Alternatives considered:** "Deleted user" instead of their name (the history becomes unreadable);
+  requiring a fresh email code (owner chose the dialog alone).
+
+### 20. One permission matrix, held in step by a shared case table
+
+- **Chosen Solution:**
+  - Decision 8's table is the only definition of who may do what, as actions × roles plus "allowed in a
+    completed group". SQL asks `private.may(action, role)` and `private.allowed_when_completed(action)`
+    through one `private.require(user, group, action)`; TypeScript asks `may()` in
+    `src/lib/permissions.ts`, which both `planChange` and screens (to show or hide buttons) use.
+  - `tests/fixtures/permission-cases.ts` transcribes the table by hand. TypeScript tests run it against
+    `may()`; a generator turns it into pgTAP against `private.may()`, as with the ledger cases.
+  - Only allowed / not allowed and the codes are pinned; each side words its own refusal reasons.
+- **Why:** the rule was written 15 times in SQL and would have been written again on the device, with
+  nothing to catch them drifting apart.
 
 ## Data Model
 
 ### Server
 
-`groups` gains `completed_at TIMESTAMPTZ NULL` and `completed_by_member_id UUID NULL → group_members`.
+`groups` gains `completed_at TIMESTAMPTZ NULL` and `completed_by_member_id UUID NULL → group_members`, and
+(010) `note TEXT NULL`: the optional second line on the group's cover ("Tokyo and Kyoto, April"), written by
+the owner, trimmed, 1–120 characters; blank is stored as NULL.
 
 `group_members` changes:
 
@@ -417,23 +537,29 @@ by someone else is not replayed on top; the server turns it into a conflict when
 
 `ledger_entries`
 
-| Column                 | Type                 | Notes                                                 |
-| ---------------------- | -------------------- | ----------------------------------------------------- |
-| `id`                   | UUID PK              | Made on the device                                    |
-| `group_id`             | UUID → groups        |                                                       |
-| `kind`                 | TEXT                 | `expense` or `payment`                                |
-| `description`          | TEXT                 | 1–120 characters; payments default to "Payment"       |
-| `amount_cents`         | BIGINT               | > 0 and ≤ 10¹²; the bill total                        |
-| `items`                | JSONB NULL           | Expenses only; see below                              |
-| `entry_date`           | DATE                 | The day it happened, chosen by the person             |
-| `notes`                | TEXT NULL            | ≤ 1000 characters                                     |
-| `recorded_via`         | TEXT NULL            | `settle_up` for payments ticked in the tracker        |
-| `created_by_member_id` | UUID → group_members | Member ids, so history survives a guest being deleted |
-| `updated_by_member_id` | UUID → group_members | Used by the conflict rule (decision 6)                |
-| `created_at`           | TIMESTAMPTZ          | Server time                                           |
-| `updated_at`           | TIMESTAMPTZ          | Server time                                           |
-| `deleted_at`           | TIMESTAMPTZ NULL     |                                                       |
-| `row_version`          | BIGINT               | From `private.next_group_version()`                   |
+| Column                  | Type                 | Notes                                                                                                               |
+| ----------------------- | -------------------- | ------------------------------------------------------------------------------------------------------------------- |
+| `id`                    | UUID PK              | Made on the device                                                                                                  |
+| `group_id`              | UUID → groups        |                                                                                                                     |
+| `kind`                  | TEXT                 | `expense` or `payment`                                                                                              |
+| `description`           | TEXT                 | 1–120 characters; payments default to "Payment"                                                                     |
+| `amount_cents`          | BIGINT               | > 0 and ≤ 10¹²; the bill total                                                                                      |
+| `items`                 | JSONB NULL           | Expenses only; see below                                                                                            |
+| `entry_date`            | DATE                 | The day it happened, chosen by the person                                                                           |
+| `notes`                 | TEXT NULL            | ≤ 1000 characters                                                                                                   |
+| `category`              | TEXT NULL            | Bills only (010): `food`, `drinks`, `stay`, `travel`, `groceries`, `fun`, or NULL for none; always NULL on payments |
+| `payment_status`        | TEXT NULL            | Payments only: `pending`, `confirmed`, `declined`, `undone`                                                         |
+| `payer_confirmed_at`    | TIMESTAMPTZ NULL     | Payments: when the payer's side agreed                                                                              |
+| `receiver_confirmed_at` | TIMESTAMPTZ NULL     | Payments: when the receiver's side agreed                                                                           |
+| `confirmed_at`          | TIMESTAMPTZ NULL     | Payments: when it started to count                                                                                  |
+| `closed_at`             | TIMESTAMPTZ NULL     | Payments: when it was declined or undone                                                                            |
+| `close_note`            | TEXT NULL            | The decline note, ≤ 200 characters                                                                                  |
+| `created_by_member_id`  | UUID → group_members | Member ids, so history survives a guest being deleted                                                               |
+| `updated_by_member_id`  | UUID → group_members | Used by the conflict rule (decision 6)                                                                              |
+| `created_at`            | TIMESTAMPTZ          | Server time                                                                                                         |
+| `updated_at`            | TIMESTAMPTZ          | Server time                                                                                                         |
+| `deleted_at`            | TIMESTAMPTZ NULL     |                                                                                                                     |
+| `row_version`           | BIGINT               | From `private.next_group_version()`                                                                                 |
 
 Each item in `items`: `{ id, description, amountCents, paidBy, splitAmong }`, where `paidBy` is a member
 id and `splitAmong` a list of member ids in the order shown. `description` is optional (up to 60
@@ -447,6 +573,18 @@ characters). At most 50 items per bill.
 | `group_id`                 | UUID → groups                           | Copied for RLS and pulls |
 | `member_id`                | UUID → group_members                    |                          |
 | `paid_cents`, `owed_cents` | BIGINT ≥ 0                              |                          |
+
+`ledger_share_parts` (primary key `entry_id, member_id, payer_member_id`): what each person owes each
+payer from the entry, the `owedTo` of decision 18. For each share, Σ parts = `owed_cents`; a payer's own
+part is included. A payment has one part: the receiver "owes" the payer the amount.
+
+| Column            | Type                                    | Notes                    |
+| ----------------- | --------------------------------------- | ------------------------ |
+| `entry_id`        | UUID → ledger_entries ON DELETE CASCADE |                          |
+| `group_id`        | UUID → groups                           | Copied for RLS and pulls |
+| `member_id`       | UUID → group_members                    | Who owes                 |
+| `payer_member_id` | UUID → group_members                    | Whom they owe            |
+| `owed_cents`      | BIGINT ≥ 0                              |                          |
 
 `entry_conflicts`
 
@@ -478,7 +616,7 @@ versions without marking changes.
 | `id`              | UUID PK                   | Made on the device                 |
 | `group_id`        | UUID → groups             |                                    |
 | `token_hash`      | TEXT UNIQUE               | SHA-256 hex; never sent to devices |
-| `claim_member_id` | UUID NULL → group_members | The non-member this link is for    |
+| `claim_member_id` | UUID NULL → group_members | The name-only person it is for     |
 | `created_by`      | UUID → users              |                                    |
 | `created_at`      | TIMESTAMPTZ               |                                    |
 | `expires_at`      | TIMESTAMPTZ               | 14 days                            |
@@ -507,79 +645,106 @@ shares, `(entry_id) WHERE resolved_at IS NULL` on conflicts.
 
 ### Device (Dexie version 2)
 
-- `entries`: `id, groupId, [groupId+entryDate]`; each record holds its `items` and `shares`.
+- `entries`: `id, groupId, [groupId+entryDate]`; each record holds its `items`, its `shares` (each with
+  `owedTo`, payer id → cents) and, for payments, its handshake fields.
 - `conflicts`: `id, entryId, groupId`.
 - `invites`: `id, groupId`.
 - `inviteTokens`: `inviteId`; local only, never synced.
 - `keepOnlyGroups` also drops the entries, conflicts, invites and tokens of groups that are gone.
+- Version 3 (010) adds no index: it fills `note` (groups) and `category` (entries) with null and clears
+  the cursors, so the next pull brings both.
 
 ## Sync Changes
 
 ### New mutations
 
-| Type               | Fields                                                                                             | Who                                                 |
-| ------------------ | -------------------------------------------------------------------------------------------------- | --------------------------------------------------- |
-| `member.add`       | `memberId, groupId, displayName`                                                                   | Owner                                               |
-| `member.rename`    | `memberId, groupId, displayName`                                                                   | Yourself; the owner renames anyone                  |
-| `member.remove`    | `memberId, groupId`                                                                                | Owner (see decision 8); yourself to leave           |
-| `group.rename`     | `groupId, name` (exists today)                                                                     | Owner                                               |
-| `group.delete`     | `groupId`                                                                                          | Owner                                               |
-| `group.complete`   | `groupId`                                                                                          | Owner                                               |
-| `group.reopen`     | `groupId`                                                                                          | Owner                                               |
-| `entry.create`     | `entryId, groupId, kind, description, amountCents, entryDate, notes, items, shares[], recordedVia` | Everyone, guests included; `recordedVia` owner only |
-| `entry.update`     | Same as `entry.create`, plus `baseVersion`                                                         | Owner, member                                       |
-| `entry.delete`     | `entryId, groupId, baseVersion`                                                                    | Owner, member; guests their own                     |
-| `conflict.resolve` | `conflictId, entryId, groupId, resolution, entry` (the final version, or `deleted: true`)          | Owner, member                                       |
-| `invite.create`    | `inviteId, groupId, token, claimMemberId, expiresAt`                                               | Owner                                               |
-| `invite.revoke`    | `inviteId, groupId`                                                                                | Owner                                               |
+"Who" is the action in decision 8's matrix that the server checks.
 
-Each share is `{ memberId, paidCents, owedCents }`. `group.create` stops sending `baseCurrency`; the
-server keeps the column default. There is no `member.setRole` (no admin role).
+| Type               | Fields                                                                                                        | Action checked                                    |
+| ------------------ | ------------------------------------------------------------------------------------------------------------- | ------------------------------------------------- |
+| `member.add`       | `memberId, groupId, displayName`                                                                              | `member.add`                                      |
+| `member.rename`    | `memberId, groupId, displayName`                                                                              | `member.rename.self` or `.others`                 |
+| `member.remove`    | `memberId, groupId`                                                                                           | `member.remove.self` (leave) or `.others`         |
+| `group.create`     | `groupId, memberId, name, displayName`; `note` optional (010)                                                 | not anonymous (an account rule)                   |
+| `group.rename`     | `groupId, name` (exists today)                                                                                | `group.rename`                                    |
+| `group.describe`   | `groupId, note` (010; null or blank clears it)                                                                | `group.rename`                                    |
+| `group.delete`     | `groupId`                                                                                                     | `group.delete`                                    |
+| `group.complete`   | `groupId`                                                                                                     | `group.complete`                                  |
+| `group.reopen`     | `groupId`                                                                                                     | `group.reopen`                                    |
+| `entry.create`     | `entryId, groupId, description, amountCents, entryDate, notes, items, shares[]`; `category` optional (bills)  | `entry.create`                                    |
+| `entry.update`     | Same as `entry.create`, plus `baseVersion` (bills only)                                                       | `entry.update`                                    |
+| `entry.delete`     | `entryId, groupId, baseVersion` (bills only)                                                                  | `entry.delete.own` or `.others`                   |
+| `conflict.resolve` | `conflictId, entryId, groupId, resolution, entry` (the final version with its `category`, or `deleted: true`) | `conflict.resolve`                                |
+| `invite.create`    | `inviteId, groupId, token, claimMemberId, expiresAt`                                                          | `invite.create`                                   |
+| `invite.revoke`    | `inviteId, groupId`                                                                                           | `invite.revoke.own` or `.others`                  |
+| `payment.record`   | `entryId, groupId, fromMemberId, toMemberId, amountCents, entryDate, notes`                                   | `payment.record.own` or `.others` (decision 17)   |
+| `payment.confirm`  | `entryId, groupId`                                                                                            | `payment.respond`, as the side that hasn't agreed |
+| `payment.decline`  | `entryId, groupId, note`                                                                                      | `payment.respond`, as the side that hasn't agreed |
+| `payment.undo`     | `entryId, groupId`                                                                                            | `payment.undo`, as the side that started it       |
+
+Each share is `{ memberId, paidCents, owedCents, owedTo }`, where `owedTo` maps payer member ids to
+cents. A payment's shares are worked out from `fromMemberId`, `toMemberId` and the amount, so the
+mutation doesn't carry them. Payments have no `recordedVia` (the settle-up tracker no longer records
+payments) and are never in conflict: they are only recorded, answered or undone. `group.create` stops
+sending `baseCurrency`; the server keeps the column default. There is no `member.setRole`.
+
+A bill's `category` (010) is missing or null for none, else one of the six names; anything else is `HS422`,
+and so is a `payment.record` that carries one. It is part of the bill like `notes`: version snapshots and
+conflicts keep it, so the resolver can compare it (a snapshot from before 010 reads as none). A group's
+cover shows its most common category among live bills; a tie goes to the most recent of the tied bills,
+and a group with no categorised bills shows a neutral "new" hand (worked out on the device,
+`groupCategory()` in `src/lib/categories.ts`).
 
 `private.apply_mutation()` dispatches to one private function per type instead of growing one `CASE`.
 
 ### Entry checks on the server
 
-Rejected with `HS403`: the caller is not an active member, the group is deleted or completed, or the
-caller's role can't do this (decision 8).
+Rejected with `HS403`: the caller is not an active member, the group is deleted, or the matrix in
+decision 8 doesn't allow the action for the caller's role (in a completed group, unless the action is
+allowed there).
 
 Rejected with `HS422`:
 
 - A share's member, an item's payer or someone in `splitAmong` is not in this group, or a member appears
   twice.
 - An amount is zero, negative or not a whole number.
-- An expense with no items, an item with nobody to split among, or items that don't add up to the total.
-- Shares that differ from `private.compute_shares(items)`.
-- A payment that is not exactly two different members: one paid the amount and owes 0, the other owes
-  the amount and paid 0, with no items.
-- An update that changes `group_id` or `kind`.
+- A bill with no items, an item with nobody to split among, or items that don't add up to the total.
+- Shares (including `owedTo`) that differ from `private.compute_shares(items)`.
+- A payment whose two sides are the same member, or not both in this group.
+- `payment.record.own` where the caller is neither side; `payment.record.others` where either side has a
+  login.
+- `entry.update` or `entry.delete` on a payment; an update that changes `group_id` or `kind`.
 
 A stale edit by someone else becomes a conflict (decision 6), not a rejection. Rejected with `HS409`:
-resolving a conflict that is already resolved. The device runs the same checks before saving, so these
-rejections only happen when devices disagree.
+resolving a conflict that is already resolved, and confirming, declining or undoing a payment that is no
+longer pending. Confirming or declining your own side, or undoing a payment you didn't start, is `HS403`.
+The device runs the same checks before saving, so these rejections only happen when devices disagree.
 
 Updating or deleting an entry the server never received (its create was rejected) is accepted and does
-nothing, so one bad entry doesn't produce two error toasts.
+nothing, so one bad entry doesn't produce two error toasts. The same goes for answering or undoing a
+payment the server never received.
 
 ### Pull additions
 
-Each group in `changes` gains `entries` (each with its `items` and `shares`), `conflicts` and `invites`
-(without `token_hash`). Groups gain `completed_at` and `completed_by_member_id`; members gain
-`joined_at`. Deleted entries come through with `deleted_at` set. A guest removed by completion is no
-longer a member, so their next pull drops the group from their device.
+Each group in `changes` gains `entries` (each with its `items`, its `shares` with `owed_to`, and a
+payment's handshake fields), `conflicts` and `invites` (without `token_hash`). Groups gain `completed_at`
+and `completed_by_member_id` and (010) `note`; entries gain `category`; members gain `joined_at`. Deleted entries come through with `deleted_at`
+set. Pending payments sync to the whole group like any row; screens show them only to their two people.
+A guest removed by completion is no longer a member, so their next pull drops the group from their
+device.
 
 ### Online-only functions
 
 All are `SECURITY DEFINER` and for signed-in users only (anonymous users included unless noted). Exact
 return shapes are in `docs/architecture.md` §11.2.
 
-- `preview_invite(p_token TEXT)` returns the group name, who made the link, the unclaimed non-members
+- `preview_invite(p_token TEXT)` returns the group name, who made the link, the unclaimed name-only people
   (id and name), and whether the caller is already in the group. Expired, revoked or unknown tokens raise
   `HS404`. **Also callable signed out** (`anon`), so the join screen can show the group first; the token
   is 256 random bits, so it can't be guessed.
 - `join_group(p_token TEXT, p_claim_member_id UUID DEFAULT NULL, p_display_name TEXT DEFAULT NULL)`
   returns the group id. It does nothing if the caller is already in the group. The role is `guest` when
-  the caller is anonymous, else `member`. If the link is tied to a non-member, or one is chosen, the
+  the caller is anonymous, else `member`. If the link is tied to a name-only person, or one is chosen, the
   caller takes it over (it must be unclaimed and not removed); otherwise a member is added under
   `p_display_name`, or the caller's profile name when that is empty (guests have no useful profile name).
   Someone who left and comes back gets their old member row back, with its history. It stamps the group's
@@ -588,40 +753,44 @@ return shapes are in `docs/architecture.md` §11.2.
   `member`, copies their new email into their profile, and stamps each group's next version.
 - `create_api_token(p_name TEXT)` returns `{ id, token, name, createdAt }`, the token only this once.
   `list_api_tokens()` and `revoke_api_token(p_id UUID)`. Not for anonymous users.
+- `delete_account()` (guests included) does everything in decision 19 in one transaction, stamping each
+  affected group's next version so the others pull the change, and returns nothing. The device then
+  clears local data and signs out.
 
 ## Handshake API v1 (for Pholio)
 
 Read-only, versioned HTTP. Base URL: `https://<handshake domain>/api/v1`. JSON, camelCase, amounts in
 whole cents (`…Cents`), dates `YYYY-MM-DD`, timestamps ISO 8601 UTC. Every response is about the person
-who owns the token: what they paid, what they owe, and their balance.
+who owns the token.
+
+**Pholio takes only money that moved** (owner, 2026-11-04): payments that count, money the person sent
+and money they received. Bills are the friends' shared record and stay in Handshake.
 
 ### Endpoints
 
-| Method and path                 | Returns                                                                                              |
-| ------------------------------- | ---------------------------------------------------------------------------------------------------- |
-| `GET /me`                       | `{ userId, displayName }`                                                                            |
-| `GET /groups`                   | `{ groups }`: `id, name, role, memberId, paidCents, owedCents, balanceCents, completedAt, updatedAt` |
-| `GET /groups/{groupId}`         | One group as above, plus `settleUp`: the suggested payments that involve the person                  |
-| `GET /groups/{groupId}/entries` | That group's entries, as a change feed (below)                                                       |
-| `GET /entries`                  | Entries across all their groups, as a change feed; the call Pholio uses to stay in sync              |
+| Method and path                  | Returns                                                                        |
+| -------------------------------- | ------------------------------------------------------------------------------ |
+| `GET /me`                        | `{ userId, displayName }`                                                      |
+| `GET /groups`                    | `{ groups }`: `id, name, role, memberId, balanceCents, completedAt, updatedAt` |
+| `GET /groups/{groupId}`          | One group as above, plus `debts`: the person's own debts, each way             |
+| `GET /groups/{groupId}/payments` | That group's payments that involve the person and count, as a change feed      |
+| `GET /payments`                  | The same across all their groups; the call Pholio uses to stay in sync         |
 
-An entry: `{ id, groupId, kind, description, entryDate, totalCents, involved, paidCents, owedCents,
-netCents, hasConflict, createdAt, updatedAt, deletedAt }`, where the three amounts are the person's own
-share (0 and `involved: false` when they aren't in it) and `netCents` = paid − owed. Items and other
-people's shares are not included in v1.
+A payment: `{ id, groupId, groupName, direction, counterpartyMemberId, counterpartyName, amountCents,
+entryDate, notes, confirmedAt }`, where `direction` is `sent` (the person paid it) or `received`.
+Pending, declined and undone payments are never returned. A payment that counts never changes, so the
+feed only adds rows.
 
-Entry lists are a **change feed**: they take `cursor` and `limit` (default 100, at most 500) and return
-`{ entries, nextCursor, hasMore, removedGroupIds }`. The cursor is opaque and holds, per group, the last
-version Pholio has seen, like the device's pull cursors; this replaces the first draft's `updatedSince`
-timestamp, which could skip rows that commit out of timestamp order (ADR-004 in `docs/architecture.md`).
-Deleted entries come through with `deletedAt` set, so Pholio can remove them; `removedGroupIds` lists
-groups the person has left or that were deleted. An entry with an open conflict is returned as its
-current version with `hasConflict: true`, and again when the conflict is resolved.
+Payment lists are a **change feed**: they take `cursor` and `limit` (default 100, at most 500) and return
+`{ payments, nextCursor, hasMore, removedGroupIds }`. The cursor is opaque and holds, per group, the last
+version Pholio has seen, like the device's pull cursors (ADR-004 in `docs/architecture.md`).
+`removedGroupIds` lists groups the person has left or that were deleted.
 
 The full contract, with every field, error and header, is `docs/api-v1.md` and
 `docs/api-v1.openapi.yaml`; this section only summarises it.
 
-Example: `GET /groups/{id}` for Sam after the $10.00 dinner Sam paid, split by Alex, Jo and Sam:
+Example: `GET /groups/{id}` for Sam after the $10.00 dinner Sam paid, split by Alex, Jo and Sam, and a
+$3.33 payment from Alex that both confirmed:
 
 ```json
 {
@@ -629,24 +798,19 @@ Example: `GET /groups/{id}` for Sam after the $10.00 dinner Sam paid, split by A
 	"name": "Banff trip",
 	"role": "member",
 	"memberId": "…",
-	"paidCents": 1000,
-	"owedCents": 334,
-	"balanceCents": 666,
+	"balanceCents": 333,
 	"completedAt": null,
-	"updatedAt": "2026-11-03T18:20:00.000Z",
-	"settleUp": [
-		{ "fromMemberId": "…", "fromName": "Alex", "toMemberId": "…", "toName": "Sam", "amountCents": 333 },
-		{ "fromMemberId": "…", "fromName": "Jo", "toMemberId": "…", "toName": "Sam", "amountCents": 333 }
-	]
+	"updatedAt": "2026-11-04T18:20:00.000Z",
+	"debts": [{ "memberId": "…", "name": "Jo", "direction": "owes_you", "amountCents": 333 }]
 }
 ```
 
 ### Errors and limits
 
 - Errors are `{ "error": { "code": "…", "message": "…" } }`: `401 invalid_token` (missing, unknown or
-  revoked), `404 not_found` (including groups the person isn't in), `400 bad_request`, `405
-method_not_allowed`, `429 rate_limited` (60 requests a minute per token, with `Retry-After`), `500
-server_error`.
+  revoked), `404 not_found` (including groups the person isn't in), `400 bad_request`,
+  `405 method_not_allowed`, `429 rate_limited` (60 requests a minute per token, with `Retry-After`),
+  `500 server_error`.
 - Tokens only in the `Authorization` header, never in URLs.
 - Responses are `Cache-Control: no-store`. CORS is open (`*`) because the API uses bearer tokens, not
   cookies; Pholio should still keep the token on its server.
@@ -655,15 +819,14 @@ server_error`.
 
 - Within v1, changes are additive only: new endpoints, new optional parameters, new fields. Pholio must
   ignore fields it doesn't know.
-- Anything breaking goes in `/api/v2`, and v1 keeps working for at least 6 months after v2
-  ships.
+- Anything breaking goes in `/api/v2`, and v1 keeps working for at least 6 months after v2 ships.
 - `docs/api-v1.md` is the contract Pholio's side is built against.
 
 ### How it is built
 
 - `api/v1/[...path].ts`: one Vercel function that checks the token's format, hashes it, routes, and makes
   one call to an `api.v1_*(token_hash, …)` SQL function, which authenticates, rate-limits, updates
-  `last_used_at` and returns the person's rows. Balances and `settleUp` come from `src/lib/ledger.ts`.
+  `last_used_at` and returns the person's rows. Debts come from `src/lib/ledger.ts`.
 - `vercel.json` rewrites everything to `index.html` today; it must leave `/api/` alone, and so must the
   service worker's navigation fallback.
 - Environment: `HANDSHAKE_API_DATABASE_URL` (the pooler URL for the `handshake_api` role), set only on
@@ -680,15 +843,19 @@ people alphabetically.
    Completed groups are listed below, under **Completed**.
 2. **Group.** The name, Rename (owner), and a menu with Leave group, and for the owner **Settle up and
    complete** and Delete group. A completed group shows "Completed on 3 Nov by Alex", has no add or edit
-   buttons, and offers Reopen group to the owner. Two main buttons: **Add expense** and **Record
-   payment**. A segmented control: **Balances | Entries | People**, opening on Entries.
+   buttons, and offers Reopen group to the owner. Two main buttons: **Add expense** and **Settle up**
+   (owner, 2026-11-09, following the design canvas); payments start from a debt's button on Balances or
+   from Settle up. A segmented control: **Entries | Balances | People**, opening on Entries.
    - **Entries:** newest first, grouped by day. A row shows the description, "Alex paid $90.00" (or
      "Alex and Sam paid $100.00"), and what it means for you: "You owe $30.00", "You lent $60.00" or
      "Not involved". Payments read "Sam paid Alex $30.00". Unsynced entries say "Not synced yet";
      conflicted ones show **Needs resolving**.
-   - **Balances:** everyone's balance, you first, then Suggested payments, each with a Record button.
-     Someone who left shows "(left)".
-   - **People:** members (the owner labelled Owner), then guests, then "Not joined yet" non-members.
+   - **Balances:** your debts first, each with its button: "You owe Sam $10.00 · **Record payment**",
+     "Jo owes you $20.00 · **Record received**". Your pending payments sit with them: "Waiting for Sam ·
+     **Undo**", or "Jo says they paid you $10.00 · **Confirm** · **Decline**". Then everyone else's debts
+     ("Kim owes Alex $5.00"), read-only, and debts with name-only people, where any full member can record
+     a payment. Someone who left shows "(left)". Payments show in Entries once they count.
+   - **People:** members (the owner labelled Owner), then guests, then "Not joined yet" name-only people.
      The owner sees Add person, Remove, and invite links: create, copy, share (Web Share API, or the
      native share sheet), revoke, and the expiry date.
 3. **Expense editor.** Full screen on phones, a dialog on desktop. Description, date (today), notes.
@@ -697,7 +864,9 @@ people alphabetically.
    amount, payer and people, and a running total. Below: each person's result ("Jo owes $13.00",
    "Sam paid $23.00, owes $5.00"), with the rounding cent noted. Save stays disabled until every item
    has an amount and at least one person.
-4. **Payment editor.** From (you by default), To, amount, date, note.
+4. **Payment editor.** Opened from a debt's button: who and which way are already set ("You paid Sam" or
+   "Jo paid you"), the amount defaults to the whole debt, plus date and note. Saving shows "Waiting for
+   Sam to confirm", or counts at once when the other side is a name-only person.
 5. **Entry detail.** The items, then paid and owed per person, "Added by Sam · Edited by Alex", Edit and
    Delete (with a confirmation). Guests see Delete only on entries they added, and no Edit.
 6. **Conflict popup and resolver.** The popup appears once per new conflict when the group is opened:
@@ -706,20 +875,22 @@ people alphabetically.
    highlighted, a choice per field, "Use all of Alex's" / "Use all of Sam's", and the resulting split
    before saving.
 7. **Join** (`/join/:token`). The group name, "Alex invited you", "Which one are you?" with the
-   unclaimed non-members and "I'm not on this list", then **Create an account** or **Continue as
+   unclaimed name-only people and "I'm not on this list", then **Create an account** or **Continue as
    guest**. Offline: "Joining needs a connection."
 8. **Guest banner.** On every screen for guests: "You're a guest. When the group is completed, guests
    lose access. Add your email to keep it", which opens the email and code steps.
-9. **Settings → Connected apps.** Your tokens (name, created, last used), **Connect an app** (name it,
+9. **Settings.** **Connected apps:** your tokens (name, created, last used), **Connect an app** (name it,
    then the token is shown once with Copy and "You won't see this again"), and Revoke. Online only.
-10. **Settle-up tracker** (owner). "3 of 5 settled" at the top. One row per person: name, "Owes
-    $20.00" or "Is owed $40.00", the suggested payments underneath ("to Person 1, $20.00"), and a tick
-    box. Ticked rows show **Paid** or **Received** and the payments the tick recorded; unticking asks
-    "Delete the 2 payments this recorded?". People already at $0 show **Settled**. At the bottom:
-    **Complete group**, with the confirmation from decision 11 (who still owes, which guests lose
-    access).
+   **Delete account:** the dialog from decision 19, naming any open debts. Online only.
+10. **Settle up** (everyone; completing is the owner's). "3 of 5 settled" at the top. One row per person
+    with their state (Settled, Owes $20.00, Is owed $40.00, Waiting for confirmation); tapping a row lists
+    their debts. Below, a card per payment that involves you, with **Shake on it**. At the bottom, for the
+    owner: **Complete group**, with the confirmation from decision 11 (who still owes, which guests lose
+    access). In a completed group it still lists the remaining debts, read-only, with no buttons (owner,
+    2026-11-09).
 
-Rejection toasts: `HS409` "Alex already resolved this"; `HS403` "You can't do that in this group";
+Rejection toasts: `HS409` "Alex already resolved this" (or "Sam already answered this payment"); `HS403`
+"You can't do that in this group";
 `HS422` "That change couldn't be saved", with the reason underneath.
 
 ## Implementation Guide
@@ -728,6 +899,7 @@ Seven slices. Each is its own migration, tests and screens, and each ships on it
 the MVP. They are built in three passes rather than slice by slice: the database for every slice (chat 2),
 then the logic, sync and API for every slice (chat 3), then the screens. `docs/architecture.md` §§11–12
 lists the exact files, functions and tests for chats 2 and 3; the lists below stay as the per-slice view.
+Slice 8, the group chat and nudges, follows the MVP (`docs/chat-spec.md`).
 
 1. **Dollars and people** (1 day)
    - `src/lib/money.ts`: drop the currency argument; remove `minorUnitDigits` and `splitEvenly` and
@@ -738,15 +910,21 @@ lists the exact files, functions and tests for chats 2 and 3; the lists below st
    - `member.*` and `group.*` intents in `planChange()` (`src/lib/changes.ts`); the People tab; Leave and Delete group.
    - Tests: `supabase/tests/people.test.sql`, `tests/lib/sync/local.test.ts` additions.
 2. **Bills with items, and balances** (2½ days)
-   - `supabase/migrations/005_ledger.sql`: both ledger tables (including `recorded_via`),
+   - `supabase/migrations/005_ledger.sql`: the ledger tables (with `ledger_share_parts`),
      `private.compute_shares()`, `entry.*`, pull additions.
    - `src/lib/ledger.ts`: `computeShares()`, `validateEntry()`, `summarizeGroup()` (the module map is `docs/architecture.md` §9).
    - Entry intents in `planChange()`; read hooks in `src/lib/entries.ts`; Dexie version 2.
    - The Entries tab, the expense editor (one item and several), entry detail, balances on the Groups
      list.
    - Tests: `tests/lib/ledger.test.ts`, `supabase/tests/ledger.test.sql`.
-3. **Payments and suggested payments** (1 day): suggested payments from `summarizeGroup()` in `src/lib/ledger.ts`, the
-   payment editor, the Balances tab.
+3. **Debts and handshake payments** (1½ days)
+   - `005_ledger.sql`: `ledger_share_parts` and per-payer rounding in `private.compute_shares()`; payment
+     columns; `payment.record`, `payment.confirm`, `payment.decline`, `payment.undo`.
+   - Debts from `summarizeGroup()` in `src/lib/ledger.ts`; payment intents in `planChange()`; the Balances
+     tab with each debt's button and pending payments; the payment editor.
+   - Tests: `tests/lib/ledger.test.ts` (debts), `tests/lib/changes.test.ts` (handshake intents),
+     `supabase/tests/payments.test.sql`.
+
 4. **Edit conflicts** (1½ days)
    - `supabase/migrations/006_conflicts.sql`: `entry_conflicts`, `ledger_entry_versions`, the conflict
      branch in `entry.update` and `entry.delete`, `conflict.resolve`.
@@ -759,19 +937,20 @@ lists the exact files, functions and tests for chats 2 and 3; the lists below st
    - invite intents in `planChange()`, the online functions in `supabase-transport.ts`, guest sign-in and upgrade in `src/lib/auth.tsx`; the invite controls on
      People; the Join route and paste box; the guest banner.
    - Tests: `supabase/tests/invites.test.sql`, `supabase/tests/guests.test.sql`.
-6. **Settle-up tracker and completing** (1 day)
-   - `supabase/migrations/008_complete.sql`: `completed_at`, `group.complete` (with the
-     guest unlinking and deleting), `group.reopen`, the completed-group checks.
-   - the tick and untick intents in `planChange()`; the tracker screen; the Completed section and read-only
-     group.
-   - Tests: `supabase/tests/complete.test.sql`, `tests/lib/ledger.test.ts` additions.
+6. **Settle up, completing and deleting an account** (1½ days)
+   - `supabase/migrations/008_complete.sql`: `completed_at`, `group.complete` (with the guest unlinking
+     and deleting), `group.reopen`, the completed-group checks, `delete_account()`.
+   - The Settle up progress screen; the Completed section and read-only group; Settings → Delete account.
+   - Tests: `supabase/tests/complete.test.sql`, `supabase/tests/delete-account.test.sql`,
+     `tests/lib/ledger.test.ts` additions.
+
 7. **API v1 for Pholio** (1½ days)
    - `supabase/migrations/009_api.sql`: `api_tokens`, the `api` schema and `handshake_api` role, token
      functions, `api.v1_*` functions.
    - `api/v1/[...path].ts`, `src/server/api-v1/*`, `vercel.json` and service-worker changes, against the
      contract in `docs/api-v1.md` and `docs/api-v1.openapi.yaml`.
    - Settings → Connected apps.
-   - Tests: `supabase/tests/api.test.sql`, `tests/api/v1.handler.test.ts` (handler against a fake store),
+   - Tests: `supabase/tests/api.test.sql`, `tests/api/v1.handler.test.ts` (handler against the memory store),
      `tests/api/v1.contract.test.ts` (responses against the OpenAPI document), `tests/api/postgres-store.test.ts`
      (opt-in, against the local database).
 
@@ -780,89 +959,113 @@ Every migration follows the existing rules: safe to re-run, new tables stamped b
 
 ## Testing Checklist
 
-Unit (`bun test`). Amounts in cents; Person 1 pays unless stated.
+Unit (`bun test`). Amounts in cents; Person 1 pays unless stated. "Parts" are `owedTo`, written
+debtor→payer. The pinned cases live once in `tests/fixtures/ledger-cases.ts` and run against both the
+TypeScript and the SQL rounding.
 
-- [ ] **Scenario A:** 5000 split by Persons 1–5 → owed 1000 each; balances P1 +4000, P2–P5 −1000.
+- [ ] **Scenario A:** 5000 split by Persons 1–5 → owed 1000 each; balances P1 +4000, P2–P5 −1000; debts
+      P2–P5 → P1 1000 each.
 - [ ] $10 by Alex, Jo, Sam, Sam paid → Alex 333, Jo 333, Sam 334; balances Sam +666, Alex −333,
-      Jo −333.
+      Jo −333; debts Alex→Sam 333, Jo→Sam 333.
 - [ ] $20 by Alex, Jo, Sam, Sam paid → Alex 667, Jo 667, Sam 666; balances Sam +1334, Alex −667,
       Jo −667.
-- [ ] **Scenario B:** items 500 and 1000 split by P1–P3, item 800 by P3 → owed 500, 500, 1300 (not 501
-      or 499: no rounding happens); balances P1 +1800, P2 −500, P3 −1300.
+- [ ] **Scenario B:** items 500 and 1000 split by P1–P3, item 800 by P3 → owed 500, 500, 1300 (no
+      rounding happens); balances P1 +1800, P2 −500, P3 −1300.
 - [ ] **Scenario C:** items 500 and 1000 split by P1–P3, item 800 by P2 and P3 → owed 500, 900, 900;
       balances P1 +1800, P2 −900, P3 −900.
 - [ ] **Several payers, even:** item 6000 paid by P1 and item 4000 paid by P2, both split by P1–P5 →
-      owed 2000 each; balances P1 +4000, P2 +2000, P3–P5 −2000; suggested payments P3→P1 2000,
-      P4→P1 2000, P5→P2 2000.
+      parts: everyone →P1 1200, everyone →P2 800; owed 2000 each; balances P1 +4000, P2 +2000, P3–P5
+      −2000; debts P2→P1 400, P3→P1 1200, P3→P2 800, P4→P1 1200, P4→P2 800, P5→P1 1200, P5→P2 800.
 - [ ] **Several payers, with a cent:** item 1000 paid by P1 split by P1–P3, item 2000 paid by P2 split
-      by P1–P5 → owed P1 733, P2 734 (biggest payer covers the cent), P3 733, P4 400, P5 400; balances
-      P1 +267, P2 +1266, P3 −733, P4 −400, P5 −400; suggested payments P3→P2 733, P4→P2 400,
-      P5→P1 267, P5→P2 133.
+      by P1–P5 → parts P1→P1 334 (P1 covers the cent on P1's item), P2→P1 333, P3→P1 333, everyone →P2
+      400; owed P1 734, P2 733, P3 733, P4 400, P5 400; balances P1 +266, P2 +1267, P3 −733, P4 −400,
+      P5 −400; debts P1→P2 67, P3→P1 333, P3→P2 400, P4→P2 400, P5→P2 400.
 - [ ] **Payer not sharing:** Sam pays 2000 split by Alex, Jo, Kim → Alex 666, Jo 667, Kim 667, Sam 0.
       Sam pays 1000 split by the same → 333 each, Sam owes 1.
 - [ ] Two items of 1000, each split by the same 3, Sam paid both → others 667 each, Sam 666.
-- [ ] Every `computeShares` result: Σ paid = Σ owed = total, owed ≥ 0, and the same answer whatever
-      order the shares are read in.
+- [ ] Every `computeShares` result: Σ paid = Σ owed = total, each share's parts add up to its owed,
+      owed ≥ 0, and the same answer whatever order the shares are read in.
 - [ ] Balances for the Dinner and Payment table: Alex +3000, Sam 0, Jo −3000; they add up to 0.
-- [ ] Suggested payments (`summarizeGroup`): Alex +60, Sam −10, Jo −50 gives Jo→Alex 50 and Sam→Alex 10; for random
-      balances, never more than n − 1 payments, and applying them leaves everyone at 0.
-- [ ] **Settle-up tracker,** with the "several payers, with a cent" balances: ticking P5 records
-      P5→P1 267 and P5→P2 133, both with `recordedVia` `settle_up`; P5 shows Paid and P1 Received; the
-      remaining suggestions are P3→P2 733 and P4→P2 400. Unticking P5 deletes both payments and
-      restores the balances. A new 1000 expense paid by P1 and split by P1 and P5 afterwards unticks P5.
+- [ ] Debts and handshakes (`summarizeGroup`, through the Dinner example): after a **pending** payment
+      Sam→Alex 3000, debts are unchanged (Sam→Alex 3000, Jo→Alex 3000); once **confirmed**, Sam→Alex 0;
+      a **declined** or **undone** one never counts; a confirmed payment Sam→Alex 2000 leaves Sam→Alex 1000. For random bills and payments, Σ debts each person is owed − Σ they owe = their balance.
+- [ ] Settle up states: in the Dinner example after Sam's pending payment, Alex "Is owed 6000", Sam
+      "Waiting for confirmation", Jo "Owes 3000"; once confirmed, Sam "Settled".
+- [ ] `planChange` handshakes: the payer or the receiver can record; only the other side can confirm or
+      decline (`HS403` otherwise); only the starter can undo; answering a payment that isn't pending
+      plans `HS409`; with a name-only counterpart the payment plans as confirmed at once; between two
+      name-only people a member can record and a guest can't.
+- [ ] Permission cases (`tests/fixtures/permission-cases.ts`): every action × role matches decision 8,
+      and every "allowed in a completed group" mark.
 - [ ] `parseAmount`: "12" → 1200, "12.5" → 1250, "1,234.50" → 123450, "1.234" → null.
       `formatAmount`: 123450 → "$1,234.50", −333 → "−$3.33".
 - [ ] `validateEntry` rejects everything in "Entry checks on the server".
 - [ ] `mergePull`: an entry's shares are replaced, not merged; an unsent stale update by someone else is
       not replayed; a dropped group takes its entries, conflicts, invites and tokens with it.
 - [ ] API handler: a missing or revoked token gives 401; a group the person isn't in gives 404;
-      `GET /groups/{id}` for Sam after the $10 dinner gives paid 1000, owed 334, balance 666 and the two
-      `settleUp` rows of 333.
+      `GET /groups/{id}` for Sam after the $10 dinner and Alex's confirmed 333 gives balance 333 and one
+      debt, Jo owes Sam 333; `GET /payments` returns Alex's payment as `received` for Sam and never a
+      pending one.
 - [ ] API contract: every handler response validates against `docs/api-v1.openapi.yaml` with no
-      undocumented fields; in every group, Σ `netCents` of entries without `deletedAt` = `balanceCents`.
+      undocumented fields.
 
 Database (`bun run test:db`):
 
-- [ ] `private.compute_shares()` gives the same numbers as every unit case above.
-- [ ] Sums that don't match, shares that differ from the items, a member from another group, and a
-      malformed payment each give `HS422`; a non-member gives `HS403`.
+- [ ] `private.compute_shares()` gives the same parts and shares as every pinned case (generated from
+      the case table).
+- [ ] `private.may()` and `private.allowed_when_completed()` match every permission case (generated).
+- [ ] Sums that don't match, shares or parts that differ from the items, a member from another group, and
+      a malformed payment each give `HS422`; someone outside the group gives `HS403`.
+- [ ] Handshakes: `payment.record` by one side makes a pending payment with that side's time set;
+      `payment.confirm` by the other side confirms it; a second answer gives `HS409`; the starter
+      confirming their own payment gives `HS403`; `payment.undo` by someone else gives `HS403`; with a
+      name-only counterpart the payment is confirmed at once; `entry.update` and `entry.delete` on a
+      payment give `HS422`; answering a pending payment works in a completed group.
 - [ ] A stale update by someone else leaves the entry unchanged, creates one open conflict holding the
       base and proposed versions, and pulls to every member; your own stale update is applied.
 - [ ] `conflict.resolve` with `kept_current`, `took_proposed` and `merged` each leave the expected entry
       and shares and close the conflict; a second resolve gives `HS409`; a guest resolving gives `HS403`.
 - [ ] A stale delete against a newer edit creates a conflict with `proposed` NULL.
-- [ ] Roles: the owner can add and remove non-members, remove members and guests, make invites and
-      rename the group; a member gets `HS403` for each of those and for deleting the group; the owner
-      leaving passes ownership to the member who joined first; the last full member leaving deletes the
-      group, even with guests left.
-- [ ] Guests: can create entries and delete their own; can't update entries, delete others' entries,
-      create groups or create API tokens.
+- [ ] Roles through `push_changes` (one allowed and one refused call per action, proving each `apply_*`
+      asks for the right action): members can add people by name and make invites, and revoke only their
+      own; the owner leaving passes ownership to the member who joined first; the last full member leaving
+      deletes the group, even with guests left; leaving a completed group works.
+- [ ] Guests: can create bills and delete their own; can record and answer their own payments; can't
+      update bills, delete others' bills, create groups or create API tokens.
 - [ ] Invites: the token is stored only as a hash; preview works with the token; expired (day 15) and
-      revoked links fail; joining takes over the non-member; a taken non-member can't be claimed again;
+      revoked links fail; joining takes over the name-only person; a taken one can't be claimed again;
       joining twice does nothing; an anonymous caller joins as `guest`; `upgrade_guest()` keeps the same
       member row and makes it `member`.
 - [ ] API: a token is stored only as a hash; `api.v1_*` with a revoked or unknown token's hash gives
-      `HS401`, and the 61st call in a minute `HS429`; `api.v1_*` returns only the token owner's groups and
-      shares; the entries feed cursor pages, picks up a newly joined group and reports a left one;
+      `HS401`, and the 61st call in a minute `HS429`; `api.v1_payments` returns only confirmed payments
+      involving the token's owner; the cursor pages, picks up a newly joined group and reports a left one;
       `handshake_api` can't select any table or run any function outside `api`.
-- [ ] Completing: the owner can complete and reopen, a member gets `HS403`. Completing
-      turns a guest's row into a non-member with the same name and history; deletes their anonymous
-      user when they're in no other group, and keeps it when they are; leaves a guest who added an email
-      untouched; and the removed guest can no longer pull the group. Entries, edits and invites in a
-      completed group give `HS403`; after reopening they work again.
-- [ ] Deleted entries are pulled with `deleted_at` set.
+- [ ] Completing: the owner can complete and reopen, a member gets `HS403`. Completing turns a guest's
+      row into a name-only person with the same name and history; deletes their anonymous user when
+      they're in no other group, and keeps it when they are; leaves a guest who added an email untouched;
+      and the removed guest can no longer pull the group. Bills, edits and invites in a completed group
+      give `HS403`; after reopening they work again.
+- [ ] Deleting an account: every member row becomes name-only with the same name; ownership passes to the
+      earliest full member; a group with no full member left is deleted; pending payments become
+      `undone`; API tokens are gone; the `auth.users` row is gone; a payment with that person can then be
+      recorded alone and is confirmed at once.
+- [ ] Deleted bills are pulled with `deleted_at` set.
 
 By hand, at 375px and 1440px:
 
-- [ ] Add an itemised bill offline: balances change at once; reconnect, and a second browser shows it.
-- [ ] Two browsers offline edit the same expense, then reconnect: both see the conflict popup; resolve
-      in one; the other shows the result and no popup.
-- [ ] Create an invite for a non-member, open it signed out in another browser, continue as guest, see
-      the history as that person, add an entry, then add an email and confirm the role is now member.
-- [ ] With a guest signed in on another browser, tick everyone off in the tracker, then complete the
-      group: the confirmation names the guest; on the guest's next sync the group disappears; the
-      owner sees it under Completed, read-only, with the guest's name still on their entries.
-- [ ] Create a token in Connected apps, call `GET /api/v1/groups` with it, revoke it, and get 401.
+- [ ] Add an itemised bill offline: debts change at once; reconnect, and a second browser shows it.
+- [ ] Two browsers offline edit the same bill, then reconnect: both see the conflict popup; resolve in
+      one; the other shows the result and no popup.
+- [ ] Handshake: in browser A record "I paid Sam $10"; browser B (Sam) shows **Confirm**; a third browser
+      shows nothing pending; Sam confirms; all three show the payment and the new debt.
+- [ ] Create an invite for a name-only person, open it signed out in another browser, continue as guest,
+      see the history as that person, add a bill, then add an email and confirm the role is now member.
+- [ ] With a guest signed in on another browser, complete the group: the confirmation names the guest and
+      anyone still owing; on the guest's next sync the group disappears; the owner sees it under
+      Completed, read-only, with the guest's name still on their bills.
+- [ ] Delete an account that owes money: the dialog names the debt; the others then see that person as
+      name-only and can record a payment with them alone.
+- [ ] Create a token in Connected apps, call `GET /api/v1/payments` with it, revoke it, and get 401.
 
 `bun run typecheck`, `bun test`, `bun run test:db` and `bun run build` all exit 0 for each slice.
 
@@ -870,13 +1073,38 @@ By hand, at 375px and 1440px:
 
 None open. Answered by the owner on 2026-11-03:
 
-| #   | Question                                                 | Answer                                                                                                                                                          |
-| --- | -------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| 1   | Who covers the rounding cent?                            | The payer: shares round normally and the payer's own share takes the difference (decision 4). With several payers, the one who paid the most (assumed default). |
-| 2   | Can a guest remove any entry, or only ones they added?   | Only ones they added                                                                                                                                            |
-| 3   | Who can complete a group?                                | The owner only: there is no admin role (decision 8)                                                                                                             |
-| 4   | Can a group be completed while someone still owes money? | Yes, after a confirmation naming them                                                                                                                           |
-| 5   | Which slices are in the MVP?                             | All seven                                                                                                                                                       |
+| #   | Question                                                 | Answer                                                                                       |
+| --- | -------------------------------------------------------- | -------------------------------------------------------------------------------------------- |
+| 1   | Who covers the rounding cent?                            | The payer: shares round normally and the payer's own share takes the difference (decision 4) |
+| 2   | Can a guest remove any entry, or only ones they added?   | Only ones they added                                                                         |
+| 3   | Who can complete a group?                                | The owner only: there is no admin role (decision 8)                                          |
+| 4   | Can a group be completed while someone still owes money? | Yes, after a confirmation naming them                                                        |
+| 5   | Which slices are in the MVP?                             | All seven                                                                                    |
+
+Answered on 2026-11-04:
+
+| #   | Question                                 | Answer                                                                                                        |
+| --- | ---------------------------------------- | ------------------------------------------------------------------------------------------------------------- |
+| 6   | Who adds people and makes invites?       | Owner and members; members revoke only their own invites (decision 8)                                         |
+| 7   | What still works in a completed group?   | Reopen, delete and leave                                                                                      |
+| 8   | When does a payback count?               | After a handshake: one side records, the other confirms (decision 17)                                         |
+| 9   | Who sees debts and payments?             | Everyone sees everything; only the settle buttons and pending payments belong to the two people (decision 18) |
+| 10  | Debts between pairs, or simplified?      | Between pairs; with several payers, each payer absorbs their own items' cent (decisions 4 and 18)             |
+| 11  | A payment with someone who has no login? | Recorded alone and counts at once; between two name-only people, any full member records it                   |
+| 12  | What does Pholio receive?                | Only payments that count, sent and received                                                                   |
+| 13  | Account deletion                         | A confirmation dialog; allowed with open debts after a warning; history keeps their name (decision 19)        |
+
+### Confirmed on 2026-11-04
+
+These followed from the answers above and were then confirmed by the owner.
+
+- A payment that counts can't be edited or deleted; a mistake is corrected with a payment the other way.
+- In a completed group, a pending payment can still be confirmed or declined (but not undone or
+  recorded anew), so a real payback isn't lost because the group closed first.
+- A declined or undone payment stays in the two people's history, marked as such, and is never shown to
+  the rest of the group.
+- A pair has at most one pending payment at a time: while one waits, the debt's button shows "Waiting
+  for Sam · Undo", and a second record is refused (`HS409`), so a double tap can't record it twice.
 
 ## Out of Scope
 
@@ -890,9 +1118,9 @@ These belong to later specs:
 - Weighted or percentage splits, other currencies and exchange rates.
 - Moving a guest's data into an account that already exists (the email is already registered).
 - Completing or settling a single bill.
-- Activity feed and comments.
+- Comments on single bills (the group chat is `docs/chat-spec.md`, slice 8).
 - Receipt photos, categories, recurring expenses and refunds.
-- Notifications.
+- Push notifications (the final stage of `docs/chat-spec.md`).
 - Export.
 - Universal links and App Links for the native apps.
 
@@ -902,9 +1130,11 @@ These belong to later specs:
   loses their login and their view of the group, and reopening doesn't bring it back. Mitigations: only
   the login goes (the group's history and balances stay); the guest banner says so from the start; the
   completion dialog names the guests; the owner can re-invite the name.
-- **Ticks that don't match what happened.** A tick records the suggested payments, which may not be
-  who actually paid whom. Balances still end at $0 either way, and the owner can untick and record the
-  real payment instead.
+- **Handshakes left waiting.** A payment the other side never answers stays pending and doesn't count.
+  Mitigations: both sides see it on Balances, the starter can Undo, Settle up shows "Waiting for
+  confirmation", and nudges (slice 8) remind the other side.
+- **Deleting an account is permanent.** The login and profile go; the name stays on the group's history,
+  and the person can be invited again as a new account that claims the name.
 - **Guests lose access with their device.** An anonymous session lives on one device; clearing storage
   or losing the phone ends it. The guest banner keeps asking them to add an email.
 - **Anonymous sign-in abuse.** Anyone can create anonymous users. They can do nothing without an invite

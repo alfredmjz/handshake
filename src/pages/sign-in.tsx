@@ -1,13 +1,43 @@
 import { useState, type FormEvent } from "react";
 import { toast } from "sonner";
+import { useNavigate } from "react-router";
 
+import { HandshakeMark, ReceiptDoodle } from "@/components/art/doodles";
+import { Hand, type HandKind } from "@/components/art/hand";
+import { Notice } from "@/components/notices";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { Field } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
+import { Stack } from "@/components/ui/stack";
+import { takeEndedNotice } from "@/lib/auth";
+import { inviteTokenFrom } from "@/lib/shell-view";
 import { supabase } from "@/lib/supabase";
+import { cn } from "@/lib/utils";
 
-export function SignInPage() {
+const RING: HandKind[] = ["drinks", "food", "travel", "stay", "fun", "groceries"];
+
+// Six hands around a receipt: everyone in the group, passing the bill.
+function HandsAroundReceipt() {
+	return (
+		<div aria-hidden className="relative mx-auto size-[16.5rem] sm:size-[19rem]">
+			<div className="absolute left-1/2 top-1/2 size-0 sm:scale-110">
+				{RING.map((kind, i) => (
+					<div
+						key={kind}
+						className="absolute left-[-3.125rem] top-0 size-[6.25rem]"
+						style={{ transformOrigin: "50% 0", transform: `rotate(${i * 60}deg) translateY(1rem)` }}
+					>
+						<Hand kind={kind} size={100} blob />
+					</div>
+				))}
+				<ReceiptDoodle className="absolute left-[-1.75rem] top-[-2.2rem] w-14 -rotate-[8deg]" />
+			</div>
+		</div>
+	);
+}
+
+// Email, then the 6-digit code. Also shown from an invite link, so someone signed out can make an account.
+export function EmailSignIn({ onBack }: { onBack?: () => void }) {
 	const [email, setEmail] = useState("");
 	const [code, setCode] = useState("");
 	const [step, setStep] = useState<"email" | "code">("email");
@@ -38,66 +68,165 @@ export function SignInPage() {
 	}
 
 	return (
-		<div className="flex min-h-dvh items-center justify-center px-4 py-10">
-			<Card className="w-full max-w-sm">
-				<CardHeader>
-					<CardTitle>Handshake</CardTitle>
-					<CardDescription>
-						{step === "email"
-							? "Keep track of who owes who, and plan trips together."
-							: `We sent a 6-digit code to ${email.trim()}.`}
-					</CardDescription>
-				</CardHeader>
-				<CardContent>
-					{step === "email" ? (
-						<form onSubmit={sendCode} className="space-y-4">
-							<div className="space-y-2">
-								<Label htmlFor="email">Email</Label>
-								<Input
-									id="email"
-									type="email"
-									autoComplete="email"
-									required
-									value={email}
-									onChange={(e) => setEmail(e.target.value)}
-								/>
-							</div>
-							<Button type="submit" className="w-full" disabled={busy || !email.trim()}>
-								{busy ? "Sending…" : "Send code"}
+		<div>
+			{step === "email" ? (
+				<form onSubmit={sendCode}>
+					<Stack>
+						<Field label="Email" htmlFor="email">
+							<Input
+								id="email"
+								type="email"
+								autoComplete="email"
+								required
+								autoFocus
+								value={email}
+								onChange={(e) => setEmail(e.target.value)}
+							/>
+						</Field>
+						<Button type="submit" size="lg" className="w-full" disabled={busy || !email.trim()}>
+							{busy ? "Sending…" : "Send code"}
+						</Button>
+						{onBack && (
+							<Button type="button" variant="ghost" className="w-full" onClick={onBack}>
+								Back
 							</Button>
-						</form>
-					) : (
-						<form onSubmit={verifyCode} className="space-y-4">
-							<div className="space-y-2">
-								<Label htmlFor="code">Code</Label>
-								<Input
-									id="code"
-									inputMode="numeric"
-									autoComplete="one-time-code"
-									required
-									maxLength={10}
-									value={code}
-									onChange={(e) => setCode(e.target.value.replace(/\D/g, ""))}
-								/>
-							</div>
-							<Button type="submit" className="w-full" disabled={busy || code.length < 6}>
-								{busy ? "Checking…" : "Sign in"}
-							</Button>
-							<Button
-								type="button"
-								variant="link"
-								className="w-full"
-								onClick={() => {
-									setCode("");
-									setStep("email");
-								}}
-							>
-								Use a different email
-							</Button>
-						</form>
-					)}
-				</CardContent>
-			</Card>
+						)}
+					</Stack>
+				</form>
+			) : (
+				<form onSubmit={verifyCode}>
+					<Stack>
+						<Field label="Code" htmlFor="code" hint={`We sent a 6-digit code to ${email.trim()}.`}>
+							<Input
+								id="code"
+								variant="code"
+								inputMode="numeric"
+								autoComplete="one-time-code"
+								placeholder="000000"
+								required
+								autoFocus
+								maxLength={10}
+								value={code}
+								onChange={(e) => setCode(e.target.value.replace(/\D/g, ""))}
+							/>
+						</Field>
+						<Button type="submit" size="lg" className="w-full" disabled={busy || code.length < 6}>
+							{busy ? "Checking…" : "Sign in"}
+						</Button>
+						<Button
+							type="button"
+							variant="ghost"
+							className="w-full"
+							onClick={() => {
+								setCode("");
+								setStep("email");
+							}}
+						>
+							Use a different email
+						</Button>
+					</Stack>
+				</form>
+			)}
+		</div>
+	);
+}
+
+function InviteLinkForm({ onBack }: { onBack: () => void }) {
+	const navigate = useNavigate();
+	const [text, setText] = useState("");
+	const [error, setError] = useState(false);
+
+	function open(event: FormEvent) {
+		event.preventDefault();
+		const token = inviteTokenFrom(text);
+		if (token) navigate(`/join/${token}`);
+		else setError(true);
+	}
+
+	return (
+		<form onSubmit={open}>
+			<Stack>
+				<Field
+					label="Invite link"
+					htmlFor="invite-link"
+					error={error ? "That doesn't look like an invite link" : undefined}
+				>
+					<Input
+						id="invite-link"
+						placeholder="Paste it here"
+						autoFocus
+						value={text}
+						onChange={(e) => {
+							setText(e.target.value);
+							setError(false);
+						}}
+					/>
+				</Field>
+				<Button type="submit" size="lg" className="w-full" disabled={!text.trim()}>
+					Open
+				</Button>
+				<Button type="button" variant="ghost" className="w-full" onClick={onBack}>
+					Back
+				</Button>
+			</Stack>
+		</form>
+	);
+}
+
+// The signed-out front door: hands passing a receipt, and a cobalt sheet that asks for an email or a link.
+export function SignInPage() {
+	const [view, setView] = useState<"welcome" | "email" | "invite">("welcome");
+	const [ended] = useState(takeEndedNotice);
+
+	return (
+		<div className="mx-auto flex min-h-dvh w-full max-w-6xl flex-col lg:flex-row lg:items-center lg:gap-x-spread lg:px-page">
+			<div className="flex flex-1 flex-col">
+				<header className="flex items-center gap-control px-page pt-[max(var(--space-section),env(safe-area-inset-top))] lg:px-0 lg:pt-0">
+					<HandshakeMark className="h-8 w-12" />
+					<span className="type-wordmark">handshake</span>
+				</header>
+				<div className="flex flex-1 items-center justify-center py-section">
+					<HandsAroundReceipt />
+				</div>
+			</div>
+			<section
+				className={cn(
+					"flex min-h-[22.875rem] flex-col gap-stack rounded-t-sheet px-page pb-section pt-section lg:min-h-0 lg:flex-1 lg:rounded-sheet lg:px-12 lg:py-12",
+					view === "welcome" ? "bg-primary text-primary-foreground" : "bg-raised text-foreground"
+				)}
+			>
+				{view === "welcome" ? (
+					<>
+						{ended && <Notice className="text-ink">{ended}</Notice>}
+						<h1 className="type-display text-balance">Who owes who, sorted.</h1>
+						<p className="type-body-lg max-w-[19rem] text-primary-foreground/85">
+							Split costs with friends, see where everyone stands, and settle up in a tap.
+						</p>
+						<div className="flex-1" />
+						<Button variant="inverse" size="lg" className="w-full" onClick={() => setView("email")}>
+							Get started
+						</Button>
+						<Button
+							variant="link"
+							size="inline"
+							className="self-center text-primary-foreground hover:text-primary-foreground/80"
+							onClick={() => setView("invite")}
+						>
+							I have an invite link
+						</Button>
+					</>
+				) : view === "email" ? (
+					<>
+						<h1 className="type-h2">Sign in</h1>
+						<EmailSignIn onBack={() => setView("welcome")} />
+					</>
+				) : (
+					<>
+						<h1 className="type-h2">Join with a link</h1>
+						<InviteLinkForm onBack={() => setView("welcome")} />
+					</>
+				)}
+			</section>
 		</div>
 	);
 }

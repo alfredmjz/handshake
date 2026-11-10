@@ -1,0 +1,39 @@
+import { EntryListRow } from "@/components/group/entry-list-row";
+import type { GroupData } from "@/components/group/group-data";
+import { todayIso } from "@/components/group/today";
+import { EmptyState } from "@/components/notices";
+import { List, ListHeading } from "@/components/ui/list";
+import { dayLabel, groupByDay, isVisibleTo } from "@/lib/group-view";
+
+// Bills and payments, newest day first. Payments that don't count yet show only to their two people.
+export function EntriesTab({ data }: { data: GroupData }) {
+	const visible = data.entries.filter((e) => isVisibleTo(e, data.me?.id));
+	const today = todayIso();
+
+	if (visible.length === 0) {
+		return <EmptyState kind="new" title="No expenses yet." />;
+	}
+
+	return (
+		<div>
+			{groupByDay(visible).map((day) => (
+				<section key={day.date}>
+					<ListHeading>{dayLabel(day.date, today)}</ListHeading>
+					<List>
+						{day.entries.map((entry) => (
+							<EntryListRow
+								key={entry.id}
+								entry={entry}
+								names={data.names}
+								myMemberId={data.me?.id}
+								unsynced={data.unsynced.has(entry.id)}
+								needsResolving={data.conflictedIds.has(entry.id)}
+								to={`/groups/${entry.groupId}/entries/${entry.id}`}
+							/>
+						))}
+					</List>
+				</section>
+			))}
+		</div>
+	);
+}

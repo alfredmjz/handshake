@@ -256,6 +256,12 @@ content_path = "./supabase/templates/sign-in-code.html"
 subject = "Your Handshake sign-in code"
 content_path = "./supabase/templates/sign-in-code.html"
 
+# A guest's "Keep my data" adds an email to their login; the code in this email is what
+# finishKeepMyData() verifies (type email_change).
+[auth.email.template.email_change]
+subject = "Your Handshake code"
+content_path = "./supabase/templates/email-change-code.html"
+
 # Uncomment to customize notification email template
 # [auth.email.notification.password_changed]
 # enabled = true

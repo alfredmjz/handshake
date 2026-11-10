@@ -1,48 +1,127 @@
-import type { LocalTables } from "@/lib/sync/local";
-import type { GroupRow, MemberRow } from "@/lib/sync/types";
+import type { LocalTables, Rows } from "@/lib/sync/local";
+import type {
+	ConflictRow,
+	CursorRow,
+	EntryRow,
+	GroupRow,
+	InviteRow,
+	InviteTokenRow,
+	MemberRow,
+	Share,
+} from "@/lib/sync/types";
 
-export function createMemoryTables() {
-	const groups = new Map<string, GroupRow>();
-	const members = new Map<string, MemberRow>();
-	const cursors = new Map<string, number>();
+export type MemoryRows<T> = Rows<T> & { map: Map<string, T> };
 
-	const tables: LocalTables = {
-		getGroup: async (id) => groups.get(id),
-		putGroups: async (rows) => {
-			for (const row of rows) groups.set(row.id, row);
+export function memoryRows<T>(key: (row: T) => string, groupOf: (row: T) => string): MemoryRows<T> {
+	const map = new Map<string, T>();
+	return {
+		map,
+		get: async (id) => map.get(id),
+		byGroup: async (groupId) => [...map.values()].filter((row) => groupOf(row) === groupId),
+		put: async (rows) => {
+			for (const row of rows) map.set(key(row), structuredClone(row));
 		},
-		putMembers: async (rows) => {
-			for (const row of rows) members.set(row.id, row);
-		},
-		setCursor: async (groupId, version) => {
-			cursors.set(groupId, version);
-		},
-		keepOnlyGroups: async (groupIds) => {
-			const keep = new Set(groupIds);
-			for (const id of [...groups.keys()]) {
-				if (keep.has(id)) continue;
-				groups.delete(id);
-				cursors.delete(id);
-				for (const [memberId, member] of members) if (member.groupId === id) members.delete(memberId);
-			}
+		delete: async (ids) => {
+			for (const id of ids) map.delete(id);
 		},
 	};
+}
 
-	return { tables, groups, members, cursors };
+export function createMemoryTables() {
+	const groups = memoryRows<GroupRow>(
+		(r) => r.id,
+		(r) => r.id
+	);
+	const members = memoryRows<MemberRow>(
+		(r) => r.id,
+		(r) => r.groupId
+	);
+	const entries = memoryRows<EntryRow>(
+		(r) => r.id,
+		(r) => r.groupId
+	);
+	const conflicts = memoryRows<ConflictRow>(
+		(r) => r.id,
+		(r) => r.groupId
+	);
+	const invites = memoryRows<InviteRow>(
+		(r) => r.id,
+		(r) => r.groupId
+	);
+	const inviteTokens = memoryRows<InviteTokenRow>(
+		(r) => r.inviteId,
+		(r) => r.groupId
+	);
+	const cursors = memoryRows<CursorRow>(
+		(r) => r.groupId,
+		(r) => r.groupId
+	);
+
+	const tables: LocalTables = {
+		groups,
+		members,
+		entries,
+		conflicts,
+		invites,
+		inviteTokens,
+		cursors,
+		groupIds: async () => [...groups.map.keys()],
+	};
+
+	return { tables, groups, members, entries, conflicts, invites, inviteTokens, cursors };
 }
 
 export function serverGroup(overrides: Partial<GroupRow> & Pick<GroupRow, "id">): GroupRow {
 	return {
 		name: "Trip",
-		baseCurrency: "CAD",
+		note: null,
 		createdBy: "user-1",
 		createdAt: "2026-11-01T12:00:00.000Z",
 		deletedAt: null,
+		completedAt: null,
+		completedByMemberId: null,
 		rowVersion: 1,
 		...overrides,
 	};
 }
 
 export function serverMember(overrides: Partial<MemberRow> & Pick<MemberRow, "id" | "groupId">): MemberRow {
-	return { userId: "user-1", displayName: "Alex", role: "owner", deletedAt: null, rowVersion: 1, ...overrides };
+	return {
+		userId: "user-1",
+		displayName: "Alex",
+		role: "owner",
+		joinedAt: "2026-11-01T12:00:00.000Z",
+		deletedAt: null,
+		rowVersion: 1,
+		...overrides,
+	};
+}
+
+export function serverBill(
+	overrides: Partial<EntryRow> & Pick<EntryRow, "id" | "groupId" | "createdByMemberId">
+): EntryRow {
+	const payer = overrides.createdByMemberId;
+	const shares: Share[] = [{ memberId: payer, paidCents: 1000, owedCents: 1000, owedTo: { [payer]: 1000 } }];
+	return {
+		kind: "expense",
+		description: "Dinner",
+		amountCents: 1000,
+		items: [{ id: "i1", amountCents: 1000, paidBy: payer, splitAmong: [payer] }],
+		entryDate: "2026-11-01",
+		notes: null,
+		category: null,
+		paymentStatus: null,
+		payerConfirmedAt: null,
+		receiverConfirmedAt: null,
+		confirmedAt: null,
+		closedAt: null,
+		closeNote: null,
+		updatedByMemberId: payer,
+		createdAt: "2026-11-01T12:00:00.000Z",
+		updatedAt: "2026-11-01T12:00:00.000Z",
+		deletedAt: null,
+		rowVersion: 1,
+		shares,
+		...overrides,
+	};
 }

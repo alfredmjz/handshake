@@ -8,17 +8,17 @@ Handshake's database (see `docs/shared-ledger-spec.md`).
 
 ## Stack
 
-| Area     | Technology                                                                       |
-| -------- | -------------------------------------------------------------------------------- |
-| Runtime  | **Bun 1.3** for everything (`bun install`, `bun run …`, `bun --bun <tool>`)      |
-| Node.js  | **26 LTS**, only where a host needs it (Vercel's build, API fallback)            |
-| Client   | **Vite 7 + React 19 + React Router 7**, a static single-page app                 |
-| Offline  | **Dexie** (IndexedDB) on the device, `vite-plugin-pwa` service worker on the web |
-| Server   | **Supabase**: Postgres + RLS, Auth with 6-digit email codes                      |
-| Mobile   | **Capacitor 8**, bundling `dist/` (not loading a hosted URL)                     |
-| UI       | Tailwind 3.4 with Pholio's theme tokens, Radix, sonner, lucide-react             |
-| Language | TypeScript 5.9, `strict`                                                         |
-| Format   | Prettier: tabs, width 120, CRLF, double quotes, trailing commas es5              |
+| Area     | Technology                                                                         |
+| -------- | ---------------------------------------------------------------------------------- |
+| Runtime  | **Bun 1.3** for everything (`bun install`, `bun run …`, `bun --bun <tool>`)        |
+| Node.js  | **26 LTS**, only where a host needs it (Vercel's build, API fallback)              |
+| Client   | **Vite 7 + React 19 + React Router 7**, a static single-page app                   |
+| Offline  | **Dexie** (IndexedDB) on the device, `vite-plugin-pwa` service worker on the web   |
+| Server   | **Supabase**: Postgres + RLS, Auth with 6-digit email codes                        |
+| Mobile   | **Capacitor 8**, bundling `dist/` (not loading a hosted URL)                       |
+| UI       | **shadcn/ui** on Tailwind 3.4 and Radix, sonner, lucide; Funnel Display + Sans     |
+| Language | TypeScript 5.9, `strict`                                                           |
+| Format   | Prettier: tabs, width 120, CRLF, double quotes, trailing commas es5                |
 
 ## Commands
 
@@ -43,11 +43,16 @@ Mailpit (sign-in emails) 55324. Do not move them back to 543xx.
 src/
   app.tsx, main.tsx        routes and entry
   pages/                   one file per screen
-  components/ui/           primitives copied from Pholio (button, input, card, label, sonner)
+  components/              containers (screen, book-cover, money, pickers, editor-dialog, confirm-dialog,
+                           notices, sync-status) and art/ (hands, faces, doodles, shake scene)
+  components/ui/           shadcn/ui primitives (button, card, dialog, tabs, toggle-group, list, field, …)
   lib/
     local-db.ts            Dexie schema; the app reads only from here
-    sync/                  types, local apply/merge, engine, controller, transport, mutate
-    groups.ts              hooks and actions for groups
+    sync/                  types, local apply/merge, engine, controller, transport
+    changes.ts             planChange() and commit(intent): the only way screens change data
+    ledger.ts              shares, entry checks, balances and debts (pure)
+    permissions.ts         the role matrix (mirrors private.may)
+    groups.ts              read hooks, with members.ts, entries.ts and invites.ts
     auth.tsx, money.ts, ids.ts, supabase.ts
 supabase/
   migrations/              numbered SQL, applied in filename order
@@ -58,8 +63,10 @@ tests/                     bun unit tests, mirroring src/ paths; fakes in tests/
 ## How data works (offline-first)
 
 1. **Screens read only from Dexie** (`useLiveQuery`). They never query Supabase.
-2. **Every change is a mutation** (`src/lib/sync/types.ts`). `mutate()` applies it to Dexie at once and
-   queues it in `outbox`, in one transaction. Never write to Dexie tables any other way.
+2. **Every change is an intent carried out by mutations** (`src/lib/sync/types.ts`). Screens call
+   `commit(intent)` (`useCommit()`, `src/lib/changes.ts`): in one transaction it reads the group,
+   `planChange()` turns the intent into mutations (or the refusal the server would give), and each is
+   applied to Dexie and queued in `outbox`. Never write to Dexie tables any other way.
 3. **The server is written only through `push_changes()`**, which applies each mutation in its own
    savepoint, records its id in `sync_mutations` so a retry is not applied twice, and rejects what the
    caller may not do. Clients have `SELECT` only on tables; keep it that way.
@@ -74,7 +81,8 @@ tests/                     bun unit tests, mirroring src/ paths; fakes in tests/
 7. **IDs are made on the device** with `newId()`, so rows exist before the server sees them.
 8. **Deletes are soft** (`deleted_at`), so other devices receive them as rows.
 
-Adding a new kind of change: add it to the `Mutation` union, handle it in `applyMutation()`
+Adding a new kind of change: add it to the `Mutation` union, plan it from an intent in `planChange()`
+(`src/lib/changes.ts`, with the server's checks in the server's order), handle it in `applyMutation()`
 (`src/lib/sync/local.ts`) and in `private.apply_mutation()` (new migration), then add unit and pgTAP tests.
 `supabase-transport.ts` is the only file that talks to Supabase about data; keep it that way so the
 backend can change later.
@@ -103,8 +111,11 @@ backend can change later.
 
 - Imports: React → third-party → `@/…`; `import type` for types; `@/*` maps to `src/*`.
 - Comments only where logic is not obvious. No doc blocks or change narration.
+- Follow `docs/design.md`: few words, screens built from the primitives, spacing from the tokens
+  (`gap-control`, `gap-stack`, `gap-section`, `p-panel`, `py-row`, `px-page`), money in Funnel Display, no cursive.
 - Use the theme tokens in `src/styles/globals.css` (`type-*` roles, `bg-card`, `text-muted-foreground`,
-  `border-border`, …); no hard-coded colours or font sizes. New `text-*` size tokens also go in `src/lib/utils.ts`.
+  `border-border`, `text-owed`, `bg-category-*`, …); no hard-coded colours or font sizes. New spacing, size or
+  radius tokens also go in `src/lib/utils.ts` so `cn()` merges them.
 - Lists and pickers sort alphabetically by the label people read, case-insensitive.
 - Layouts work at 375px and 1440px.
 

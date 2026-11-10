@@ -1,41 +1,58 @@
-import { Check, CircleAlert, Cloud, CloudOff, RefreshCw, type LucideIcon } from "lucide-react";
+import { CloudOff, RefreshCw, TriangleAlert } from "lucide-react";
 
+import { Hand } from "@/components/art/hand";
+import { badgeVariants } from "@/components/ui/badge";
 import { useWaitingChanges } from "@/lib/groups";
 import { requestSync, useSyncStatus, type SyncStatus } from "@/lib/sync/controller";
 import { cn } from "@/lib/utils";
 
-function describe(status: SyncStatus, waiting: number): { label: string; Icon: LucideIcon; tone?: string } {
-	const suffix = waiting > 0 ? ` · ${waiting} waiting` : "";
+type Described = {
+	icon: "shake" | "syncing" | "offline" | "error";
+	label: string;
+	spoken: string;
+	tone: "neutral" | "waiting" | "owe" | "outline";
+};
+
+function describe(status: SyncStatus, waiting: number): Described {
+	const pending = waiting > 0 ? `, ${waiting} ${waiting === 1 ? "change" : "changes"} waiting` : "";
 	switch (status.state) {
 		case "offline":
-			return { label: `Offline${suffix}`, Icon: CloudOff };
+			return {
+				icon: "offline",
+				label: waiting > 0 ? `${waiting} waiting` : "Offline",
+				spoken: `Offline${pending}`,
+				tone: "outline",
+			};
 		case "syncing":
-			return { label: "Syncing", Icon: RefreshCw, tone: "[&_svg]:animate-spin" };
+			return { icon: "syncing", label: "Syncing", spoken: "Syncing", tone: "neutral" };
 		case "error":
-			return { label: `Not synced${suffix}`, Icon: CircleAlert, tone: "border-error/40 text-error" };
+			return { icon: "error", label: "Not synced", spoken: `Not synced${pending}`, tone: "owe" };
 		case "idle":
-			return waiting > 0 ? { label: `${waiting} waiting`, Icon: Cloud } : { label: "Synced", Icon: Check };
+			return waiting > 0
+				? { icon: "syncing", label: `${waiting} waiting`, spoken: `Online${pending}`, tone: "waiting" }
+				: { icon: "shake", label: "Synced", spoken: "Synced", tone: "neutral" };
 	}
 }
 
+// Tap to sync now. Synced shows two hands agreeing; waiting is marigold; offline is an outline.
 export function SyncStatusBadge() {
 	const status = useSyncStatus();
-	const waiting = useWaitingChanges();
-	const { label, Icon, tone } = describe(status, waiting);
+	const waiting = useWaitingChanges() ?? 0;
+	const { icon, label, spoken, tone } = describe(status, waiting);
 
 	return (
 		<button
 			type="button"
 			onClick={requestSync}
-			aria-label={`${label}. Sync now`}
+			aria-label={`${spoken}. Sync now`}
 			title={status.state === "error" ? `Couldn't reach the server (${status.error}). Tap to try again.` : "Sync now"}
 			aria-live="polite"
-			className={cn(
-				"type-caption inline-flex items-center gap-1.5 rounded-full border border-border px-2.5 py-1 text-muted-foreground transition-colors hover:bg-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
-				tone
-			)}
+			className={cn(badgeVariants({ tone }), "h-8 gap-1.5 px-3 transition-colors hover:bg-ink/10")}
 		>
-			<Icon className="size-3.5" aria-hidden />
+			{icon === "shake" && <Hand kind="shake" size={26} />}
+			{icon === "syncing" && <RefreshCw className={cn(status.state === "syncing" && "animate-spin")} aria-hidden />}
+			{icon === "offline" && <CloudOff aria-hidden />}
+			{icon === "error" && <TriangleAlert aria-hidden />}
 			{label}
 		</button>
 	);

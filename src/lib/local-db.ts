@@ -1,20 +1,33 @@
 import Dexie, { type EntityTable } from "dexie";
 
-import type { GroupRow, MemberRow, Mutation } from "@/lib/sync/types";
+import type {
+	ConflictRow,
+	CursorRow,
+	EntryRow,
+	GroupRow,
+	InviteRow,
+	InviteTokenRow,
+	MemberRow,
+	Mutation,
+} from "@/lib/sync/types";
 
 export type OutboxEntry = { seq: number; id: string; mutation: Mutation };
-export type CursorEntry = { groupId: string; version: number };
+export type CursorEntry = CursorRow;
 type MetaEntry = { key: string; value: string };
 
 export class LocalDb extends Dexie {
 	groups!: EntityTable<GroupRow, "id">;
 	members!: EntityTable<MemberRow, "id">;
+	entries!: EntityTable<EntryRow, "id">;
+	conflicts!: EntityTable<ConflictRow, "id">;
+	invites!: EntityTable<InviteRow, "id">;
+	inviteTokens!: EntityTable<InviteTokenRow, "inviteId">;
 	outbox!: EntityTable<OutboxEntry, "seq">;
 	cursors!: EntityTable<CursorEntry, "groupId">;
 	meta!: EntityTable<MetaEntry, "key">;
 
-	constructor() {
-		super("handshake");
+	constructor(name = "handshake") {
+		super(name);
 		this.version(1).stores({
 			groups: "id",
 			members: "id, groupId",
@@ -22,6 +35,49 @@ export class LocalDb extends Dexie {
 			cursors: "groupId",
 			meta: "key",
 		});
+		this.version(2)
+			.stores({
+				entries: "id, groupId, [groupId+entryDate]",
+				conflicts: "id, entryId, groupId",
+				invites: "id, groupId",
+				inviteTokens: "inviteId, groupId",
+			})
+			.upgrade(async (tx) => {
+				await tx
+					.table("groups")
+					.toCollection()
+					.modify((group: Record<string, unknown>) => {
+						delete group.baseCurrency;
+						group.completedAt ??= null;
+						group.completedByMemberId ??= null;
+					});
+				await tx
+					.table("members")
+					.toCollection()
+					.modify((member: Record<string, unknown>) => {
+						member.joinedAt ??= null;
+					});
+				// Version 1 never stored entries, conflicts, invites or joinedAt: pull everything again.
+				await tx.table("cursors").clear();
+			});
+		this.version(3)
+			.stores({})
+			.upgrade(async (tx) => {
+				await tx
+					.table("groups")
+					.toCollection()
+					.modify((group: Record<string, unknown>) => {
+						group.note ??= null;
+					});
+				await tx
+					.table("entries")
+					.toCollection()
+					.modify((entry: Record<string, unknown>) => {
+						entry.category ??= null;
+					});
+				// Rows stored before notes and categories: pull everything again to fill them in.
+				await tx.table("cursors").clear();
+			});
 	}
 }
 
