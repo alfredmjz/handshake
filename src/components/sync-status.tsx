@@ -10,7 +10,7 @@ type Described = {
 	icon: "shake" | "syncing" | "offline" | "error";
 	label: string;
 	spoken: string;
-	tone: "neutral" | "waiting" | "owe" | "outline";
+	tone: "neutral" | "waiting" | "owe" | "outline" | "synced";
 };
 
 function describe(status: SyncStatus, waiting: number): Described {
@@ -30,11 +30,11 @@ function describe(status: SyncStatus, waiting: number): Described {
 		case "idle":
 			return waiting > 0
 				? { icon: "syncing", label: `${waiting} waiting`, spoken: `Online${pending}`, tone: "waiting" }
-				: { icon: "shake", label: "Synced", spoken: "Synced", tone: "neutral" };
+				: { icon: "shake", label: "Synced", spoken: "Synced", tone: "synced" };
 	}
 }
 
-// Tap to sync now. Synced shows two hands agreeing; waiting is marigold; offline is an outline.
+// Tap to sync now. Synced is mint with two hands agreeing; waiting is marigold; offline is an outline.
 export function SyncStatusBadge() {
 	const status = useSyncStatus();
 	const waiting = useWaitingChanges() ?? 0;
@@ -47,9 +47,13 @@ export function SyncStatusBadge() {
 			aria-label={`${spoken}. Sync now`}
 			title={status.state === "error" ? `Couldn't reach the server (${status.error}). Tap to try again.` : "Sync now"}
 			aria-live="polite"
-			className={cn(badgeVariants({ tone }), "h-8 gap-1.5 px-3 transition-colors hover:bg-ink/10")}
+			className={cn(
+				badgeVariants({ tone }),
+				"h-9 gap-2 px-3.5 transition-[filter] hover:brightness-95 [&_svg]:size-[1.125rem]"
+			)}
 		>
-			{icon === "shake" && <Hand kind="shake" size={26} />}
+			{/* The handshake is 3:2, so it gets its own box instead of the badge's square icon size. */}
+			{icon === "shake" && <Hand kind="shake" size={36} className="!h-6 !w-9" />}
 			{icon === "syncing" && <RefreshCw className={cn(status.state === "syncing" && "animate-spin")} aria-hidden />}
 			{icon === "offline" && <CloudOff aria-hidden />}
 			{icon === "error" && <TriangleAlert aria-hidden />}

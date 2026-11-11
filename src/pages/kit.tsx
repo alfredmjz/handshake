@@ -12,6 +12,7 @@ import { Amount, RowAmount } from "@/components/money";
 import { EmptyState, Notice } from "@/components/notices";
 import { CategoryPicker, PeoplePicker, PersonPicker } from "@/components/pickers";
 import { Screen, ScreenHeader, Section } from "@/components/screen";
+import { SyncStatusBadge } from "@/components/sync-status";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -139,6 +140,7 @@ export function KitPage() {
 						</Badge>
 						<Badge tone="owed">Owed</Badge>
 						<Badge tone="outline">Not joined yet</Badge>
+						<SyncStatusBadge />
 					</Inline>
 				</Section>
 
