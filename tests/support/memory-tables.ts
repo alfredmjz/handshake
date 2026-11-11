@@ -7,6 +7,7 @@ import type {
 	InviteRow,
 	InviteTokenRow,
 	MemberRow,
+	NudgeRow,
 	Share,
 } from "@/lib/sync/types";
 
@@ -52,6 +53,10 @@ export function createMemoryTables() {
 		(r) => r.inviteId,
 		(r) => r.groupId
 	);
+	const nudges = memoryRows<NudgeRow>(
+		(r) => r.id,
+		(r) => r.groupId
+	);
 	const cursors = memoryRows<CursorRow>(
 		(r) => r.groupId,
 		(r) => r.groupId
@@ -64,11 +69,12 @@ export function createMemoryTables() {
 		conflicts,
 		invites,
 		inviteTokens,
+		nudges,
 		cursors,
 		groupIds: async () => [...groups.map.keys()],
 	};
 
-	return { tables, groups, members, entries, conflicts, invites, inviteTokens, cursors };
+	return { tables, groups, members, entries, conflicts, invites, inviteTokens, nudges, cursors };
 }
 
 export function serverGroup(overrides: Partial<GroupRow> & Pick<GroupRow, "id">): GroupRow {

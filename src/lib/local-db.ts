@@ -9,6 +9,7 @@ import type {
 	InviteTokenRow,
 	MemberRow,
 	Mutation,
+	NudgeRow,
 } from "@/lib/sync/types";
 
 export type OutboxEntry = { seq: number; id: string; mutation: Mutation };
@@ -22,6 +23,7 @@ export class LocalDb extends Dexie {
 	conflicts!: EntityTable<ConflictRow, "id">;
 	invites!: EntityTable<InviteRow, "id">;
 	inviteTokens!: EntityTable<InviteTokenRow, "inviteId">;
+	nudges!: EntityTable<NudgeRow, "id">;
 	outbox!: EntityTable<OutboxEntry, "seq">;
 	cursors!: EntityTable<CursorEntry, "groupId">;
 	meta!: EntityTable<MetaEntry, "key">;
@@ -76,6 +78,12 @@ export class LocalDb extends Dexie {
 						entry.category ??= null;
 					});
 				// Rows stored before notes and categories: pull everything again to fill them in.
+				await tx.table("cursors").clear();
+			});
+		this.version(4)
+			.stores({ nudges: "id, groupId, toMemberId" })
+			.upgrade(async (tx) => {
+				// Nudges sent before this version: pull everything again to fill the table.
 				await tx.table("cursors").clear();
 			});
 	}

@@ -6,11 +6,12 @@ import type {
 	GroupRow,
 	InviteRow,
 	MemberRow,
+	NudgeRow,
 	PullResult,
 	Share,
 } from "@/lib/sync/types";
 
-// pull_changes() rows as supabase/migrations/010_categories_notes.sql builds them.
+// pull_changes() rows as supabase/migrations/011_nudges.sql builds them.
 export type RawGroup = {
 	id: string;
 	name: string;
@@ -90,6 +91,16 @@ export type RawInvite = {
 	row_version: number;
 };
 
+export type RawNudge = {
+	id: string;
+	group_id: string;
+	from_member_id: string;
+	to_member_id: string;
+	amount_cents: number;
+	created_at: string;
+	row_version: number;
+};
+
 export type RawGroupChanges = {
 	group_id: string;
 	version: number;
@@ -98,6 +109,8 @@ export type RawGroupChanges = {
 	entries: RawEntry[];
 	conflicts: RawConflict[];
 	invites: RawInvite[];
+	// Missing from servers before 011.
+	nudges?: RawNudge[];
 };
 
 export type RawPull = { group_ids: string[]; changes: RawGroupChanges[] };
@@ -196,6 +209,18 @@ export function toInviteRow(raw: RawInvite): InviteRow {
 	};
 }
 
+export function toNudgeRow(raw: RawNudge): NudgeRow {
+	return {
+		id: raw.id,
+		groupId: raw.group_id,
+		fromMemberId: raw.from_member_id,
+		toMemberId: raw.to_member_id,
+		amountCents: raw.amount_cents,
+		createdAt: raw.created_at,
+		rowVersion: raw.row_version,
+	};
+}
+
 function toGroupChanges(raw: RawGroupChanges): GroupChanges {
 	return {
 		groupId: raw.group_id,
@@ -205,6 +230,7 @@ function toGroupChanges(raw: RawGroupChanges): GroupChanges {
 		entries: raw.entries.map(toEntryRow),
 		conflicts: raw.conflicts.map(toConflictRow),
 		invites: raw.invites.map(toInviteRow),
+		nudges: (raw.nudges ?? []).map(toNudgeRow),
 	};
 }
 

@@ -1600,6 +1600,23 @@ JSONB` → `[{ "id", "name", "scope", "createdAt", "lastUsedAt" }]` (live only, 
 - Tests: `supabase/tests/categories_notes.test.sql`; `complete.test.sql` and `ledger.test.sql` pin the new
   key sets.
 
+**`011_nudges.sql`** (2026-11-10; chat-spec decision 4, shipped before chat, in-app only)
+
+- `public.nudges (id, group_id, from_member_id, to_member_id, amount_cents > 0, created_at, row_version)`;
+  both members must be in the group (composite keys on `group_members (group_id, id)`) and differ. Indexes
+  `(group_id, row_version)` and `(from_member_id, to_member_id, created_at)`. Members `SELECT` through
+  `is_group_member()`; devices can't write it.
+- Matrix: `nudge.send` for owner, member and guest; not in a completed group (`HS403`).
+- `nudge.send { groupId, nudgeId, toMemberId, amountCents }`, checked in this order: `private.require`; a
+  `nudgeId` already stored → accepted, nothing changes; then `HS422` "That person is not in this group",
+  "You can't nudge yourself", "<name> left the group", "<name> hasn't joined", "<name> doesn't owe you
+  anything" (`private.debt_between(group, from, to)`: summarizeGroup's pairwise debt over live bills and
+  confirmed payments), the amount not whole cents from 1; then `HS409` "You nudged <name> today" when the
+  same sender nudged the same person in the last 24 hours. The stored amount is the one the device sent
+  (its debt at that moment); it doesn't follow later changes.
+- `pull_changes()` (redefined whole): each group change gains `nudges`.
+- Tests: `supabase/tests/nudges.test.sql` (also pins the group change's key set).
+
 #### What chat 3 builds against (as built)
 
 Functions (all `SET search_path = ''`):
@@ -1607,7 +1624,7 @@ Functions (all `SET search_path = ''`):
 | Function                                                                                                 | Returns                                                                                                                                                                                                                               | Called by               |
 | -------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------- |
 | `public.push_changes(p_mutations JSONB)`                                                                 | `{ "applied": [id], "rejected": [{ "id", "code", "reason" }] }`                                                                                                                                                                       | `authenticated`         |
-| `public.pull_changes(p_cursors JSONB DEFAULT '{}')`                                                      | `{ "group_ids": [id], "changes": [{ "group_id", "version", "groups", "members", "entries", "conflicts", "invites" }] }`                                                                                                               | `authenticated`         |
+| `public.pull_changes(p_cursors JSONB DEFAULT '{}')`                                                      | `{ "group_ids": [id], "changes": [{ "group_id", "version", "groups", "members", "entries", "conflicts", "invites", "nudges" }] }`                                                                                                     | `authenticated`         |
 | `public.preview_invite(p_token TEXT)`                                                                    | `{ "groupId", "groupName", "invitedBy", "claimMemberId", "unclaimed": [{ "memberId", "displayName" }], "alreadyMember" }`                                                                                                             | `anon`, `authenticated` |
 | `public.join_group(p_token TEXT, p_claim_member_id UUID DEFAULT NULL, p_display_name TEXT DEFAULT NULL)` | the group id (`UUID`)                                                                                                                                                                                                                 | `authenticated`         |
 | `public.upgrade_guest()`                                                                                 | `VOID`                                                                                                                                                                                                                                | `authenticated`         |
@@ -1619,7 +1636,7 @@ Functions (all `SET search_path = ''`):
 | `api.v1_group(p_token_hash TEXT, p_group_id UUID)`                                                       | one group as above plus `"members": [{ "memberId", "displayName", "active", "paidCents", "owedCents" }]`, or NULL                                                                                                                     | `handshake_api`         |
 | `api.v1_entries(p_token_hash TEXT, p_group_id UUID, p_cursor JSONB, p_limit INT)`                        | `{ "entries": [{ "id", "groupId", "kind", "description", "entryDate", "totalCents", "involved", "paidCents", "owedCents", "hasConflict", "createdAt", "updatedAt", "deletedAt" }], "cursor", "hasMore", "removedGroupIds" }`, or NULL | `handshake_api`         |
 
-Pull rows, snake_case, with exactly these keys (pgTAP checks each set; as of 010):
+Pull rows, snake_case, with exactly these keys (pgTAP checks each set; as of 011):
 
 | Row                | Keys                                                                                                                                                                                                                                                                                                                                                   |
 | ------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
@@ -1629,6 +1646,7 @@ Pull rows, snake_case, with exactly these keys (pgTAP checks each set; as of 010
 | `entries[].shares` | `member_id`, `paid_cents`, `owed_cents`, `owed_to` (payer member id → cents; sorted by `member_id`)                                                                                                                                                                                                                                                    |
 | `conflicts`        | `id`, `group_id`, `entry_id`, `base_version`, `base`, `proposed`, `proposed_by_member_id`, `created_at`, `resolved_at`, `resolved_by_member_id`, `resolution`, `row_version`                                                                                                                                                                           |
 | `invites`          | `id`, `group_id`, `claim_member_id`, `created_by`, `created_at`, `expires_at`, `revoked_at`, `row_version`                                                                                                                                                                                                                                             |
+| `nudges`           | `id`, `group_id`, `from_member_id`, `to_member_id`, `amount_cents`, `created_at`, `row_version`                                                                                                                                                                                                                                                        |
 
 The order of `changes` and of the rows in each list is not defined; the device must not rely on it.
 
@@ -1653,6 +1671,7 @@ permission matrix, `private.may`):
 | `payment.record`                                 | `groupId`, `entryId`, `fromMemberId`, `toMemberId`, `amountCents`, `entryDate`, `notes`; `description` optional; no `category`                                       | Everyone when one side; owner, member between two who can't answer |
 | `payment.confirm`, `payment.decline`             | `groupId`, `entryId`; decline also `note`                                                                                                                            | The side that hasn't agreed (also in a completed group)            |
 | `payment.undo`                                   | `groupId`, `entryId`                                                                                                                                                 | Whoever recorded it, while pending                                 |
+| `nudge.send`                                     | `groupId`, `nudgeId`, `toMemberId`, `amountCents`                                                                                                                    | Everyone, to someone with a login who owes them; once a day each   |
 
 Rejection codes the device can see: `HS403`, `HS404` (only `conflict.resolve` among mutations), `HS409`,
 `HS422`, and passed-through SQLSTATEs such as `23505` (an id already used), `23514` (a blank or overlong

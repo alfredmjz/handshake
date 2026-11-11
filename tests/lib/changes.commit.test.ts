@@ -5,7 +5,7 @@ import Dexie from "dexie";
 
 import { createCommitter, type Commit, type Intent } from "@/lib/changes";
 import { LocalDb } from "@/lib/local-db";
-import { serverGroup, serverMember } from "../support/memory-tables";
+import { serverBill, serverGroup, serverMember } from "../support/memory-tables";
 
 // Dexie may have looked for IndexedDB before fake-indexeddb installed it.
 Dexie.dependencies.indexedDB = indexedDB;
@@ -211,5 +211,46 @@ describe("commit", () => {
 		expect(second).toEqual({ ok: true, mutations: [], createdId: null });
 		expect((await outbox()).map((m) => m.type)).toEqual(["payment.record", "payment.confirm"]);
 		expect((await db.entries.get(entryId))?.paymentStatus).toBe("confirmed");
+	});
+});
+
+describe("commit nudge", () => {
+	test("stores the nudge here, queues it, and a second tap the same day is HS409", async () => {
+		await db.entries.put(
+			serverBill({
+				id: "dinner",
+				groupId: G,
+				createdByMemberId: "alex",
+				amountCents: 2000,
+				items: [{ id: "i1", amountCents: 2000, paidBy: "alex", splitAmong: ["alex", "sam"] }],
+				shares: [
+					{ memberId: "alex", paidCents: 2000, owedCents: 1000, owedTo: { alex: 1000 } },
+					{ memberId: "sam", paidCents: 0, owedCents: 1000, owedTo: { alex: 1000 } },
+				],
+			})
+		);
+		ids = ["nudge-1", "mutation-1"];
+
+		expect(await commit({ type: "nudge", groupId: G, memberId: "sam" })).toMatchObject({
+			ok: true,
+			createdId: "nudge-1",
+		});
+		expect(await db.nudges.get("nudge-1")).toEqual({
+			id: "nudge-1",
+			groupId: G,
+			fromMemberId: "alex",
+			toMemberId: "sam",
+			amountCents: 1000,
+			createdAt: "2026-11-08T10:00:00.000Z",
+			rowVersion: 0,
+		});
+		expect((await outbox()).map((m) => m.type)).toEqual(["nudge.send"]);
+
+		expect(await commit({ type: "nudge", groupId: G, memberId: "sam" })).toEqual({
+			ok: false,
+			code: "HS409",
+			reason: "You nudged Sam today",
+		});
+		expect(syncs).toBe(1);
 	});
 });

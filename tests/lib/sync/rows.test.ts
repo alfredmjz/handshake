@@ -56,6 +56,9 @@ for (const [name, make] of adapters) {
 			expect(await tables.cursors.get("g1")).toEqual({ groupId: "g1", version: 3 });
 			expect(await tables.inviteTokens.byGroup("g1")).toEqual([{ inviteId: "i1", groupId: "g1", token: "t" }]);
 
+			await tables.nudges.put([nudge, { ...nudge, id: "n2", groupId: "g2" }]);
+			expect((await tables.nudges.byGroup("g1")).map((n) => n.id)).toEqual(["n1"]);
+
 			await tables.inviteTokens.delete(["i1"]);
 			await tables.cursors.delete(["g1"]);
 			expect(await tables.inviteTokens.get("i1")).toBeUndefined();
@@ -63,6 +66,16 @@ for (const [name, make] of adapters) {
 		});
 	});
 }
+
+const nudge = {
+	id: "n1",
+	groupId: "g1",
+	fromMemberId: "m1",
+	toMemberId: "m2",
+	amountCents: 300,
+	createdAt: "2026-11-02T00:00:00.000Z",
+	rowVersion: 4,
+};
 
 describe("createDexieSyncStore", () => {
 	test("applies a pull in one transaction and reads cursors back", async () => {
@@ -79,11 +92,13 @@ describe("createDexieSyncStore", () => {
 					entries: [serverBill({ id: "e1", groupId: "g1", createdByMemberId: "m1" })],
 					conflicts: [],
 					invites: [],
+					nudges: [nudge],
 				},
 			],
 		});
 
 		expect(await store.cursors()).toEqual({ g1: 4 });
+		expect(await db.nudges.where("toMemberId").equals("m2").toArray()).toEqual([nudge]);
 		expect(await db.entries.where("[groupId+entryDate]").equals(["g1", "2026-11-01"]).count()).toBe(1);
 	});
 });
@@ -143,6 +158,32 @@ describe("LocalDb version 3", () => {
 		const db = new LocalDb(name);
 		expect((await db.groups.get("g1"))?.note).toBeNull();
 		expect((await db.entries.get("e1"))?.category).toBeNull();
+		expect(await db.cursors.count()).toBe(0);
+	});
+});
+
+describe("LocalDb version 4", () => {
+	test("adds nudges and pulls everything again", async () => {
+		const name = `rows-test-${++dbCount}`;
+		const v3 = new Dexie(name);
+		v3.version(3).stores({
+			groups: "id",
+			members: "id, groupId",
+			outbox: "++seq, &id",
+			cursors: "groupId",
+			meta: "key",
+			entries: "id, groupId, [groupId+entryDate]",
+			conflicts: "id, entryId, groupId",
+			invites: "id, groupId",
+			inviteTokens: "inviteId, groupId",
+		});
+		await v3.table("groups").put({ id: "g1", name: "Trip", note: null, rowVersion: 2 });
+		await v3.table("cursors").put({ groupId: "g1", version: 2 });
+		v3.close();
+
+		const db = new LocalDb(name);
+		expect((await db.groups.get("g1"))?.name).toBe("Trip");
+		expect(await db.nudges.count()).toBe(0);
 		expect(await db.cursors.count()).toBe(0);
 	});
 });

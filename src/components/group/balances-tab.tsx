@@ -6,6 +6,8 @@ import { PaymentEditor } from "@/components/editors/payment-editor";
 import { ShakeConfirmation } from "@/components/editors/shake-confirmation";
 import { DebtCard } from "@/components/group/debt-card";
 import type { GroupData } from "@/components/group/group-data";
+import { NudgeButton } from "@/components/group/nudge-button";
+import { NudgeNotice } from "@/components/group/nudge-notice";
 import { PaymentButtons, pendingSentence } from "@/components/group/payment-buttons";
 import { Amount } from "@/components/money";
 import { Button } from "@/components/ui/button";
@@ -89,17 +91,38 @@ export function BalancesTab({ data }: { data: GroupData }) {
 								tilt={n % 2 === 0 ? "up" : "down"}
 								sentence={iOwe ? `You owe ${names.of(otherId)}` : `${names.of(otherId)} owes you`}
 								actions={
-									mayRecordOwn &&
 									!pending && (
-										<Button
-											size="sm"
-											variant="secondary"
-											onClick={() =>
-												record({ from: debt.fromMemberId, to: debt.toMemberId, amountCents: debt.amountCents })
+										<>
+											{mayRecordOwn && (
+												<Button
+													size="sm"
+													variant="secondary"
+													onClick={() =>
+														record({ from: debt.fromMemberId, to: debt.toMemberId, amountCents: debt.amountCents })
+													}
+												>
+													{iOwe ? "Record payment" : "Record received"}
+												</Button>
+											)}
+											{!iOwe && <NudgeButton data={data} memberId={otherId} />}
+										</>
+									)
+								}
+								notice={
+									iOwe &&
+									me && (
+										<NudgeNotice
+											groupId={data.group?.id ?? ""}
+											fromId={otherId}
+											fromName={names.of(otherId)}
+											meId={me}
+											entries={data.entries}
+											onPaid={
+												mayRecordOwn && !pending
+													? (amountCents) => record({ from: me, to: otherId, amountCents })
+													: undefined
 											}
-										>
-											{iOwe ? "Record payment" : "Record received"}
-										</Button>
+										/>
 									)
 								}
 							/>

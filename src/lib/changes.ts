@@ -3,6 +3,7 @@ import { createContext, useContext } from "react";
 import { isCategory } from "@/lib/categories";
 import { computeShares, validateEntry, type Item, type LedgerMember } from "@/lib/ledger";
 import type { LocalDb } from "@/lib/local-db";
+import { currentDebt, lastNudge, nudgedRecently } from "@/lib/nudge-view";
 import { allowedWhenCompleted, may, type Action } from "@/lib/permissions";
 import { dexieTables, writeTables } from "@/lib/sync/dexie-store";
 import { applyMutation } from "@/lib/sync/local";
@@ -16,6 +17,7 @@ import type {
 	InviteRow,
 	MemberRow,
 	Mutation,
+	NudgeRow,
 	Role,
 } from "@/lib/sync/types";
 
@@ -25,6 +27,8 @@ export type GroupState = {
 	entries: EntryRow[];
 	conflicts: ConflictRow[];
 	invites: InviteRow[];
+	// Only the nudge intent reads it; missing is none.
+	nudges?: NudgeRow[];
 	me: { memberId: string; role: Role; isAnonymous: boolean };
 };
 
@@ -56,7 +60,9 @@ export type GroupIntent =
 	| { type: "completeGroup" }
 	| { type: "reopenGroup" }
 	| { type: "createInvite"; claimMemberId: string | null }
-	| { type: "revokeInvite"; inviteId: string };
+	| { type: "revokeInvite"; inviteId: string }
+	// memberId: the person who owes me; the amount is what they owe me now.
+	| { type: "nudge"; memberId: string };
 
 export type Intent =
 	| { type: "createGroup"; name: string; displayName: string; note?: string | null }
@@ -65,7 +71,7 @@ export type Intent =
 export type RefusalCode = "HS403" | "HS409" | "HS422";
 
 export type Plan =
-	// createdId: the new group, person, entry or invite.
+	// createdId: the new group, person, entry, invite or nudge.
 	{ ok: true; mutations: Mutation[]; createdId: string | null } | { ok: false; code: RefusalCode; reason: string };
 
 export type PlanContext = {
@@ -461,6 +467,22 @@ export function planChange(state: GroupState | null, intent: Intent, ctx: PlanCo
 			if (!invite || invite.revokedAt) return nothing;
 			return one({ type: "invite.revoke", groupId, inviteId: invite.id });
 		}
+
+		case "nudge": {
+			const refused = check(state, "nudge.send");
+			if (refused) return refused;
+			const target = member(intent.memberId);
+			if (!target) return refuse("HS422", "That person is not in this group");
+			if (target.id === me) return refuse("HS422", "You can't nudge yourself");
+			if (target.deletedAt) return refuse("HS422", `${target.displayName} left the group`);
+			if (!canAnswer(target)) return refuse("HS422", `${target.displayName} hasn't joined`);
+			const amountCents = currentDebt(state!.entries, toLedgerMembers(state!.members), target.id, me!);
+			if (amountCents <= 0) return refuse("HS422", `${target.displayName} doesn't owe you anything`);
+			if (nudgedRecently(lastNudge(state!.nudges ?? [], me!, target.id), at))
+				return refuse("HS409", `You nudged ${target.displayName} today`);
+			const nudgeId = ctx.newId();
+			return one({ type: "nudge.send", groupId, nudgeId, toMemberId: target.id, amountCents }, nudgeId);
+		}
 	}
 }
 
@@ -485,10 +507,11 @@ async function readGroupState(db: LocalDb, groupId: string, userId: string, isAn
 	const members = await db.members.where("groupId").equals(groupId).toArray();
 	const mine = members.find((m) => m.userId === userId && !m.deletedAt);
 	if (!mine) return null;
-	const [entries, conflicts, invites] = await Promise.all([
+	const [entries, conflicts, invites, nudges] = await Promise.all([
 		db.entries.where("groupId").equals(groupId).toArray(),
 		db.conflicts.where("groupId").equals(groupId).toArray(),
 		db.invites.where("groupId").equals(groupId).toArray(),
+		db.nudges.where("groupId").equals(groupId).toArray(),
 	]);
 	const state: GroupState = {
 		group,
@@ -496,6 +519,7 @@ async function readGroupState(db: LocalDb, groupId: string, userId: string, isAn
 		entries,
 		conflicts,
 		invites,
+		nudges,
 		me: { memberId: mine.id, role: mine.role, isAnonymous },
 	};
 	return state;

@@ -56,6 +56,12 @@ Handshake still never calls Pholio, and Pholio never sees chat or nudges.
 
 ### 4. Nudges are private, once a day, and lead to a handshake
 
+> **Shipped before chat (2026-11-10, PR #4, `011_nudges.sql`), in-app only.** No chat yet, so the card lives
+> elsewhere: **Nudge** next to each debt owed to you, a notice on the debt card of the person nudged, and a
+> bell listing the nudges sent to you across your groups (group, sender, amount, newest first) with an
+> unseen count kept on the device. A second nudge to the same person within 24 hours is `HS409` (not
+> `HS422` as written below). Email comes later, once a sending domain is verified.
+
 - **Chosen Solution:**
   - The person owed can nudge anyone who owes them, once per 24 hours per person. The nudge carries the
     debt at that moment.

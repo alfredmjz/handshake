@@ -11,7 +11,7 @@ import {
 	type Intent,
 	type PlanContext,
 } from "@/lib/changes";
-import type { ConflictRow, EntryRow, InviteRow, MemberRow } from "@/lib/sync/types";
+import type { ConflictRow, EntryRow, InviteRow, MemberRow, NudgeRow } from "@/lib/sync/types";
 import { serverBill, serverGroup, serverMember } from "../support/memory-tables";
 
 const G = "g1";
@@ -933,5 +933,154 @@ describe("planChange: categories and group notes", () => {
 		expect(plan(state("alex"), { type: "addExpense", draft: { ...bad, description: " " } })).toMatchObject({
 			reason: "The description must be 1 to 120 characters",
 		});
+	});
+});
+
+describe("nudge", () => {
+	// Alex paid 3000 for Alex, Sam and Jo: Sam and Jo owe Alex 1000 each. Gus paid 900 for Gus, Sam and Kim:
+	// Sam and Kim owe Gus 300 each.
+	const debts: EntryRow[] = [
+		serverBill({
+			id: "dinner",
+			groupId: G,
+			createdByMemberId: "alex",
+			amountCents: 3000,
+			items: [{ id: "i1", amountCents: 3000, paidBy: "alex", splitAmong: ["alex", "sam", "jo"] }],
+			shares: [
+				{ memberId: "alex", paidCents: 3000, owedCents: 1000, owedTo: { alex: 1000 } },
+				{ memberId: "sam", paidCents: 0, owedCents: 1000, owedTo: { alex: 1000 } },
+				{ memberId: "jo", paidCents: 0, owedCents: 1000, owedTo: { alex: 1000 } },
+			],
+		}),
+		serverBill({
+			id: "taxi",
+			groupId: G,
+			createdByMemberId: "gus",
+			amountCents: 900,
+			items: [{ id: "i1", amountCents: 900, paidBy: "gus", splitAmong: ["gus", "sam", "kim"] }],
+			shares: [
+				{ memberId: "gus", paidCents: 900, owedCents: 300, owedTo: { gus: 300 } },
+				{ memberId: "sam", paidCents: 0, owedCents: 300, owedTo: { gus: 300 } },
+				{ memberId: "kim", paidCents: 0, owedCents: 300, owedTo: { gus: 300 } },
+			],
+		}),
+	];
+	const owing = (as: "alex" | "sam" | "gus", overrides: Partial<GroupState> = {}) =>
+		state(as, { entries: [...state(as).entries, ...debts], ...overrides });
+	const sent = (from: string, to: string, createdAt: string): NudgeRow => ({
+		id: `n-${from}-${to}-${createdAt}`,
+		groupId: G,
+		fromMemberId: from,
+		toMemberId: to,
+		amountCents: 1000,
+		createdAt,
+		rowVersion: 2,
+	});
+	const HOURS_AGO = (h: number) => new Date(Date.parse(NOW) - h * 60 * 60 * 1000).toISOString();
+
+	test("the owner nudges someone who owes them, for what they owe now", () => {
+		expect(plan(owing("alex"), { type: "nudge", memberId: "sam" })).toEqual({
+			ok: true,
+			mutations: [
+				{ id: "id-2", at: NOW, type: "nudge.send", groupId: G, nudgeId: "id-1", toMemberId: "sam", amountCents: 1000 },
+			],
+			createdId: "id-1",
+		});
+	});
+
+	test("the amount is net of what they owe each other", () => {
+		const back = serverBill({
+			id: "lunch",
+			groupId: G,
+			createdByMemberId: "sam",
+			amountCents: 800,
+			items: [{ id: "i1", amountCents: 800, paidBy: "sam", splitAmong: ["sam", "alex"] }],
+			shares: [
+				{ memberId: "sam", paidCents: 800, owedCents: 400, owedTo: { sam: 400 } },
+				{ memberId: "alex", paidCents: 0, owedCents: 400, owedTo: { sam: 400 } },
+			],
+		});
+		expect(plan(owing("alex", { entries: [...debts, back] }), { type: "nudge", memberId: "sam" })).toMatchObject({
+			ok: true,
+			mutations: [{ amountCents: 600 }],
+		});
+	});
+
+	test("a member and a guest may nudge too", () => {
+		expect(plan(owing("gus"), { type: "nudge", memberId: "sam" })).toMatchObject({
+			ok: true,
+			mutations: [{ toMemberId: "sam", amountCents: 300 }],
+		});
+		const samOwed = serverBill({
+			id: "hotel",
+			groupId: G,
+			createdByMemberId: "sam",
+			amountCents: 200,
+			items: [{ id: "i1", amountCents: 200, paidBy: "sam", splitAmong: ["gus"] }],
+			shares: [
+				{ memberId: "sam", paidCents: 200, owedCents: 0, owedTo: {} },
+				{ memberId: "gus", paidCents: 0, owedCents: 200, owedTo: { sam: 200 } },
+			],
+		});
+		expect(plan(state("sam", { entries: [samOwed] }), { type: "nudge", memberId: "gus" })).toMatchObject({
+			ok: true,
+			mutations: [{ amountCents: 200 }],
+		});
+	});
+
+	test("refusals, in the server's order", () => {
+		const refusal = (s: GroupState | null, memberId: string) => plan(s, { type: "nudge", memberId });
+		expect(refusal(null, "sam")).toEqual({ ok: false, code: "HS403", reason: "You are not a member of this group" });
+		expect(refusal(owing("alex", { group: serverGroup({ id: G, completedAt: NOW }) }), "sam")).toEqual({
+			ok: false,
+			code: "HS403",
+			reason: "This group is completed",
+		});
+		expect(refusal(owing("alex"), "nobody")).toEqual({
+			ok: false,
+			code: "HS422",
+			reason: "That person is not in this group",
+		});
+		expect(refusal(owing("alex"), "alex")).toEqual({ ok: false, code: "HS422", reason: "You can't nudge yourself" });
+		expect(refusal(owing("gus"), "kim")).toEqual({ ok: false, code: "HS422", reason: "Kim left the group" });
+		expect(refusal(owing("alex"), "jo")).toEqual({ ok: false, code: "HS422", reason: "Jo hasn't joined" });
+		expect(refusal(owing("sam"), "alex")).toEqual({
+			ok: false,
+			code: "HS422",
+			reason: "Alex doesn't owe you anything",
+		});
+		expect(refusal(owing("alex"), "gus")).toEqual({
+			ok: false,
+			code: "HS422",
+			reason: "Gus doesn't owe you anything",
+		});
+	});
+
+	test("pending payments don't count toward the debt; confirmed ones do", () => {
+		const paidBack = payment("paid", "sam", "alex", { amountCents: 1000, paymentStatus: "confirmed" });
+		paidBack.shares = [
+			{ memberId: "alex", paidCents: 0, owedCents: 1000, owedTo: { sam: 1000 } },
+			{ memberId: "sam", paidCents: 1000, owedCents: 0, owedTo: {} },
+		];
+		expect(plan(owing("alex", { entries: [...debts, paidBack] }), { type: "nudge", memberId: "sam" })).toMatchObject({
+			ok: false,
+			reason: "Sam doesn't owe you anything",
+		});
+		const waiting = { ...paidBack, paymentStatus: "pending" as const };
+		expect(plan(owing("alex", { entries: [...debts, waiting] }), { type: "nudge", memberId: "sam" })).toMatchObject({
+			ok: true,
+		});
+	});
+
+	test("once per 24 hours per person: HS409 within a day of this device's last nudge", () => {
+		const nudge = (nudges: NudgeRow[]) => plan(owing("alex", { nudges }), { type: "nudge", memberId: "sam" });
+		expect(nudge([sent("alex", "sam", HOURS_AGO(23))])).toEqual({
+			ok: false,
+			code: "HS409",
+			reason: "You nudged Sam today",
+		});
+		expect(nudge([sent("alex", "sam", HOURS_AGO(25))])).toMatchObject({ ok: true });
+		expect(nudge([sent("gus", "sam", HOURS_AGO(1)), sent("alex", "jo", HOURS_AGO(1))])).toMatchObject({ ok: true });
+		expect(nudge([])).toMatchObject({ ok: true });
 	});
 });

@@ -109,6 +109,18 @@ export type InviteRow = {
 	rowVersion: number;
 };
 
+// The person owed (from) reminding someone who owes them (to). amountCents is the debt when it was sent.
+// Synced to the whole group; screens show it only to its two people.
+export type NudgeRow = {
+	id: string;
+	groupId: string;
+	fromMemberId: string;
+	toMemberId: string;
+	amountCents: number;
+	createdAt: string;
+	rowVersion: number;
+};
+
 // Local only: the server keeps just the token's hash.
 export type InviteTokenRow = { inviteId: string; groupId: string; token: string };
 
@@ -159,7 +171,8 @@ type MutationBody =
 	  }
 	| { type: "payment.confirm"; groupId: string; entryId: string }
 	| { type: "payment.decline"; groupId: string; entryId: string; note: string | null }
-	| { type: "payment.undo"; groupId: string; entryId: string };
+	| { type: "payment.undo"; groupId: string; entryId: string }
+	| { type: "nudge.send"; groupId: string; nudgeId: string; toMemberId: string; amountCents: number };
 
 // A change made on this device, applied locally at once and queued for push_changes().
 // The server reads the same JSON, so field names here are the wire format.
@@ -182,5 +195,6 @@ export type GroupChanges = {
 	entries: EntryRow[];
 	conflicts: ConflictRow[];
 	invites: InviteRow[];
+	nudges: NudgeRow[];
 };
 export type PullResult = { groupIds: string[]; changes: GroupChanges[] };

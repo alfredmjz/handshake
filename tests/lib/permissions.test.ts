@@ -44,6 +44,7 @@ describe("permissions match the shared case table", () => {
 			"payment.record.others": true,
 			"payment.respond": true,
 			"payment.undo": true,
+			"nudge.send": true,
 		};
 		expect(Object.keys(everyAction).sort()).toEqual(PERMISSION_CASES.map((permission) => permission.action).sort());
 		for (const role of ROLES) expect(may("nope" as Action, role)).toBe(false);

@@ -71,6 +71,7 @@ Every colour takes Tailwind's alpha modifier (`bg-ink/5`, `border-ink/20`).
 | `confirm-dialog` `ConfirmDialog`                                          | One question, the action named on its button                            |
 | `notices` `EmptyState`, `Notice`                                          | Empty screens; a band that stays until acted on (guest, completed)      |
 | `sync-status` `SyncStatusBadge`                                           | Synced, syncing, waiting, offline                                       |
+| `nudge-bell` `NudgeBell`                                                  | The header bell: nudges to you, unseen count, each opens Balances       |
 | `guest-banner` `GuestBanner`                                              | The guest band on every screen, with Keep my data (email, then code)    |
 | `group-faces` `GroupFaces`                                                | Gives every person in a group a face no one else there has              |
 | `editors/expense-editor` `ExpenseEditor`                                  | Add or edit a bill: amount, items, category, Paid by, Split between     |
@@ -81,6 +82,8 @@ Every colour takes Tailwind's alpha modifier (`bg-ink/5`, `border-ink/20`).
 | `group/entry-list-row` `EntryListRow`                                     | One bill or payment in a list                                           |
 | `group/debt-card` `DebtCard`                                              | A debt or payment between two people, with its buttons                  |
 | `group/payment-buttons` `PaymentButtons`                                  | Confirm, Decline with a note, Undo                                      |
+| `group/nudge-button` `NudgeButton`                                        | Nudge, "Nudged today", "Jo hasn't joined"                               |
+| `group/nudge-notice` `NudgeNotice`                                        | "Alex nudged you · $20.00" on your debt card, with I paid               |
 | `group/name-dialog` `NameDialog`                                          | One name to type (Add person, Rename)                                   |
 | `group/conflict-popup` `ConflictPopup`, `group/conflict-resolver`         | Once per new conflict; the side-by-side resolver                        |
 

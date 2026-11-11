@@ -6,17 +6,19 @@ import {
 	toGroupRow,
 	toInviteRow,
 	toMemberRow,
+	toNudgeRow,
 	toPullResult,
 	type RawConflict,
 	type RawEntry,
 	type RawGroup,
 	type RawInvite,
 	type RawMember,
+	type RawNudge,
 } from "@/lib/sync/wire";
 
 const T = "2026-11-02T09:30:00.123456+00:00";
 
-// Each raw row has exactly the keys pull_changes() emits (supabase/migrations/010_categories_notes.sql).
+// Each raw row has exactly the keys pull_changes() emits (supabase/migrations/011_nudges.sql).
 const rawGroup: RawGroup = {
 	id: "g1",
 	name: "Japan 2027",
@@ -113,6 +115,16 @@ const rawConflict: RawConflict = {
 	resolved_by_member_id: "m1",
 	resolution: "kept_current",
 	row_version: 4,
+};
+
+const rawNudge: RawNudge = {
+	id: "n1",
+	group_id: "g1",
+	from_member_id: "m1",
+	to_member_id: "m2",
+	amount_cents: 2000,
+	created_at: T,
+	row_version: 6,
 };
 
 const rawInvite: RawInvite = {
@@ -246,6 +258,26 @@ describe("wire", () => {
 		});
 	});
 
+	test("nudges", () => {
+		expect(toNudgeRow(rawNudge)).toEqual({
+			id: "n1",
+			groupId: "g1",
+			fromMemberId: "m1",
+			toMemberId: "m2",
+			amountCents: 2000,
+			createdAt: T,
+			rowVersion: 6,
+		});
+	});
+
+	test("a reply from a server before 011 has no nudges", () => {
+		const reply = toPullResult({
+			group_ids: ["g1"],
+			changes: [{ group_id: "g1", version: 1, groups: [], members: [], entries: [], conflicts: [], invites: [] }],
+		});
+		expect(reply.changes[0].nudges).toEqual([]);
+	});
+
 	test("a whole pull reply", () => {
 		expect(
 			toPullResult({
@@ -259,6 +291,7 @@ describe("wire", () => {
 						entries: [rawBill, rawPayment],
 						conflicts: [rawConflict],
 						invites: [rawInvite],
+						nudges: [rawNudge],
 					},
 				],
 			})
@@ -273,6 +306,7 @@ describe("wire", () => {
 					entries: [toEntryRow(rawBill), toEntryRow(rawPayment)],
 					conflicts: [toConflictRow(rawConflict)],
 					invites: [toInviteRow(rawInvite)],
+					nudges: [toNudgeRow(rawNudge)],
 				},
 			],
 		});

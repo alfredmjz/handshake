@@ -6,6 +6,7 @@ import { toast } from "sonner";
 import { HandshakeMark } from "@/components/art/doodles";
 import { Face } from "@/components/art/face";
 import { GuestBanner } from "@/components/guest-banner";
+import { NudgeBell } from "@/components/nudge-bell";
 import { SyncStatusBadge } from "@/components/sync-status";
 import { Button } from "@/components/ui/button";
 import {
@@ -106,9 +107,11 @@ export function SignedInLayout({ user }: { user: CurrentUser }) {
 							className="flex items-center gap-control rounded-full focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
 						>
 							<HandshakeMark className="h-8 w-12" />
-							<span className="type-wordmark">handshake</span>
+							{/* Phones keep the mark only, so the bell, sync badge and account fit at 375px. */}
+							<span className="type-wordmark hidden sm:inline">handshake</span>
 						</Link>
-						<Inline>
+						<Inline wrap={false}>
+							<NudgeBell />
 							<SyncStatusBadge />
 							<DropdownMenu>
 								<DropdownMenuTrigger asChild>

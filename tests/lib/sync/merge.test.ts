@@ -13,7 +13,7 @@ function change<T extends Mutation["type"]>(type: T, fields: Omit<MutationOf<T>,
 }
 
 function changes(groupId: string, version: number, rows: Partial<Omit<GroupChanges, "groupId" | "version">> = {}) {
-	return { groupId, version, groups: [], members: [], entries: [], conflicts: [], invites: [], ...rows };
+	return { groupId, version, groups: [], members: [], entries: [], conflicts: [], invites: [], nudges: [], ...rows };
 }
 
 const alex = serverMember({ id: "alex", groupId: "g1", userId: ME, role: "owner" });
@@ -421,5 +421,43 @@ describe("full pulls after rejected changes", () => {
 		await mergePull(t.tables, fullPull(), [create], ME);
 		expect(t.groups.map.has("new-here")).toBe(true);
 		expect(t.members.map.has("me-new")).toBe(true);
+	});
+});
+
+describe("nudges", () => {
+	const serverNudge = (id: string, groupId = "g1") => ({
+		id,
+		groupId,
+		fromMemberId: "alex",
+		toMemberId: "sam",
+		amountCents: 1000,
+		createdAt: AT,
+		rowVersion: 3,
+	});
+
+	test("pulled nudges land; an unsent one is replayed on top", async () => {
+		const { tables, nudges } = createMemoryTables();
+		const pending = [change("nudge.send", { groupId: "g1", nudgeId: "n2", toMemberId: "sam", amountCents: 500 })];
+		await mergePull(
+			tables,
+			{ groupIds: ["g1"], changes: [changes("g1", 3, { members: [alex, sam], nudges: [serverNudge("n1")] })] },
+			pending,
+			ME
+		);
+		expect([...nudges.map.keys()].sort()).toEqual(["n1", "n2"]);
+		expect(nudges.map.get("n2")?.rowVersion).toBe(0);
+	});
+
+	test("a full pull drops a local nudge the server never stored; a dropped group takes its nudges", async () => {
+		const { tables, nudges } = createMemoryTables();
+		await tables.nudges.put([{ ...serverNudge("local"), rowVersion: 0 }, serverNudge("other", "g2")]);
+		await tables.groups.put([serverGroup({ id: "g2" })]);
+		await mergePull(
+			tables,
+			{ groupIds: ["g1"], changes: [changes("g1", 3, { members: [alex, sam], nudges: [serverNudge("n1")] })] },
+			[],
+			ME
+		);
+		expect([...nudges.map.keys()]).toEqual(["n1"]);
 	});
 });

@@ -15,11 +15,13 @@ type DebtCardProps = {
 	detail?: ReactNode;
 	// Cards in a run alternate their arrow, as on Settle up.
 	tilt?: "up" | "down";
+	// A band under the buttons: a nudge to you.
+	notice?: ReactNode;
 };
 
 // A debt or payment between you and one person: their faces with the amount on a squiggle from the
 // one who pays to the one who's paid, then what's happening and its buttons.
-export function DebtCard({ from, to, amountCents, sentence, actions, detail, tilt = "up" }: DebtCardProps) {
+export function DebtCard({ from, to, amountCents, sentence, actions, detail, tilt = "up", notice }: DebtCardProps) {
 	return (
 		<Card>
 			<PaymentArrow from={from} to={to} amountCents={amountCents} tilt={tilt} />
@@ -30,6 +32,7 @@ export function DebtCard({ from, to, amountCents, sentence, actions, detail, til
 				</span>
 				{actions && <Inline gap="control">{actions}</Inline>}
 			</Inline>
+			{notice}
 		</Card>
 	);
 }

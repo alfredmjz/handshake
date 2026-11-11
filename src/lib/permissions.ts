@@ -21,7 +21,8 @@ export type Action =
 	| "payment.record.own"
 	| "payment.record.others"
 	| "payment.respond"
-	| "payment.undo";
+	| "payment.undo"
+	| "nudge.send";
 
 const ALLOWED: Record<Action, readonly Role[]> = {
 	"group.rename": ["owner"],
@@ -45,6 +46,7 @@ const ALLOWED: Record<Action, readonly Role[]> = {
 	"payment.record.others": ["owner", "member"],
 	"payment.respond": ["owner", "member", "guest"],
 	"payment.undo": ["owner", "member", "guest"],
+	"nudge.send": ["owner", "member", "guest"],
 };
 
 const WHEN_COMPLETED: ReadonlySet<Action> = new Set<Action>([

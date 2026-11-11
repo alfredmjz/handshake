@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Link, useParams } from "react-router";
+import { Link, useParams, useSearchParams } from "react-router";
 
 import { CheckDoodle } from "@/components/art/doodles";
 import { Book } from "@/components/book-cover";
@@ -21,11 +21,16 @@ import { Inline } from "@/components/ui/stack";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { shortDate } from "@/lib/group-view";
 
+// ?tab=balances opens a tab directly (the nudge bell links there).
+const TABS = ["entries", "balances", "people"] as const;
+
 export function GroupPage() {
 	const { groupId = "" } = useParams();
 	const data = useGroupData(groupId);
 	const [adding, setAdding] = useState(false);
 	const [resolving, setResolving] = useState<string | null>(null);
+	const [search, setSearch] = useSearchParams();
+	const tab = TABS.find((t) => t === search.get("tab")) ?? "entries";
 	const { group, me, names } = data;
 
 	if (data.loading) return null;
@@ -97,7 +102,7 @@ export function GroupPage() {
 				className="-mb-stack lg:mb-0"
 			/>
 			<ScreenColumns aside={aside}>
-				<Tabs defaultValue="entries">
+				<Tabs value={tab} onValueChange={(value) => setSearch({ tab: value }, { replace: true })}>
 					<TabsList>
 						<TabsTrigger value="entries">Entries</TabsTrigger>
 						<TabsTrigger value="balances">Balances</TabsTrigger>

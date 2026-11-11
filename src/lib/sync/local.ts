@@ -11,6 +11,7 @@ import type {
 	MemberRow,
 	Mutation,
 	MutationOf,
+	NudgeRow,
 	PullResult,
 	Share,
 } from "@/lib/sync/types";
@@ -30,6 +31,7 @@ export interface LocalTables {
 	conflicts: Rows<ConflictRow>;
 	invites: Rows<InviteRow>;
 	inviteTokens: Rows<InviteTokenRow>;
+	nudges: Rows<NudgeRow>;
 	cursors: Rows<CursorRow>;
 	groupIds(): Promise<string[]>;
 }
@@ -375,6 +377,25 @@ export async function applyMutation(tables: LocalTables, mutation: Mutation, use
 		case "payment.confirm":
 		case "payment.decline":
 			return answerPayment(tables, m, userId);
+		case "nudge.send": {
+			if (await tables.nudges.get(m.nudgeId)) return;
+			const me = await callerMember(tables, m.groupId, userId);
+			const to = await tables.members.get(m.toMemberId);
+			if (!me || !to || to.groupId !== m.groupId || to.id === me.id) return;
+			if (!Number.isSafeInteger(m.amountCents) || m.amountCents <= 0) return;
+			await tables.nudges.put([
+				{
+					id: m.nudgeId,
+					groupId: m.groupId,
+					fromMemberId: me.id,
+					toMemberId: to.id,
+					amountCents: m.amountCents,
+					createdAt: m.at,
+					rowVersion: 0,
+				},
+			]);
+			return;
+		}
 		case "payment.undo": {
 			const entry = await pendingPayment(tables, m.groupId, m.entryId);
 			const me = await callerMember(tables, m.groupId, userId);
@@ -405,6 +426,7 @@ async function dropGroup(tables: LocalTables, groupId: string) {
 	await tables.conflicts.delete(await ids(tables.conflicts, (r) => r.id));
 	await tables.invites.delete(await ids(tables.invites, (r) => r.id));
 	await tables.inviteTokens.delete(await ids(tables.inviteTokens, (r) => r.inviteId));
+	await tables.nudges.delete(await ids(tables.nudges, (r) => r.id));
 	await tables.cursors.delete([groupId]);
 	await tables.groups.delete([groupId]);
 }
@@ -420,6 +442,7 @@ async function keepOnlyPulled(tables: LocalTables, change: GroupChanges) {
 	await drop(tables.entries, change.entries);
 	await drop(tables.conflicts, change.conflicts);
 	await drop(tables.invites, change.invites);
+	await drop(tables.nudges, change.nudges);
 	const invites = new Set(change.invites.map((invite) => invite.id));
 	await tables.inviteTokens.delete(
 		(await tables.inviteTokens.byGroup(change.groupId)).filter((t) => !invites.has(t.inviteId)).map((t) => t.inviteId)
@@ -442,6 +465,7 @@ export async function mergePull(tables: LocalTables, pull: PullResult, pending: 
 		await tables.entries.put(change.entries);
 		await tables.conflicts.put(change.conflicts);
 		await tables.invites.put(change.invites);
+		await tables.nudges.put(change.nudges);
 		await tables.cursors.put([{ groupId: change.groupId, version: change.version }]);
 	}
 

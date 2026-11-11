@@ -43,12 +43,14 @@ function rowIds(m: Mutation): string[] {
 		case "invite.create":
 		case "invite.revoke":
 			return [m.inviteId];
+		case "nudge.send":
+			return [m.nudgeId];
 		default:
 			return [m.entryId];
 	}
 }
 
-// Ids of groups, people, entries, conflicts and invites with a change not yet accepted by the server.
+// Ids of groups, people, entries, conflicts, invites and nudges with a change not yet accepted by the server.
 export function useUnsyncedIds() {
 	return useLiveQuery(async () => new Set((await db.outbox.toArray()).flatMap((e) => rowIds(e.mutation))));
 }

@@ -25,6 +25,7 @@ export function dexieTables(db: LocalDb): LocalTables {
 		conflicts: rows(db.conflicts, "groupId"),
 		invites: rows(db.invites, "groupId"),
 		inviteTokens: rows(db.inviteTokens, "groupId"),
+		nudges: rows(db.nudges, "groupId"),
 		cursors: rows(db.cursors, "groupId"),
 		groupIds: () => db.groups.toCollection().primaryKeys(),
 	};
@@ -33,7 +34,17 @@ export function dexieTables(db: LocalDb): LocalTables {
 // Every table a local write touches: the replica's tables plus the outbox. A read-write transaction over
 // these can run applyMutation or mergePull and queue mutations.
 export function writeTables(db: LocalDb) {
-	return [db.groups, db.members, db.entries, db.conflicts, db.invites, db.inviteTokens, db.cursors, db.outbox];
+	return [
+		db.groups,
+		db.members,
+		db.entries,
+		db.conflicts,
+		db.invites,
+		db.inviteTokens,
+		db.nudges,
+		db.cursors,
+		db.outbox,
+	];
 }
 
 // The next pull then sends every group whole, and mergePull drops what the server doesn't have: how the

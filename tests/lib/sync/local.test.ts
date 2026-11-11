@@ -587,3 +587,39 @@ describe("payments", () => {
 		expect(entries.map.get("p1")).toEqual(confirmed);
 	});
 });
+
+describe("nudges", () => {
+	const nudge = (fields: Partial<MutationOf<"nudge.send">> = {}, at = AT) =>
+		change("nudge.send", { groupId: "g1", nudgeId: "n1", toMemberId: "sam", amountCents: 1000, ...fields }, at);
+
+	test("sending stores the nudge from me, at the device time, not yet synced", async () => {
+		const t = await seeded();
+		await applyMutation(t.tables, nudge(), ME);
+		expect(t.nudges.map.get("n1")).toEqual({
+			id: "n1",
+			groupId: "g1",
+			fromMemberId: "alex",
+			toMemberId: "sam",
+			amountCents: 1000,
+			createdAt: AT,
+			rowVersion: 0,
+		});
+	});
+
+	test("a nudge already here (the server's copy) wins", async () => {
+		const t = await seeded();
+		await applyMutation(t.tables, nudge(), ME);
+		await applyMutation(t.tables, nudge({ amountCents: 5 }, LATER), ME);
+		expect(t.nudges.map.get("n1")?.amountCents).toBe(1000);
+		expect(t.nudges.map.get("n1")?.createdAt).toBe(AT);
+	});
+
+	test("one the server would refuse does nothing here", async () => {
+		const t = await seeded();
+		await applyMutation(t.tables, nudge({ toMemberId: "alex" }), ME);
+		await applyMutation(t.tables, nudge({ toMemberId: "nobody" }), ME);
+		await applyMutation(t.tables, nudge({ amountCents: 0 }), ME);
+		await applyMutation(t.tables, nudge(), "someone-else");
+		expect(t.nudges.map.size).toBe(0);
+	});
+});
