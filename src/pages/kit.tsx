@@ -7,6 +7,8 @@ import { Hand, HandDisc, type HandKind } from "@/components/art/hand";
 import { ShakeScene } from "@/components/art/shake-scene";
 import { Book, BookCover, NewBookButton } from "@/components/book-cover";
 import { ConfirmDialog } from "@/components/confirm-dialog";
+import { DebtCard } from "@/components/group/debt-card";
+import { GuestBanner } from "@/components/guest-banner";
 import { EditorDialog } from "@/components/editor-dialog";
 import { Amount, RowAmount } from "@/components/money";
 import { EmptyState, Notice } from "@/components/notices";
@@ -29,6 +31,7 @@ import { Field, FieldSet } from "@/components/ui/field";
 import { Input, Textarea } from "@/components/ui/input";
 import { List, ListHeading, ListRow } from "@/components/ui/list";
 import { Inline, Stack } from "@/components/ui/stack";
+import { CurrentUserProvider } from "@/lib/auth";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 
 const PEOPLE = [
@@ -166,6 +169,73 @@ export function KitPage() {
 								<Face seed="alex" name="" size={34} />
 							</span>
 						</Button>
+					</div>
+				</Section>
+
+				<Section title="Guest banner">
+					<div data-kit="guest-banner">
+						<CurrentUserProvider value={{ id: "kit-guest", email: "", isAnonymous: true }}>
+							<GuestBanner />
+						</CurrentUserProvider>
+					</div>
+				</Section>
+
+				<Section title="Debt cards">
+					<div data-kit="debt-cards" className="grid gap-stack sm:grid-cols-3">
+						<DebtCard
+							from={{ id: "j2", name: "Jo" }}
+							to={{ id: "a1", name: "You" }}
+							amountCents={1834}
+							sentence="Jo owes you"
+							actions={
+								<>
+									<Button size="sm" variant="secondary">
+										Settle
+									</Button>
+									<Button size="sm" variant="outline">
+										Nudge
+									</Button>
+								</>
+							}
+						/>
+						<DebtCard
+							from={{ id: "a1", name: "You" }}
+							to={{ id: "s4", name: "Sam" }}
+							amountCents={167}
+							tilt="down"
+							fromBadge={
+								<Badge tone="settled">
+									<CheckDoodle /> Paid
+								</Badge>
+							}
+							toBadge={<Badge tone="waiting">Waiting</Badge>}
+							sentence="Waiting for Sam"
+							actions={
+								<Button size="sm" variant="outline">
+									Undo
+								</Button>
+							}
+							actionsSide="from"
+						/>
+						<DebtCard
+							from={{ id: "p3", name: "Priya" }}
+							to={{ id: "a1", name: "You" }}
+							amountCents={1834}
+							fromBadge={
+								<Badge tone="settled">
+									<CheckDoodle /> Paid $10.00
+								</Badge>
+							}
+							sentence="Priya says they paid you"
+							actions={
+								<>
+									<Button size="sm">Confirm</Button>
+									<Button size="sm" variant="outline">
+										Decline
+									</Button>
+								</>
+							}
+						/>
 					</div>
 				</Section>
 

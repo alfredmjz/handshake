@@ -23,6 +23,16 @@ import { EmailSignIn } from "@/pages/sign-in";
 
 const DOESNT_WORK = "This code doesn't work";
 
+// Opening the code of a group you're in takes you straight into it; a screen saying so would be a dead end.
+function AlreadyIn({ groupId, groupName }: { groupId: string; groupName: string }) {
+	const navigate = useNavigate();
+	useEffect(() => {
+		toast(`You're already in ${groupName}`);
+		navigate(`/groups/${groupId}`, { replace: true });
+	}, [groupId, groupName, navigate]);
+	return null;
+}
+
 type Loaded = { code: string } & ({ preview: GroupPreview } | { error: "gone" | "failed" });
 
 function usePreview(code: string | null, online: boolean) {
@@ -199,16 +209,7 @@ function JoinChoice({
 		<ScreenHeader eyebrow={preview.ownerName ? `${preview.ownerName}'s group` : "A group"} title={preview.groupName} />
 	);
 
-	if (signedIn && preview.alreadyMember) {
-		return (
-			<>
-				<ScreenHeader eyebrow="You're already in" title={preview.groupName} />
-				<Button size="lg" onClick={() => navigate(`/groups/${preview.groupId}`)}>
-					Open group
-				</Button>
-			</>
-		);
-	}
+	if (signedIn && preview.alreadyMember) return <AlreadyIn groupId={preview.groupId} groupName={preview.groupName} />;
 
 	return (
 		<>

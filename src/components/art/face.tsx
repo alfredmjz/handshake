@@ -44,10 +44,10 @@ function faceMarkup(look: (typeof LOOKS)[number]) {
 		.join("");
 }
 
-// The drawing's head is centred at (24, 25) with the shoulders below; this puts the head a little below the disc's
-// centre and the bust a little larger, so the whole reads centred once the disc clips the shoulders.
-const FACE_SCALE = 1.08;
-const FACE_FIT = `translate(24 26.5) scale(${FACE_SCALE}) translate(-24 -25)`;
+// The drawing's head is centred at (24, 25) with the shoulders below. Enlarged and moved so the person sits in
+// the middle of the disc, like a portrait, with the shoulders running off the bottom edge.
+const FACE_SCALE = 1.3;
+const FACE_FIT = `translate(24 24) scale(${FACE_SCALE}) translate(-24 -27)`;
 
 type FaceProps = {
 	seed: string;
@@ -66,7 +66,7 @@ export function Face({ seed, name, size, className, faded = false }: FaceProps) 
 		width: size,
 		height: size,
 		background: `hsl(var(--category-${tint}))`,
-		"--face-dot": size < 40 ? 3.4 : 2.8,
+		"--face-dot": (size < 40 ? 3.4 : 2.8) / FACE_SCALE,
 	} as CSSProperties;
 
 	return (
@@ -82,7 +82,8 @@ export function Face({ seed, name, size, className, faded = false }: FaceProps) 
 			>
 				<g
 					className="doodle"
-					style={{ strokeWidth: size < 40 ? 2.2 : size < 64 ? 1.8 : 1.5 }}
+					transform={FACE_FIT}
+					style={{ strokeWidth: (size < 40 ? 2.2 : size < 64 ? 1.8 : 1.5) / FACE_SCALE }}
 					dangerouslySetInnerHTML={{ __html: markup }}
 				/>
 			</svg>

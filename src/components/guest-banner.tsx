@@ -3,7 +3,6 @@ import { toast } from "sonner";
 
 import { EditorDialog } from "@/components/editor-dialog";
 import { MyGuestCodes } from "@/components/guest-code";
-import { Notice } from "@/components/notices";
 import { Button } from "@/components/ui/button";
 import { Field } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
@@ -68,17 +67,21 @@ export function GuestBanner() {
 
 	return (
 		<>
-			<Notice
-				tone="waiting"
-				action={
-					<Button size="sm" variant="outline" onClick={() => setOpen(true)}>
-						Keep my data
-					</Button>
-				}
+			<section
+				aria-label="You're a guest"
+				className="mb-stack grid gap-x-stack gap-y-control rounded-lg border-[1.5px] border-ink/15 bg-waiting/25 px-panel py-row sm:grid-cols-[minmax(0,1fr)_auto] sm:items-center"
 			>
-				You're a guest. When the group is completed, guests lose access. Add your email to keep it.
-				<MyGuestCodes className="flex flex-col" />
-			</Notice>
+				<div className="flex min-w-0 flex-col gap-control">
+					<p className="type-body-sm">
+						<span className="font-semibold">You're a guest.</span> Add your email to keep your groups after they're
+						completed.
+					</p>
+					<MyGuestCodes className="flex flex-col gap-1" />
+				</div>
+				<Button size="sm" variant="outline" className="justify-self-start bg-paper" onClick={() => setOpen(true)}>
+					Keep my data
+				</Button>
+			</section>
 			<EditorDialog
 				open={open}
 				onOpenChange={close}

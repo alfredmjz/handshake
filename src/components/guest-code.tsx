@@ -7,10 +7,11 @@ function GroupGuestCode({ groupId, groupName, named }: { groupId: string; groupN
 	const code = useMyGuestCode(groupId);
 	if (!code) return null;
 	return (
-		<li className="flex items-center gap-control">
-			<span className="min-w-0">
-				{named ? `${groupName}: ` : "Your code is "}
-				<span className="whitespace-nowrap font-semibold tracking-[0.08em]">{formatCode(code)}</span>
+		<li className="flex flex-wrap items-center gap-x-control gap-y-1">
+			<span className="type-label text-muted-foreground">{named ? groupName : "Your code"}</span>
+			{/* A ticket tag, tilted like the amount tags, so the code reads as something to keep. */}
+			<span className="type-money -rotate-2 whitespace-nowrap rounded-md border-[1.5px] border-ink bg-paper px-2 py-0.5 tracking-[0.08em]">
+				{formatCode(code)}
 			</span>
 			<CopyButton text={formatCode(code)} label="Copy your code" done="Code copied" />
 		</li>

@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, type ReactNode } from "react";
 
 import { CheckDoodle } from "@/components/art/doodles";
 import { Face } from "@/components/art/face";
@@ -10,12 +10,14 @@ import { NudgeButton } from "@/components/group/nudge-button";
 import { NudgeNotice } from "@/components/group/nudge-notice";
 import { PaymentButtons, pendingSentence } from "@/components/group/payment-buttons";
 import { Amount } from "@/components/money";
+import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { List, ListHeading, ListRow } from "@/components/ui/list";
 import { Inline, Stack } from "@/components/ui/stack";
 import { canAnswer, paymentSides } from "@/lib/changes";
 import type { Debt } from "@/lib/ledger";
 import type { EntryRow } from "@/lib/sync/types";
+import { formatAmount } from "@/lib/money";
 import { byText } from "@/lib/utils";
 
 type PaymentDraft = { from: string; to: string; amountCents?: number };
@@ -67,50 +69,75 @@ export function BalancesTab({ data }: { data: GroupData }) {
 			) : (
 				<Stack gap="stack">
 					{mine.map(({ otherId, debt, pending }, n) => {
+						if (!me) return null;
 						const person = (id: string) => ({ id, name: names.of(id) });
-						const pendingCard = pending && (
-							<DebtCard
-								key={`${otherId}:pending`}
-								from={person(paymentSides(pending).from ?? otherId)}
-								to={person(paymentSides(pending).to ?? otherId)}
-								amountCents={pending.amountCents}
-								sentence={pendingSentence(pending, names, me)}
-								detail={pending.notes ?? undefined}
-								tilt={n % 2 === 0 ? "down" : "up"}
-								actions={<PaymentButtons entry={pending} data={data} onConfirmed={setShake} />}
-							/>
-						);
-						if (!debt) return pendingCard;
-						const iOwe = debt.fromMemberId === me;
-						const debtCard = (
+						const sides = pending ? paymentSides(pending) : null;
+						// The arrow follows the debt; a payment with nobody owing anything follows the payment.
+						const fromId = debt?.fromMemberId ?? sides?.from ?? otherId;
+						const toId = debt?.toMemberId ?? sides?.to ?? otherId;
+						const amountCents = debt?.amountCents ?? pending?.amountCents ?? 0;
+						const iOwe = fromId === me;
+
+						// A badge under each face for their part of the handshake; your buttons go on your side.
+						const badges = new Map<string, ReactNode>();
+						let actions: ReactNode = null;
+						if (pending && sides?.from && sides.to) {
+							const recorder = pending.createdByMemberId;
+							const target = recorder === sides.from ? sides.to : sides.from;
+							const part = pending.amountCents !== amountCents ? ` ${formatAmount(pending.amountCents)}` : "";
+							badges.set(
+								recorder,
+								<Badge tone="settled">
+									<CheckDoodle />
+									{recorder === sides.from ? "Paid" : "Received"}
+									{part}
+								</Badge>
+							);
+							if (target !== me) badges.set(target, <Badge tone="waiting">Waiting</Badge>);
+							actions = (
+								<PaymentButtons entry={pending} data={data} onConfirmed={target === me ? setShake : undefined} />
+							);
+						} else if (debt) {
+							actions = (
+								<>
+									{mayRecordOwn && (
+										<Button
+											size="sm"
+											variant="secondary"
+											onClick={() =>
+												record({ from: debt.fromMemberId, to: debt.toMemberId, amountCents: debt.amountCents })
+											}
+										>
+											Settle
+										</Button>
+									)}
+									{!iOwe && <NudgeButton data={data} memberId={otherId} />}
+								</>
+							);
+						}
+
+						return (
 							<DebtCard
 								key={otherId}
-								from={person(debt.fromMemberId)}
-								to={person(debt.toMemberId)}
-								amountCents={debt.amountCents}
+								from={person(fromId)}
+								to={person(toId)}
+								amountCents={amountCents}
 								tilt={n % 2 === 0 ? "up" : "down"}
-								sentence={iOwe ? `You owe ${names.of(otherId)}` : `${names.of(otherId)} owes you`}
-								actions={
-									!pending && (
-										<>
-											{mayRecordOwn && (
-												<Button
-													size="sm"
-													variant="secondary"
-													onClick={() =>
-														record({ from: debt.fromMemberId, to: debt.toMemberId, amountCents: debt.amountCents })
-													}
-												>
-													Settle
-												</Button>
-											)}
-											{!iOwe && <NudgeButton data={data} memberId={otherId} />}
-										</>
-									)
+								fromBadge={badges.get(fromId)}
+								toBadge={badges.get(toId)}
+								actions={actions}
+								actionsSide={iOwe ? "from" : "to"}
+								sentence={
+									pending
+										? pendingSentence(pending, names, me)
+										: iOwe
+											? `You owe ${names.of(otherId)}`
+											: `${names.of(otherId)} owes you`
 								}
+								detail={pending?.notes ?? undefined}
 								notice={
-									iOwe &&
-									me && (
+									debt &&
+									iOwe && (
 										<NudgeNotice
 											groupId={data.group?.id ?? ""}
 											fromId={otherId}
@@ -119,7 +146,7 @@ export function BalancesTab({ data }: { data: GroupData }) {
 											entries={data.entries}
 											onPaid={
 												mayRecordOwn && !pending
-													? (amountCents) => record({ from: me, to: otherId, amountCents })
+													? (cents) => record({ from: me, to: otherId, amountCents: cents })
 													: undefined
 											}
 										/>
@@ -127,7 +154,6 @@ export function BalancesTab({ data }: { data: GroupData }) {
 								}
 							/>
 						);
-						return pending ? [debtCard, pendingCard] : debtCard;
 					})}
 				</Stack>
 			)}
