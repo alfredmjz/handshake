@@ -77,7 +77,8 @@ export function Face({ seed, name, size, className, faded = false }: FaceProps) 
 		>
 			<svg
 				viewBox="0 0 48 48"
-				className="block size-full"
+				// Buttons size every svg inside them as an icon; a face always fills its own disc.
+				className="block !size-full"
 				{...(name ? { role: "img", "aria-label": name } : { "aria-hidden": true })}
 			>
 				<g
