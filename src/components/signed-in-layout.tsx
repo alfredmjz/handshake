@@ -115,7 +115,10 @@ export function SignedInLayout({ user }: { user: CurrentUser }) {
 							<DropdownMenu>
 								<DropdownMenuTrigger asChild>
 									<Button variant="ghost" size="icon" aria-label="Account" title="Account" className="rounded-full">
-										<Face seed={user.id} name="" size={36} />
+										{/* A fine ink ring frames the portrait, like the outlines on the stamp and the bell. */}
+										<span className="rounded-full ring-[1.5px] ring-ink ring-offset-[1.5px] ring-offset-paper">
+											<Face seed={user.id} name="" size={34} />
+										</span>
 									</Button>
 								</DropdownMenuTrigger>
 								<DropdownMenuContent>

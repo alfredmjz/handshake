@@ -21,6 +21,26 @@ export function CheckDoodle({ className, label, ...props }: DoodleProps) {
 	);
 }
 
+// A hand-drawn bell; `ringing` adds the two little swings either side when there's something new.
+export function BellDoodle({ className, label, ringing = false, ...props }: DoodleProps & { ringing?: boolean }) {
+	return (
+		<svg viewBox="0 0 24 24" className={cn("shrink-0 overflow-visible", className)} {...a11y(label)} {...props}>
+			<g className="doodle" style={{ strokeWidth: 1.9 }} transform={ringing ? "rotate(-8 12 4)" : undefined}>
+				<path d="M12.1 3.2 L 12 5.1" />
+				<path d="M6.6 16.4 C 7.6 15.1, 7.8 13.5, 7.7 11.5 L 7.7 10.4 C 7.6 7.3, 9.5 5.1, 12.1 5.1 C 14.7 5.2, 16.5 7.4, 16.4 10.5 L 16.4 11.6 C 16.4 13.6, 16.7 15.2, 17.8 16.5" />
+				<path d="M5.3 16.7 C 9.6 16.2, 14.3 16.3, 18.8 16.9" />
+				<path d="M10.1 19.1 C 10.7 20.5, 13.3 20.6, 14 19" />
+			</g>
+			{ringing && (
+				<g className="doodle" style={{ strokeWidth: 1.6 }}>
+					<path d="M3.9 9.6 C 3.3 8, 3.6 6.4, 4.7 5.2" />
+					<path d="M20.1 9.6 C 20.7 8, 20.4 6.4, 19.3 5.2" />
+				</g>
+			)}
+		</svg>
+	);
+}
+
 // The logo: two hands meeting, drawn in one line weight.
 export function HandshakeMark({ className, label, ...props }: DoodleProps) {
 	return (

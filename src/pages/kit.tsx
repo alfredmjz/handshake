@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { MoreHorizontal, Plus, Trash2 } from "lucide-react";
 
-import { CheckDoodle, HandshakeMark, ReceiptDoodle, SquiggleArrow } from "@/components/art/doodles";
+import { BellDoodle, CheckDoodle, HandshakeMark, ReceiptDoodle, SquiggleArrow } from "@/components/art/doodles";
 import { Face, FacePile } from "@/components/art/face";
 import { Hand, HandDisc, type HandKind } from "@/components/art/hand";
 import { ShakeScene } from "@/components/art/shake-scene";
@@ -13,7 +13,7 @@ import { EmptyState, Notice } from "@/components/notices";
 import { CategoryPicker, PeoplePicker, PersonPicker } from "@/components/pickers";
 import { Screen, ScreenHeader, Section } from "@/components/screen";
 import { CompleteSummary } from "@/components/group/complete-summary";
-import { SyncStatusBadge, SyncTag } from "@/components/sync-status";
+import { SyncStamp, SyncStatusBadge } from "@/components/sync-status";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -144,12 +144,29 @@ export function KitPage() {
 						<SyncStatusBadge />
 					</Inline>
 					<Inline gap="stack">
-						<SyncTag icon="shake" tone="synced" label="Synced" />
-						<SyncTag icon="syncing" tone="syncing" label="Syncing" />
-						<SyncTag icon="waiting" tone="waiting" label="2 waiting" />
-						<SyncTag icon="offline" tone="offline" label="Offline" />
-						<SyncTag icon="error" tone="error" label="Not synced" />
+						<SyncStamp state="synced" title="Synced" />
+						<SyncStamp state="syncing" title="Syncing" />
+						<SyncStamp state="waiting" waiting={2} title="2 waiting" />
+						<SyncStamp state="offline" waiting={1} title="Offline, 1 waiting" />
+						<SyncStamp state="error" title="Not synced" />
 					</Inline>
+					<div
+						data-kit="header-corner"
+						className="flex w-fit items-center gap-control rounded-lg border border-border bg-paper px-panel py-control"
+					>
+						<Button variant="ghost" size="icon" className="relative rounded-full" aria-label="Nudges, 2 new">
+							<BellDoodle ringing className="!size-[1.625rem]" />
+							<span className="type-micro absolute -right-0.5 top-0 flex h-5 min-w-5 rotate-6 items-center justify-center rounded-full border-[1.5px] border-ink bg-owe-mark px-1 font-semibold tabular-nums text-paper">
+								2
+							</span>
+						</Button>
+						<SyncStamp state="synced" title="Synced" />
+						<Button variant="ghost" size="icon" className="rounded-full" aria-label="Account">
+							<span className="rounded-full ring-[1.5px] ring-ink ring-offset-[1.5px] ring-offset-paper">
+								<Face seed="alex" name="" size={34} />
+							</span>
+						</Button>
+					</div>
 				</Section>
 
 				<Section title="The cast">

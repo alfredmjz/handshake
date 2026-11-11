@@ -1,7 +1,7 @@
 import { useState } from "react";
-import { Bell } from "lucide-react";
 import { useNavigate } from "react-router";
 
+import { BellDoodle } from "@/components/art/doodles";
 import { Face, FaceSlots } from "@/components/art/face";
 import { Amount } from "@/components/money";
 import { Button } from "@/components/ui/button";
@@ -54,11 +54,11 @@ export function NudgeBell() {
 					title="Nudges"
 					className="relative rounded-full"
 				>
-					<Bell aria-hidden />
+					<BellDoodle ringing={unseen > 0} className="!size-[1.625rem]" />
 					{unseen > 0 && (
 						<span
 							aria-hidden
-							className="type-micro absolute right-0.5 top-0.5 flex h-5 min-w-5 items-center justify-center rounded-full bg-owe-mark px-1 font-semibold text-paper"
+							className="type-micro absolute -right-0.5 top-0 flex h-5 min-w-5 rotate-6 items-center justify-center rounded-full border-[1.5px] border-ink bg-owe-mark px-1 font-semibold tabular-nums text-paper"
 						>
 							{unseen > 9 ? "9+" : unseen}
 						</span>

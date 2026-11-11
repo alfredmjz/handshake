@@ -1,101 +1,92 @@
 import type { ComponentProps } from "react";
-import { cva } from "class-variance-authority";
-import { CloudOff, RefreshCw, TriangleAlert } from "lucide-react";
 
-import { Hand } from "@/components/art/hand";
+import { HAND_BLOB } from "@/components/art/art-markup";
+import { HandsGlyph, type HandsPose } from "@/components/art/hands-glyph";
 import { useWaitingChanges } from "@/lib/groups";
 import { requestSync, useSyncStatus, type SyncStatus } from "@/lib/sync/controller";
 import { cn } from "@/lib/utils";
 
-// A sticker tag: paper, an ink outline and a slight tilt, like the amount tags on payment cards.
-const tag = cva(
-	"type-caption inline-flex h-9 shrink-0 -rotate-2 items-center gap-2 whitespace-nowrap rounded-full border-[1.5px] border-ink px-3.5 font-medium text-ink transition-[filter] hover:brightness-95 [&_svg]:shrink-0",
-	{
-		variants: {
-			tone: {
-				synced: "bg-settled",
-				waiting: "bg-waiting",
-				syncing: "bg-paper",
-				offline: "bg-paper text-muted-foreground",
-				error: "bg-owe-mark",
-			},
-		},
-	}
-);
+export type SyncState = "synced" | "syncing" | "waiting" | "offline" | "error";
 
-type SyncTone = "synced" | "waiting" | "syncing" | "offline" | "error";
-
-type Described = {
-	icon: "shake" | "syncing" | "waiting" | "offline" | "error";
-	label: string;
-	spoken: string;
-	tone: SyncTone;
+// The blob is the same one that sits behind every category hand; its colour and the hands' pose say the state.
+const LOOK: Record<SyncState, { fill: string | null; pose: HandsPose }> = {
+	synced: { fill: "hsl(var(--settled))", pose: "clasped" },
+	syncing: { fill: "hsl(var(--settled) / 0.45)", pose: "shaking" },
+	waiting: { fill: "hsl(var(--waiting))", pose: "clasped" },
+	offline: { fill: null, pose: "apart" },
+	error: { fill: "hsl(var(--owe-mark))", pose: "apart" },
 };
 
-function describe(status: SyncStatus, waiting: number): Described {
+function describe(status: SyncStatus, waiting: number): { state: SyncState; spoken: string } {
 	const pending = waiting > 0 ? `, ${waiting} ${waiting === 1 ? "change" : "changes"} waiting` : "";
 	switch (status.state) {
 		case "offline":
-			return {
-				icon: "offline",
-				label: waiting > 0 ? `${waiting} waiting` : "Offline",
-				spoken: `Offline${pending}`,
-				tone: "offline",
-			};
+			return { state: "offline", spoken: `Offline${pending}` };
 		case "syncing":
-			return { icon: "syncing", label: "Syncing", spoken: "Syncing", tone: "syncing" };
+			return { state: "syncing", spoken: "Syncing" };
 		case "error":
-			return { icon: "error", label: "Not synced", spoken: `Not synced${pending}`, tone: "error" };
+			return { state: "error", spoken: `Not synced${pending}` };
 		case "idle":
-			return waiting > 0
-				? { icon: "waiting", label: `${waiting} waiting`, spoken: `Online${pending}`, tone: "waiting" }
-				: { icon: "shake", label: "Synced", spoken: "Synced", tone: "synced" };
+			return waiting > 0 ? { state: "waiting", spoken: `Online${pending}` } : { state: "synced", spoken: "Synced" };
 	}
 }
 
-export function SyncTag({
-	icon,
-	label,
-	tone,
+// A stamp in the margin: the two hands on a tinted blob. Clasped when everything is on the server, shaking
+// while it syncs, apart when offline or failing. Changes still waiting show as a small tilted count tag.
+export function SyncStamp({
+	state,
+	waiting = 0,
+	className,
 	...props
-}: Omit<ComponentProps<"button">, "children"> & Pick<Described, "icon" | "label" | "tone">) {
+}: Omit<ComponentProps<"button">, "children"> & { state: SyncState; waiting?: number }) {
+	const { fill, pose } = LOOK[state];
 	return (
-		<button type="button" {...props} className={cn(tag({ tone }), props.className)}>
-			{/* The handshake is 3:2, so it gets its own box. Synced it clasps, syncing it shakes, offline it is faded with a cloud. */}
-			{(icon === "shake" || icon === "syncing") && (
-				<Hand
-					kind="shake"
-					size={36}
-					className={cn("!h-6 !w-9", icon === "syncing" && "animate-shake [animation-iteration-count:infinite]")}
+		<button
+			type="button"
+			{...props}
+			className={cn(
+				"relative inline-flex size-tap shrink-0 items-center justify-center rounded-full transition-transform hover:-rotate-3 active:scale-95",
+				className
+			)}
+		>
+			<svg viewBox="0 0 80 80" aria-hidden className="absolute inset-0 size-full overflow-visible">
+				<path
+					transform="translate(40 40) rotate(-8) scale(1.4) translate(-40 -37)"
+					d={HAND_BLOB}
+					style={
+						fill
+							? { fill }
+							: { fill: "none", stroke: "hsl(var(--ink) / 0.55)", strokeWidth: 2.4, strokeDasharray: "5 5" }
+					}
 				/>
+			</svg>
+			<HandsGlyph
+				pose={pose}
+				strokeWidth={5.5}
+				className={cn("relative h-5 w-[1.875rem]", state === "offline" && "opacity-60")}
+			/>
+			{waiting > 0 && state !== "synced" && (
+				<span className="type-micro absolute -right-1.5 -top-1 flex h-5 min-w-5 rotate-6 items-center justify-center rounded-full border-[1.5px] border-ink bg-paper px-1 font-semibold tabular-nums text-ink">
+					{waiting > 9 ? "9+" : waiting}
+				</span>
 			)}
-			{icon === "waiting" && <RefreshCw className="size-[1.125rem]" aria-hidden />}
-			{icon === "offline" && (
-				<>
-					<Hand kind="shake" size={36} className="!h-6 !w-9 opacity-35" />
-					<CloudOff className="size-[1.125rem]" aria-hidden />
-				</>
-			)}
-			{icon === "error" && <TriangleAlert className="size-[1.125rem]" aria-hidden />}
-			{label}
 		</button>
 	);
 }
 
-// Tap to sync now. Synced is mint with two hands clasped; syncing shakes them; waiting is marigold; offline is outline only.
+// Tap to sync now. The words live in the tooltip and for screen readers; the drawing says it at a glance.
 export function SyncStatusBadge() {
 	const status = useSyncStatus();
 	const waiting = useWaitingChanges() ?? 0;
-	const { icon, label, spoken, tone } = describe(status, waiting);
+	const { state, spoken } = describe(status, waiting);
 
 	return (
-		<SyncTag
-			icon={icon}
-			label={label}
-			tone={tone}
+		<SyncStamp
+			state={state}
+			waiting={waiting}
 			onClick={requestSync}
 			aria-label={`${spoken}. Sync now`}
-			title={status.state === "error" ? `Couldn't reach the server (${status.error}). Tap to try again.` : "Sync now"}
+			title={status.state === "error" ? `Couldn't reach the server (${status.error}). Tap to try again.` : spoken}
 			aria-live="polite"
 		/>
 	);
