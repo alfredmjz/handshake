@@ -3,11 +3,11 @@ import { LogOut, Settings } from "lucide-react";
 import { Link, Outlet, useNavigate } from "react-router";
 import { toast } from "sonner";
 
-import { HandshakeMark } from "@/components/art/doodles";
 import { Face } from "@/components/art/face";
+import { HandsGlyph } from "@/components/art/hands-glyph";
 import { GuestBanner } from "@/components/guest-banner";
 import { NudgeBell } from "@/components/nudge-bell";
-import { SyncStatusBadge } from "@/components/sync-status";
+import { SyncMark, useSyncState } from "@/components/sync-status";
 import { Button } from "@/components/ui/button";
 import {
 	DropdownMenu,
@@ -36,7 +36,6 @@ export function showRefusal(code: string | undefined, reason: string) {
 
 export function SignedInLayout({ user }: { user: CurrentUser }) {
 	const [ready, setReady] = useState(false);
-	const navigate = useNavigate();
 
 	// Rebuilt when a guest adds their email (isAnonymous changes) or another account signs in.
 	const commit = useMemo<Commit>(() => {
@@ -95,34 +94,51 @@ export function SignedInLayout({ user }: { user: CurrentUser }) {
 
 	if (!ready) return null;
 
+	return <Shell user={user} commit={commit} />;
+}
+
+function Shell({ user, commit }: { user: CurrentUser; commit: Commit }) {
+	const navigate = useNavigate();
+	const sync = useSyncState();
+
 	return (
 		<CurrentUserProvider value={user}>
 			<CommitProvider value={commit}>
 				<div className="mx-auto flex min-h-dvh w-full max-w-6xl flex-col px-page pb-section pt-[env(safe-area-inset-top)]">
-					<header className="flex items-center justify-between gap-stack py-1 sm:py-row">
+					<header className="flex h-16 items-center justify-between gap-stack">
 						<Link
 							to="/"
-							aria-label="Handshake, home"
-							className="flex items-center gap-control rounded-full focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+							aria-label={`Handshake, home. ${sync.spoken}`}
+							title={sync.error ? `Couldn't reach the server (${sync.error})` : sync.spoken}
+							className="-ml-1 flex min-h-tap items-center gap-control rounded-full px-1 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
 						>
-							<HandshakeMark className="h-8 w-12" />
-							{/* Phones keep the mark only, so the bell, sync badge and account fit at 375px. */}
-							<span className="type-wordmark hidden sm:inline">handshake</span>
+							<SyncMark state={sync.state} waiting={sync.waiting} className="h-7 w-11" />
+							<span className="type-wordmark">handshake</span>
 						</Link>
-						<Inline wrap={false}>
+						<span className="sr-only" aria-live="polite">
+							{sync.state === "synced" ? "" : sync.spoken}
+						</span>
+						<Inline gap="control" wrap={false}>
 							<NudgeBell />
-							<SyncStatusBadge />
 							<DropdownMenu>
 								<DropdownMenuTrigger asChild>
 									<Button variant="ghost" size="icon" aria-label="Account" title="Account" className="rounded-full">
-										{/* A fine ink ring frames the portrait, like the outlines on the stamp and the bell. */}
-										<span className="rounded-full ring-[1.5px] ring-ink ring-offset-[1.5px] ring-offset-paper">
-											<Face seed={user.id} name="" size={34} />
-										</span>
+										<Face seed={user.id} name="" size={32} />
 									</Button>
 								</DropdownMenuTrigger>
-								<DropdownMenuContent>
+								<DropdownMenuContent align="end">
 									<DropdownMenuLabel>{user.isAnonymous ? "Guest" : user.email}</DropdownMenuLabel>
+									<DropdownMenuItem onSelect={(e) => (e.preventDefault(), requestSync())}>
+										<HandsGlyph
+											pose={sync.state === "syncing" ? "shaking" : "clasped"}
+											strokeWidth={6}
+											className="h-4 w-6"
+										/>
+										<span className="flex flex-col">
+											Sync now
+											<span className="type-caption text-muted-foreground">{sync.spoken}</span>
+										</span>
+									</DropdownMenuItem>
 									<DropdownMenuItem onSelect={() => navigate("/settings")}>
 										<Settings className="size-4" aria-hidden />
 										Settings

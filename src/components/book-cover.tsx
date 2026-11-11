@@ -1,4 +1,4 @@
-import { useState, type ReactNode } from "react";
+import { useState, type CSSProperties, type ReactNode } from "react";
 
 import { Hand, type HandKind } from "@/components/art/hand";
 import { cn } from "@/lib/utils";
@@ -30,12 +30,13 @@ type BookCoverProps = {
 	note?: string | null;
 	kind: HandKind;
 	className?: string;
+	style?: CSSProperties;
 };
 
 // The small cover in the Groups grid.
-export function BookCover({ name, note, kind, className }: BookCoverProps) {
+export function BookCover({ name, note, kind, className, style }: BookCoverProps) {
 	return (
-		<div className={cn("relative aspect-[5/6] w-full", className)}>
+		<div className={cn("relative aspect-[5/6] w-full", className)} style={style}>
 			<PagesBehind />
 			<div className={cn("absolute inset-0 overflow-hidden rounded-book", COVER_TINT[kind])}>
 				<Spine />
@@ -51,30 +52,16 @@ export function BookCover({ name, note, kind, className }: BookCoverProps) {
 	);
 }
 
-function CoverFace({
-	name,
-	note,
-	kind,
-	fading = false,
-}: {
-	name: string;
-	note: string | null;
-	kind: HandKind;
-	fading?: boolean;
-}) {
-	const fade = fading ? "animate-cover-face-hide" : "";
+function CoverFace({ name, note, kind }: { name: string; note: string | null; kind: HandKind }) {
 	return (
 		<>
 			<Spine wide />
-			{/* The hand on the right; the name with the note under it, beside the hand. */}
-			<span className={cn("absolute right-[1.375rem] top-[1.0625rem] size-[7.5rem] overflow-hidden", fade)}>
-				<Hand kind={kind} size={120} />
+			<span className="absolute right-panel top-1/2 size-24 -translate-y-1/2 overflow-hidden">
+				<Hand kind={kind} size={96} />
 			</span>
-			<span
-				className={cn("absolute bottom-[4.5rem] left-7 right-[9.5rem] flex flex-col gap-0.5 text-left text-ink", fade)}
-			>
+			<span className="absolute inset-y-0 left-8 right-32 flex flex-col justify-center gap-0.5 text-left text-ink">
 				<span className="type-h3 line-clamp-2 break-words">{name}</span>
-				{note && <span className="type-h4 line-clamp-2 break-words font-normal">{note}</span>}
+				{note && <span className="type-label line-clamp-1 break-words font-display">{note}</span>}
 			</span>
 		</>
 	);
@@ -84,56 +71,41 @@ type BookProps = {
 	name: string;
 	note: string | null;
 	kind: HandKind;
-	// The ledger page under the cover: hidden until the cover is opened, so no text shows behind it.
+	// The ledger page, always open: what you came for is never behind a tap.
 	children: ReactNode;
-	defaultOpen?: boolean;
+	// Arriving from the shelf: the cover swings open once on its spine to show the page.
+	opening?: boolean;
 	className?: string;
+	style?: CSSProperties;
 };
 
-// The group's notebook on its own page. Tapping the cover swings it open on its spine.
-export function Book({ name, note, kind, children, defaultOpen = false, className }: BookProps) {
-	const [open, setOpen] = useState(defaultOpen);
-	const [animate, setAnimate] = useState(false);
+// The group's notebook on its own page. The spine keeps the cover's colour; the ruled margin is the page's.
+export function Book({ name, note, kind, children, opening = false, className, style }: BookProps) {
+	const [covered, setCovered] = useState(opening);
 
 	return (
-		<div className={cn("book-stage relative h-[13.25rem]", className)}>
+		<div className={cn("book-stage relative", className)} style={style}>
 			<PagesBehind />
-			<div
-				className={cn(
-					"absolute inset-0 flex flex-col overflow-hidden rounded-book border border-ink/15 bg-raised py-[1.125rem] pl-[1.875rem] pr-5",
-					!open && "invisible"
-				)}
-			>
-				<span aria-hidden className="absolute inset-y-0 left-4 border-l-[1.5px] border-owe-mark/35" />
+			<div className="relative overflow-hidden rounded-book border border-ink/15 bg-raised py-panel pl-[calc(var(--space-panel)+1.25rem)] pr-panel">
+				<span aria-hidden className={cn("absolute inset-y-0 left-0 w-2.5", COVER_TINT[kind])} />
+				<span aria-hidden className="absolute inset-y-0 left-[1.125rem] border-l-[1.5px] border-owe-mark/30" />
 				{children}
 			</div>
-			{!open ? (
-				<button
-					type="button"
-					onClick={() => {
-						setAnimate(true);
-						setOpen(true);
+			{covered && (
+				<div
+					aria-hidden
+					className={cn(
+						"book-cover-opening pointer-events-none absolute inset-0 animate-cover-open overflow-hidden rounded-book",
+						COVER_TINT[kind]
+					)}
+					onAnimationEnd={(e) => {
+						if (e.animationName === "cover-open") setCovered(false);
 					}}
-					aria-label={`Open ${name}`}
-					className={cn("absolute inset-0 overflow-hidden rounded-book", COVER_TINT[kind])}
 				>
-					<CoverFace name={name} note={note} kind={kind} />
-				</button>
-			) : (
-				animate && (
-					<div
-						aria-hidden
-						className={cn(
-							"book-cover-opening pointer-events-none absolute inset-0 animate-cover-open overflow-hidden rounded-book",
-							COVER_TINT[kind]
-						)}
-						onAnimationEnd={(e) => {
-							if (e.animationName === "cover-open") setAnimate(false);
-						}}
-					>
-						<CoverFace name={name} note={note} kind={kind} fading />
-					</div>
-				)
+					<span className="contents [&>*]:animate-cover-face-hide">
+						<CoverFace name={name} note={note} kind={kind} />
+					</span>
+				</div>
 			)}
 		</div>
 	);

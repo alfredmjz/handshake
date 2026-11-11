@@ -1,10 +1,11 @@
 import { useState } from "react";
-import { Link, useParams, useSearchParams } from "react-router";
+import { Link, useLocation, useParams, useSearchParams } from "react-router";
 
 import { CheckDoodle } from "@/components/art/doodles";
 import { Book } from "@/components/book-cover";
 import { ExpenseEditor } from "@/components/editors/expense-editor";
 import { BalancesTab } from "@/components/group/balances-tab";
+import { BetweenYou } from "@/components/group/between-you";
 import { ConflictPopup } from "@/components/group/conflict-popup";
 import { ConflictResolver } from "@/components/group/conflict-resolver";
 import { EntriesTab } from "@/components/group/entries-tab";
@@ -33,6 +34,8 @@ export function GroupPage() {
 	const [search, setSearch] = useSearchParams();
 	const tab = TABS.find((t) => t === search.get("tab")) ?? "entries";
 	const { group, me, names } = data;
+	// Opened from the shelf: the cover swings open on the way in. A reload or a deep link lands on the page.
+	const fromShelf = (useLocation().state as { fromShelf?: boolean } | null)?.fromShelf === true;
 
 	if (data.loading) return null;
 
@@ -61,9 +64,16 @@ export function GroupPage() {
 
 	const aside = (
 		<>
-			<Book name={group.name} note={group.note} kind={kind}>
+			<Book
+				name={group.name}
+				note={group.note}
+				kind={kind}
+				opening={fromShelf}
+				style={{ viewTransitionName: `book-${group.id}` }}
+			>
 				<LedgerPage
 					name={group.name}
+					note={group.note}
 					kind={kind}
 					people={data.active.map((m) => ({ id: m.id, name: m.displayName }))}
 					balanceCents={balance}
@@ -92,6 +102,9 @@ export function GroupPage() {
 					</Button>
 				</Inline>
 			)}
+			<div className="hidden lg:block">
+				<BetweenYou data={data} />
+			</div>
 		</>
 	);
 

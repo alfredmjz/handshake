@@ -1,3 +1,5 @@
+import { useRef } from "react";
+
 import { EntryListRow } from "@/components/group/entry-list-row";
 import type { GroupData } from "@/components/group/group-data";
 import { todayIso } from "@/components/group/today";
@@ -9,6 +11,10 @@ import { dayLabel, groupByDay, isVisibleTo } from "@/lib/group-view";
 export function EntriesTab({ data }: { data: GroupData }) {
 	const visible = data.entries.filter((e) => isVisibleTo(e, data.me?.id));
 	const today = todayIso();
+	// What was here when the list opened stays still; anything added after lands.
+	const seen = useRef<Set<string> | null>(null);
+	seen.current ??= new Set(visible.map((e) => e.id));
+	const shown = seen.current;
 
 	if (visible.length === 0) {
 		return <EmptyState kind="new" title="No expenses yet." />;
@@ -29,6 +35,7 @@ export function EntriesTab({ data }: { data: GroupData }) {
 								unsynced={data.unsynced.has(entry.id)}
 								needsResolving={data.conflictedIds.has(entry.id)}
 								to={`/groups/${entry.groupId}/entries/${entry.id}`}
+								arrived={!shown.has(entry.id)}
 							/>
 						))}
 					</List>

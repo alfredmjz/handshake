@@ -7,7 +7,7 @@ import { cn } from "@/lib/utils";
 // Pill buttons. One loud thing per screen: the cobalt `default`. Everything else is ink outline,
 // a soft well, or plain text.
 const buttonVariants = cva(
-	"type-control inline-flex shrink-0 items-center justify-center gap-control whitespace-nowrap rounded-full transition-[background-color,border-color,color,transform] duration-150 active:scale-[0.98] disabled:pointer-events-none disabled:opacity-40 [&_svg]:pointer-events-none [&_svg]:size-5 [&_svg]:shrink-0",
+	"type-control inline-flex shrink-0 items-center justify-center gap-control whitespace-nowrap rounded-full transition-[background-color,border-color,color,transform] duration-press ease-out active:scale-[0.97] disabled:pointer-events-none disabled:opacity-40 [&_svg]:pointer-events-none [&_svg]:size-5 [&_svg]:shrink-0",
 	{
 		variants: {
 			variant: {

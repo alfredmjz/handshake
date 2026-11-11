@@ -15,7 +15,7 @@ import { EmptyState, Notice } from "@/components/notices";
 import { CategoryPicker, PeoplePicker, PersonPicker } from "@/components/pickers";
 import { Screen, ScreenHeader, Section } from "@/components/screen";
 import { CompleteSummary } from "@/components/group/complete-summary";
-import { SyncStamp, SyncStatusBadge } from "@/components/sync-status";
+import { SyncMark } from "@/components/sync-status";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -144,14 +144,13 @@ export function KitPage() {
 						</Badge>
 						<Badge tone="owed">Owed</Badge>
 						<Badge tone="outline">Not joined yet</Badge>
-						<SyncStatusBadge />
 					</Inline>
-					<Inline gap="stack">
-						<SyncStamp state="synced" title="Synced" />
-						<SyncStamp state="syncing" title="Syncing" />
-						<SyncStamp state="waiting" waiting={2} title="2 waiting" />
-						<SyncStamp state="offline" waiting={1} title="Offline, 1 waiting" />
-						<SyncStamp state="error" title="Not synced" />
+					<Inline gap="section">
+						<SyncMark state="synced" className="h-8 w-12" />
+						<SyncMark state="syncing" className="h-8 w-12" />
+						<SyncMark state="waiting" waiting={2} className="h-8 w-12" />
+						<SyncMark state="offline" waiting={1} className="h-8 w-12" />
+						<SyncMark state="error" className="h-8 w-12" />
 					</Inline>
 					<div
 						data-kit="header-corner"
@@ -163,11 +162,8 @@ export function KitPage() {
 								2
 							</span>
 						</Button>
-						<SyncStamp state="synced" title="Synced" />
 						<Button variant="ghost" size="icon" className="rounded-full" aria-label="Account">
-							<span className="rounded-full ring-[1.5px] ring-ink ring-offset-[1.5px] ring-offset-paper">
-								<Face seed="alex" name="" size={34} />
-							</span>
+							<Face seed="alex" name="" size={32} />
 						</Button>
 					</div>
 				</Section>

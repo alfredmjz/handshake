@@ -11,6 +11,7 @@ import { NudgeNotice } from "@/components/group/nudge-notice";
 import { PaymentButtons, pendingSentence } from "@/components/group/payment-buttons";
 import { Amount } from "@/components/money";
 import { Badge } from "@/components/ui/badge";
+import { Settle } from "@/components/ui/hairline";
 import { Button } from "@/components/ui/button";
 import { List, ListHeading, ListRow } from "@/components/ui/list";
 import { Inline, Stack } from "@/components/ui/stack";
@@ -62,10 +63,14 @@ export function BalancesTab({ data }: { data: GroupData }) {
 	return (
 		<Stack gap="section">
 			{mine.length === 0 ? (
-				<Inline gap="control" className="type-body py-row">
-					<CheckDoodle className="size-6" />
-					You're all square.
-				</Inline>
+				<div className="flex items-center gap-stack">
+					{/* Loose tiles fall into place: everything between you and the others is in order. */}
+					<Settle play intensity={0.6} aria-label="" aria-hidden className="w-28 shrink-0 sm:w-32" />
+					<Inline gap="control" className="type-body">
+						<CheckDoodle className="size-6" />
+						You're all square.
+					</Inline>
+				</div>
 			) : (
 				<Stack gap="stack">
 					{mine.map(({ otherId, debt, pending }, n) => {

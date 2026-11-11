@@ -79,7 +79,29 @@ const config: Config = {
 				pop: "var(--shadow-pop)",
 				selected: "var(--shadow-selected)",
 			},
+			transitionTimingFunction: {
+				out: "var(--ease-out)",
+				"in-out": "var(--ease-in-out)",
+				spring: "var(--ease-spring)",
+				bounce: "var(--ease-bounce)",
+			},
+			transitionDuration: {
+				press: "var(--duration-press)",
+				quick: "var(--duration-quick)",
+				settle: "var(--duration-settle)",
+				moment: "var(--duration-moment)",
+			},
 			keyframes: {
+				// A new bill or payment is put down on the page: it drops in, tilted, and settles flat.
+				land: {
+					from: { opacity: "0", transform: "translateY(-0.75rem) rotate(-1.2deg) scale(0.98)" },
+					to: { opacity: "1", transform: "none" },
+				},
+				// What just changed keeps a cobalt wash until you've had a moment to see it.
+				"just-changed": {
+					"0%, 55%": { backgroundColor: "hsl(var(--primary) / 0.08)" },
+					"100%": { backgroundColor: "hsl(var(--primary) / 0)" },
+				},
 				"cover-open": { from: { transform: "rotateY(0deg)" }, to: { transform: "rotateY(-112deg)" } },
 				"cover-face-hide": { "0%, 30%": { opacity: "1" }, "42%, 100%": { opacity: "0" } },
 				"hand-in-left": {
@@ -102,8 +124,10 @@ const config: Config = {
 				rise: { from: { opacity: "0", transform: "translateY(10px)" }, to: { opacity: "1", transform: "none" } },
 			},
 			animation: {
-				"cover-open": "cover-open 1.4s cubic-bezier(.55,.05,.25,1) .1s both",
-				"cover-face-hide": "cover-face-hide 1.4s linear .1s both",
+				land: "land var(--duration-settle) var(--ease-bounce) both",
+				"just-changed": "just-changed 2.4s var(--ease-out) both",
+				"cover-open": "cover-open var(--duration-moment) var(--ease-in-out) .32s both",
+				"cover-face-hide": "cover-face-hide var(--duration-moment) linear .32s both",
 				"hand-in-left": "hand-in-left 1.9s cubic-bezier(.3,.7,.2,1) both",
 				"hand-in-right": "hand-in-right 1.9s cubic-bezier(.3,.7,.2,1) both",
 				shake: "shake 1.9s ease-in-out both",

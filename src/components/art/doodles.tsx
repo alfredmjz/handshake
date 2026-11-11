@@ -1,5 +1,6 @@
 import type { SVGProps } from "react";
 
+import { HandsGlyph } from "@/components/art/hands-glyph";
 import { cn } from "@/lib/utils";
 
 type DoodleProps = SVGProps<SVGSVGElement> & { label?: string };
@@ -41,22 +42,9 @@ export function BellDoodle({ className, label, ringing = false, ...props }: Dood
 	);
 }
 
-// The logo: two hands meeting, drawn in one line weight.
-export function HandshakeMark({ className, label, ...props }: DoodleProps) {
-	return (
-		<svg viewBox="0 0 120 80" className={cn("shrink-0", className)} {...a11y(label)} {...props}>
-			<g className="doodle" style={{ strokeWidth: 3.4 }} transform="rotate(-2 60 40)">
-				<path d="M22.6 7.9 C 22.1 15, 21.3 22, 21 29 C 20.6 36, 19.7 42.5, 19.4 49.2" />
-				<path d="M28.3 8.4 C 27.5 16, 27 23.5, 26.3 30.5 C 25.7 37.5, 24.9 43.5, 24.1 49" />
-				<path d="M27.4 12.9 C 31.5 12.2, 36.5 12.7, 43 11.8 C 47 11.4, 52 12.5, 57.4 12" />
-				<path d="M24.3 48.6 C 30 54.5, 40 64.5, 47.4 71.2 C 49.5 74.6, 54.8 75.6, 57.9 72.6" />
-				<path d="M67 48.1 C 70 51, 73 54, 76.1 57.1 C 78.7 59.9, 84 59.8, 86.6 56.6 C 89.1 53.6, 88.9 49.4, 86.7 46.9 C 82.4 42.4, 77.9 37.4, 73.6 32.9" />
-				<path d="M73.6 32.9 C 71.2 29.8, 66.4 28.4, 62.2 29.6 C 60.2 30.2, 58.6 31.6, 57.2 33.2 L 54.6 36.1 C 52.2 38.8, 47.6 39.2, 44.6 36.6 C 41.5 33.9, 41.4 28.9, 44.2 25.9 C 47.4 22.4, 50.8 18.8, 54.4 15.1 C 58.6 11, 64.8 9.4, 70.4 9.7 C 77.4 10.8, 86.6 14, 93.2 12.6" />
-				<path d="M92.2 9.1 C 93 16, 93.6 23.5, 94.4 30.5 C 95 37, 95.7 43, 96.5 48.9" />
-				<path d="M97.9 8.2 C 98.6 15, 99.3 22.5, 99.9 29.5 C 100.5 36.5, 101 42.5, 101.7 49.1" />
-			</g>
-		</svg>
-	);
+// The logo: the two hands clasped, cuffs and all, in one line weight.
+export function HandshakeMark({ className, label }: { className?: string; label?: string }) {
+	return <HandsGlyph pose="clasped" strokeWidth={4.4} label={label} className={cn("shrink-0", className)} />;
 }
 
 // A torn receipt, the thing every group passes around.

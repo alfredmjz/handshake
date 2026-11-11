@@ -1,11 +1,11 @@
 import { CheckDoodle } from "@/components/art/doodles";
 import { FacePile } from "@/components/art/face";
 import { Hand, type HandKind } from "@/components/art/hand";
-import { Amount, standingOf } from "@/components/money";
-import { Inline, Stack } from "@/components/ui/stack";
+import { RollingAmount, standingOf } from "@/components/money";
 
 type LedgerPageProps = {
 	name: string;
+	note: string | null;
 	kind: HandKind;
 	// Everyone in the group, you included.
 	people: { id: string; name: string }[];
@@ -19,30 +19,35 @@ function friendsLabel(others: number) {
 
 const STANDING_LABEL = { owed: "You're owed", owe: "You owe", settled: "Your balance" } as const;
 
-// The first page under a group's cover: its name, its people, and where you stand.
-export function LedgerPage({ name, kind, people, balanceCents }: LedgerPageProps) {
+// The page under a group's cover: its name, its people, and where you stand, in one glance.
+export function LedgerPage({ name, note, kind, people, balanceCents }: LedgerPageProps) {
 	const standing = standingOf(balanceCents);
 	return (
-		<Stack gap="control" className="h-full">
-			<div className="flex items-start justify-between gap-control">
-				<h1 className="type-h2 line-clamp-2 break-words">{name}</h1>
-				<Hand kind={kind} size={52} blob />
+		<div className="flex flex-col gap-stack">
+			<div className="flex items-start justify-between gap-stack">
+				<div className="flex min-w-0 flex-col gap-0.5">
+					<h1 className="type-h2 line-clamp-2 break-words">{name}</h1>
+					{note && <p className="type-body-sm line-clamp-1 break-words text-muted-foreground">{note}</p>}
+				</div>
+				<Hand kind={kind} size={52} blob className="-mr-1 -mt-1" />
 			</div>
-			<Inline gap="control" wrap={false}>
-				<FacePile people={people} size={30} />
-				<span className="type-label text-muted-foreground">{friendsLabel(people.length - 1)}</span>
-			</Inline>
-			<Stack gap="none" className="mt-auto">
-				<span className="type-label text-muted-foreground">{STANDING_LABEL[standing]}</span>
-				{standing === "settled" ? (
-					<Inline gap="control" wrap={false} className="type-h2">
-						<CheckDoodle className="size-7" />
-						Settled up
-					</Inline>
-				) : (
-					<Amount cents={balanceCents} size="lg" tone={standing} />
-				)}
-			</Stack>
-		</Stack>
+			<div className="flex items-end justify-between gap-stack">
+				<div className="flex min-w-0 flex-col">
+					<span className="type-label text-muted-foreground">{STANDING_LABEL[standing]}</span>
+					{standing === "settled" ? (
+						<span className="type-money-lg flex items-center gap-1.5">
+							<CheckDoodle className="size-6" />
+							Settled
+						</span>
+					) : (
+						<RollingAmount cents={balanceCents} size="lg" tone={standing} />
+					)}
+				</div>
+				<div className="flex shrink-0 flex-col items-end gap-1 pb-1">
+					<FacePile people={people} size={28} max={4} />
+					<span className="type-caption text-muted-foreground">{friendsLabel(people.length - 1)}</span>
+				</div>
+			</div>
+		</div>
 	);
 }

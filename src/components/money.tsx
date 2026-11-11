@@ -1,4 +1,4 @@
-import type { ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { cva, type VariantProps } from "class-variance-authority";
 
 import { formatAmount } from "@/lib/money";
@@ -23,6 +23,32 @@ type AmountProps = VariantProps<typeof amountVariants> & {
 export function Amount({ cents, size, tone, signed = false, className }: AmountProps) {
 	const text = signed && cents > 0 ? `+${formatAmount(cents)}` : formatAmount(signed ? cents : Math.abs(cents));
 	return <span className={cn(amountVariants({ size, tone }), className)}>{text}</span>;
+}
+
+// An amount that, when it changes, rolls to the new value instead of swapping: fast at first, then easing in.
+export function RollingAmount({ cents, ...props }: AmountProps) {
+	const [shown, setShown] = useState(cents);
+	const from = useRef(cents);
+
+	useEffect(() => {
+		const start = from.current;
+		from.current = cents;
+		if (start === cents || window.matchMedia("(prefers-reduced-motion: reduce)").matches) {
+			setShown(cents);
+			return;
+		}
+		const began = performance.now();
+		const duration = 620;
+		let frame = requestAnimationFrame(function step(now) {
+			const t = Math.min(1, (now - began) / duration);
+			const eased = 1 - Math.pow(1 - t, 4);
+			setShown(Math.round(start + (cents - start) * eased));
+			if (t < 1) frame = requestAnimationFrame(step);
+		});
+		return () => cancelAnimationFrame(frame);
+	}, [cents]);
+
+	return <Amount cents={shown} {...props} className={cn("tabular-nums", props.className)} />;
 }
 
 export type Standing = "owed" | "owe" | "settled";

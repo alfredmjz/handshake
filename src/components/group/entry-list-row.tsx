@@ -10,6 +10,7 @@ import { paymentSides } from "@/lib/changes";
 import { effectOn, payerIds, sentenceList } from "@/lib/group-view";
 import { formatAmount } from "@/lib/money";
 import type { EntryRow } from "@/lib/sync/types";
+import { cn } from "@/lib/utils";
 
 // "Sam paid Alex $30.00" / "You paid Sam $10.00".
 export function paymentTitle(entry: EntryRow, names: Names): string {
@@ -44,10 +45,20 @@ type EntryListRowProps = {
 	unsynced: boolean;
 	needsResolving: boolean;
 	to: string;
+	// Added while the list was open: it drops in and keeps a wash until you've had a moment to see it.
+	arrived?: boolean;
 };
 
 // One bill or payment in a group's list: its hand, what it was, and what it means for you.
-export function EntryListRow({ entry, names, myMemberId, unsynced, needsResolving, to }: EntryListRowProps) {
+export function EntryListRow({
+	entry,
+	names,
+	myMemberId,
+	unsynced,
+	needsResolving,
+	to,
+	arrived = false,
+}: EntryListRowProps) {
 	const isPayment = entry.kind === "payment";
 	const involved = entry.shares.some((s) => s.memberId === myMemberId);
 	const effect = effectOn(entry, myMemberId);
@@ -56,6 +67,10 @@ export function EntryListRow({ entry, names, myMemberId, unsynced, needsResolvin
 	return (
 		<ListRow
 			asChild
+			className={cn(
+				arrived &&
+					"-mx-2 rounded-lg px-2 [animation:land_var(--duration-settle)_var(--ease-bounce)_both,just-changed_2.4s_var(--ease-out)_both]"
+			)}
 			leading={<HandDisc kind={isPayment ? "shake" : (entry.category ?? "new")} size={46} />}
 			title={isPayment ? paymentTitle(entry, names) : entry.description}
 			subtitle={

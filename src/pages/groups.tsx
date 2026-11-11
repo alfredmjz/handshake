@@ -1,4 +1,5 @@
-import { useState } from "react";
+import { useState, type MouseEvent } from "react";
+import { flushSync } from "react-dom";
 import { X } from "lucide-react";
 import { Link, useNavigate } from "react-router";
 
@@ -59,12 +60,32 @@ function GroupCell({
 	kind: Category | null | undefined;
 	standing: GroupStanding | undefined;
 }) {
+	const to = `/groups/${group.id}`;
+	const navigate = useNavigate();
+	// Only the cover being opened carries the shared name, so it alone lifts off the shelf into the notebook.
+	const [lifting, setLifting] = useState(false);
+
+	function open(e: MouseEvent<HTMLAnchorElement>) {
+		const plainClick = e.button === 0 && !e.metaKey && !e.ctrlKey && !e.shiftKey && !e.altKey;
+		if (!plainClick || !document.startViewTransition || matchMedia("(prefers-reduced-motion: reduce)").matches) return;
+		e.preventDefault();
+		flushSync(() => setLifting(true));
+		document.startViewTransition(() => flushSync(() => navigate(to, { state: { fromShelf: true } })));
+	}
+
 	return (
 		<Link
-			to={`/groups/${group.id}`}
-			className="flex flex-col gap-control rounded-book outline-none focus-visible:ring-2 focus-visible:ring-ring"
+			to={to}
+			state={{ fromShelf: true }}
+			onClick={open}
+			className="flex flex-col gap-control rounded-book outline-none transition-transform duration-quick ease-spring focus-visible:ring-2 focus-visible:ring-ring active:scale-[0.97]"
 		>
-			<BookCover name={group.name} note={group.note} kind={kind ?? "new"} />
+			<BookCover
+				name={group.name}
+				note={group.note}
+				kind={kind ?? "new"}
+				style={lifting ? { viewTransitionName: `book-${group.id}` } : undefined}
+			/>
 			<Standing standing={standing} />
 			{group.rowVersion === 0 && (
 				<Badge tone="waiting" className="self-start">

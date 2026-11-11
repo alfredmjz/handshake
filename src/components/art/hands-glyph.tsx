@@ -26,31 +26,39 @@ export type HandsPose = "clasped" | "shaking" | "apart";
 export function HandsGlyph({
 	pose,
 	strokeWidth = 5,
+	label,
 	className,
 }: {
 	pose: HandsPose;
 	strokeWidth?: number;
+	label?: string;
 	className?: string;
 }) {
 	const apart = pose === "apart";
+	// The hands part and meet on a spring, so a dropped connection reads as a let-go, not a switch.
+	const hand = "transition-transform duration-settle ease-bounce [transform-box:view-box]";
 	return (
-		<svg viewBox="-12 -4 144 88" aria-hidden className={cn("overflow-visible", className)}>
+		<svg
+			viewBox="-12 -4 144 88"
+			{...(label ? { role: "img", "aria-label": label } : { "aria-hidden": true })}
+			className={cn("overflow-visible", className)}
+		>
 			<g
 				className={cn("doodle", pose === "shaking" && "animate-shake [animation-iteration-count:infinite]")}
 				style={{ strokeWidth }}
 				transform="rotate(-2 60 40)"
 			>
 				<g
-					className="transition-transform duration-300"
-					transform={apart ? "translate(-12 6) rotate(-8 30 40)" : undefined}
+					className={hand}
+					style={{ transformOrigin: "30px 40px", transform: apart ? "translate(-12px, 6px) rotate(-8deg)" : undefined }}
 				>
 					{LEFT.map((d) => (
 						<path key={d} d={d} />
 					))}
 				</g>
 				<g
-					className="transition-transform duration-300"
-					transform={apart ? "translate(12 6) rotate(8 90 30)" : undefined}
+					className={hand}
+					style={{ transformOrigin: "90px 30px", transform: apart ? "translate(12px, 6px) rotate(8deg)" : undefined }}
 				>
 					{RIGHT.map((d) => (
 						<path key={d} d={d} />
