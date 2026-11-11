@@ -32,14 +32,14 @@ export function App() {
 		<>
 			{auth.status === "loading" ? null : auth.status === "signed-out" ? (
 				<Routes>
-					<Route path="join/:token" element={<JoinPage signedIn={false} />} />
+					<Route path="join/:code" element={<JoinPage signedIn={false} />} />
 					<Route path="*" element={<SignInPage />} />
 				</Routes>
 			) : (
 				<Routes>
 					<Route element={<SignedInLayout user={auth.user} />}>
 						<Route index element={<GroupsPage />} />
-						<Route path="join/:token" element={<JoinPage signedIn />} />
+						<Route path="join/:code" element={<JoinPage signedIn />} />
 						<Route path="settings" element={<SettingsPage />} />
 						<Route path="groups/:groupId" element={<GroupFaces />}>
 							<Route index element={<GroupPage />} />

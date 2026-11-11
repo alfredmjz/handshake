@@ -12,7 +12,8 @@ import { Amount, RowAmount } from "@/components/money";
 import { EmptyState, Notice } from "@/components/notices";
 import { CategoryPicker, PeoplePicker, PersonPicker } from "@/components/pickers";
 import { Screen, ScreenHeader, Section } from "@/components/screen";
-import { SyncStatusBadge } from "@/components/sync-status";
+import { CompleteSummary } from "@/components/group/complete-summary";
+import { SyncStatusBadge, SyncTag } from "@/components/sync-status";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -118,11 +119,11 @@ export function KitPage() {
 					<Inline>
 						<Button>Add expense</Button>
 						<Button variant="outline">Settle up</Button>
-						<Button variant="secondary">Record received</Button>
+						<Button variant="secondary">Settle</Button>
 						<Button variant="ghost">Later</Button>
 						<Button variant="destructive">Delete</Button>
 						<Button variant="link" size="inline">
-							Have an invite link?
+							Have a group code?
 						</Button>
 						<Button size="icon" variant="ghost" aria-label="More">
 							<MoreHorizontal />
@@ -141,6 +142,13 @@ export function KitPage() {
 						<Badge tone="owed">Owed</Badge>
 						<Badge tone="outline">Not joined yet</Badge>
 						<SyncStatusBadge />
+					</Inline>
+					<Inline gap="stack">
+						<SyncTag icon="shake" tone="synced" label="Synced" />
+						<SyncTag icon="syncing" tone="syncing" label="Syncing" />
+						<SyncTag icon="waiting" tone="waiting" label="2 waiting" />
+						<SyncTag icon="offline" tone="offline" label="Offline" />
+						<SyncTag icon="error" tone="error" label="Not synced" />
 					</Inline>
 				</Section>
 
@@ -278,7 +286,7 @@ export function KitPage() {
 							</Inline>
 							<Inline justify="between">
 								<span className="type-body-sm font-medium">Jo pays you</span>
-								<Button size="sm">Shake on it</Button>
+								<Button size="sm">Settle</Button>
 							</Inline>
 						</Card>
 						<Card variant="well">
@@ -369,10 +377,21 @@ export function KitPage() {
 						open={confirm}
 						onOpenChange={setConfirm}
 						title="Complete Japan 2027?"
-						description="Jo still owes Sam $20.00. Kim is a guest and will lose access."
+						description={<span className="type-body font-semibold text-foreground">8 people still owe $155.02</span>}
 						confirmLabel="Complete group"
 						onConfirm={() => setConfirm(false)}
-					/>
+					>
+						<CompleteSummary
+							rows={["Brian", "DAD", "Jo", "Kim", "Lee", "Mo", "Priya", "Ola"].map((n, i) => ({
+								key: n,
+								fromId: n,
+								text: `${n} → ${i % 2 ? "you" : "Sam"}`,
+								cents: 1834 + i * 400,
+							}))}
+							waiting={1}
+							guests={["Kim", "Lee"]}
+						/>
+					</ConfirmDialog>
 					<div className="flex flex-col items-center gap-stack rounded-xl bg-primary py-section text-primary-foreground">
 						<ShakeScene key={shakeKey} payerTint="hsl(var(--category-groceries))" className="h-40 w-60" />
 						<p className="type-h2 animate-rise">Jo paid you $50.00</p>

@@ -44,6 +44,11 @@ function faceMarkup(look: (typeof LOOKS)[number]) {
 		.join("");
 }
 
+// The drawing's head is centred at (24, 25) with the shoulders below; this puts the head a little below the disc's
+// centre and the bust a little larger, so the whole reads centred once the disc clips the shoulders.
+const FACE_SCALE = 1.08;
+const FACE_FIT = `translate(24 26.5) scale(${FACE_SCALE}) translate(-24 -25)`;
+
 type FaceProps = {
 	seed: string;
 	name: string;

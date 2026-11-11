@@ -4,6 +4,7 @@ import {
 	toConflictRow,
 	toEntryRow,
 	toGroupRow,
+	toGuestCodeRow,
 	toInviteRow,
 	toMemberRow,
 	toNudgeRow,
@@ -11,6 +12,7 @@ import {
 	type RawConflict,
 	type RawEntry,
 	type RawGroup,
+	type RawGuestCode,
 	type RawInvite,
 	type RawMember,
 	type RawNudge,
@@ -18,12 +20,13 @@ import {
 
 const T = "2026-11-02T09:30:00.123456+00:00";
 
-// Each raw row has exactly the keys pull_changes() emits (supabase/migrations/011_nudges.sql).
+// Each raw row has exactly the keys pull_changes() emits (supabase/migrations/012_group_codes.sql).
 const rawGroup: RawGroup = {
 	id: "g1",
 	name: "Japan 2027",
 	note: "Tokyo and Kyoto, April",
 	base_currency: "CAD",
+	join_code: "HX7K2P",
 	created_by: null,
 	created_at: T,
 	deleted_at: null,
@@ -138,6 +141,15 @@ const rawInvite: RawInvite = {
 	row_version: 5,
 };
 
+const rawGuestCode: RawGuestCode = {
+	member_id: "m2",
+	group_id: "g1",
+	code: "K2PHX7",
+	created_at: T,
+	deleted_at: null,
+	row_version: 7,
+};
+
 describe("wire", () => {
 	test("groups drop base_currency", () => {
 		expect(toGroupRow(rawGroup)).toEqual({
@@ -149,6 +161,7 @@ describe("wire", () => {
 			deletedAt: null,
 			completedAt: T,
 			completedByMemberId: "m1",
+			joinCode: "HX7K2P",
 			rowVersion: 2,
 		});
 	});
@@ -270,6 +283,39 @@ describe("wire", () => {
 		});
 	});
 
+	test("guest codes", () => {
+		expect(toGuestCodeRow({ ...rawGuestCode, deleted_at: T })).toEqual({
+			memberId: "m2",
+			groupId: "g1",
+			code: "K2PHX7",
+			createdAt: T,
+			deletedAt: T,
+			rowVersion: 7,
+		});
+	});
+
+	test("a reply from a server before 012 has no join codes, guest codes or moved_away", () => {
+		const { join_code: _, ...oldGroup } = rawGroup;
+		const reply = toPullResult({
+			group_ids: ["g1"],
+			changes: [
+				{
+					group_id: "g1",
+					version: 1,
+					groups: [oldGroup],
+					members: [],
+					entries: [],
+					conflicts: [],
+					invites: [],
+					nudges: [],
+				},
+			],
+		});
+		expect(reply.changes[0].groups[0].joinCode).toBeNull();
+		expect(reply.changes[0].guestCodes).toEqual([]);
+		expect(reply.movedAway).toEqual([]);
+	});
+
 	test("a reply from a server before 011 has no nudges", () => {
 		const reply = toPullResult({
 			group_ids: ["g1"],
@@ -282,6 +328,7 @@ describe("wire", () => {
 		expect(
 			toPullResult({
 				group_ids: ["g1", "g2"],
+				moved_away: ["g3"],
 				changes: [
 					{
 						group_id: "g1",
@@ -292,11 +339,13 @@ describe("wire", () => {
 						conflicts: [rawConflict],
 						invites: [rawInvite],
 						nudges: [rawNudge],
+						guest_codes: [rawGuestCode],
 					},
 				],
 			})
 		).toEqual({
 			groupIds: ["g1", "g2"],
+			movedAway: ["g3"],
 			changes: [
 				{
 					groupId: "g1",
@@ -307,6 +356,7 @@ describe("wire", () => {
 					conflicts: [toConflictRow(rawConflict)],
 					invites: [toInviteRow(rawInvite)],
 					nudges: [toNudgeRow(rawNudge)],
+					guestCodes: [toGuestCodeRow(rawGuestCode)],
 				},
 			],
 		});

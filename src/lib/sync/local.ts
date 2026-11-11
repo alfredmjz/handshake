@@ -6,6 +6,7 @@ import type {
 	EntryRow,
 	GroupChanges,
 	GroupRow,
+	GuestCodeRow,
 	InviteRow,
 	InviteTokenRow,
 	MemberRow,
@@ -32,9 +33,13 @@ export interface LocalTables {
 	invites: Rows<InviteRow>;
 	inviteTokens: Rows<InviteTokenRow>;
 	nudges: Rows<NudgeRow>;
+	guestCodes: Rows<GuestCodeRow>;
 	cursors: Rows<CursorRow>;
 	groupIds(): Promise<string[]>;
 }
+
+// "<displayName> is now signed in on another device", for a group this device lost.
+export type MovedAwayNotice = { groupId: string; groupName: string; displayName: string };
 
 const INVITE_LIFETIME_MS = 14 * 24 * 60 * 60 * 1000;
 
@@ -223,6 +228,7 @@ export async function applyMutation(tables: LocalTables, mutation: Mutation, use
 					deletedAt: null,
 					completedAt: null,
 					completedByMemberId: null,
+					joinCode: null,
 					rowVersion: 0,
 				},
 			]);
@@ -268,6 +274,9 @@ export async function applyMutation(tables: LocalTables, mutation: Mutation, use
 			if (group?.completedAt) await tables.groups.put([{ ...group, completedAt: null, completedByMemberId: null }]);
 			return;
 		}
+		// Only the server can make the new code; the pull brings it.
+		case "group.recode":
+			return;
 		case "member.add": {
 			if (await tables.members.get(m.memberId)) return;
 			await tables.members.put([
@@ -427,6 +436,7 @@ async function dropGroup(tables: LocalTables, groupId: string) {
 	await tables.invites.delete(await ids(tables.invites, (r) => r.id));
 	await tables.inviteTokens.delete(await ids(tables.inviteTokens, (r) => r.inviteId));
 	await tables.nudges.delete(await ids(tables.nudges, (r) => r.id));
+	await tables.guestCodes.delete(await ids(tables.guestCodes, (r) => r.memberId));
 	await tables.cursors.delete([groupId]);
 	await tables.groups.delete([groupId]);
 }
@@ -443,6 +453,10 @@ async function keepOnlyPulled(tables: LocalTables, change: GroupChanges) {
 	await drop(tables.conflicts, change.conflicts);
 	await drop(tables.invites, change.invites);
 	await drop(tables.nudges, change.nudges);
+	const codes = new Set(change.guestCodes.map((c) => c.memberId));
+	await tables.guestCodes.delete(
+		(await tables.guestCodes.byGroup(change.groupId)).filter((c) => !codes.has(c.memberId)).map((c) => c.memberId)
+	);
 	const invites = new Set(change.invites.map((invite) => invite.id));
 	await tables.inviteTokens.delete(
 		(await tables.inviteTokens.byGroup(change.groupId)).filter((t) => !invites.has(t.inviteId)).map((t) => t.inviteId)
@@ -451,10 +465,26 @@ async function keepOnlyPulled(tables: LocalTables, change: GroupChanges) {
 
 // `pending` must be read in the same transaction as this merge, so changes made while the pull was
 // in flight are replayed too.
-export async function mergePull(tables: LocalTables, pull: PullResult, pending: Mutation[], userId: string) {
+// Returns a notice for each group dropped because this guest's name was taken back on another device.
+export async function mergePull(
+	tables: LocalTables,
+	pull: PullResult,
+	pending: Mutation[],
+	userId: string
+): Promise<MovedAwayNotice[]> {
 	// Groups created here that haven't reached the server yet are missing from groupIds; keep them.
 	const keep = new Set([...pull.groupIds, ...pending.flatMap((m) => (m.type === "group.create" ? [m.groupId] : []))]);
-	for (const groupId of await tables.groupIds()) if (!keep.has(groupId)) await dropGroup(tables, groupId);
+	const movedAway = new Set(pull.movedAway ?? []);
+	const notices: MovedAwayNotice[] = [];
+	for (const groupId of await tables.groupIds()) {
+		if (keep.has(groupId)) continue;
+		if (movedAway.has(groupId)) {
+			const group = await tables.groups.get(groupId);
+			const me = await callerMember(tables, groupId, userId);
+			if (group && me?.role === "guest") notices.push({ groupId, groupName: group.name, displayName: me.displayName });
+		}
+		await dropGroup(tables, groupId);
+	}
 
 	for (const change of pull.changes) {
 		const cursor = await tables.cursors.get(change.groupId);
@@ -466,6 +496,7 @@ export async function mergePull(tables: LocalTables, pull: PullResult, pending: 
 		await tables.conflicts.put(change.conflicts);
 		await tables.invites.put(change.invites);
 		await tables.nudges.put(change.nudges);
+		await tables.guestCodes.put(change.guestCodes);
 		await tables.cursors.put([{ groupId: change.groupId, version: change.version }]);
 	}
 
@@ -474,4 +505,5 @@ export async function mergePull(tables: LocalTables, pull: PullResult, pending: 
 		if (await isStale(tables, mutation, userId)) continue;
 		await applyMutation(tables, mutation, userId);
 	}
+	return notices;
 }

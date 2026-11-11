@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 
 import {
 	canAnswer,
+	isNameTaken,
 	paymentCountsAtOnce,
 	pendingPaymentBetween,
 	planChange,
@@ -11,12 +12,11 @@ import {
 	type Intent,
 	type PlanContext,
 } from "@/lib/changes";
-import type { ConflictRow, EntryRow, InviteRow, MemberRow, NudgeRow } from "@/lib/sync/types";
+import type { ConflictRow, EntryRow, MemberRow, NudgeRow } from "@/lib/sync/types";
 import { serverBill, serverGroup, serverMember } from "../support/memory-tables";
 
 const G = "g1";
 const NOW = "2026-11-08T10:00:00.000Z";
-const TOKEN = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJ0123456"; // 43 characters
 
 const member = (id: string, overrides: Partial<MemberRow>) => serverMember({ id, groupId: G, ...overrides });
 
@@ -49,17 +49,6 @@ function payment(id: string, from: string, to: string, overrides: Partial<EntryR
 	});
 }
 
-const invite = (id: string, createdBy: string): InviteRow => ({
-	id,
-	groupId: G,
-	claimMemberId: null,
-	createdBy,
-	createdAt: "2026-11-02T00:00:00.000Z",
-	expiresAt: "2026-11-16T00:00:00.000Z",
-	revokedAt: null,
-	rowVersion: 3,
-});
-
 const conflict = (overrides: Partial<ConflictRow> = {}): ConflictRow => ({
 	id: "c1",
 	groupId: G,
@@ -76,7 +65,7 @@ const conflict = (overrides: Partial<ConflictRow> = {}): ConflictRow => ({
 	...overrides,
 });
 
-// Each of Alex, Sam and Gus has a bill and an invite of their own (Gus can't make invites, so none), one
+// Each of Alex, Sam and Gus has a bill of their own, one
 // pending payment to answer and one to undo: sam→alex (Sam's), gus→sam (Gus's), alex→gus (Alex's).
 function state(as: "alex" | "sam" | "gus", overrides: Partial<GroupState> = {}): GroupState {
 	const me = MEMBERS.find((m) => m.id === as)!;
@@ -92,7 +81,6 @@ function state(as: "alex" | "sam" | "gus", overrides: Partial<GroupState> = {}):
 			payment("p-alex-gus", "alex", "gus"),
 		],
 		conflicts: [conflict()],
-		invites: [invite("inv-alex", "user-a"), invite("inv-sam", "user-s")],
 		me: { memberId: me.id, role: me.role, isAnonymous: me.role === "guest" },
 		...overrides,
 	};
@@ -102,7 +90,6 @@ function context(overrides: Partial<PlanContext> = {}): PlanContext {
 	let n = 0;
 	return {
 		newId: () => `id-${++n}`,
-		randomToken: () => TOKEN,
 		now: NOW,
 		today: "2026-11-08",
 		isAnonymous: false,
@@ -144,6 +131,7 @@ const MATRIX: [string, (as: Actor) => GroupIntent, [boolean, boolean, boolean], 
 	["describeGroup", () => ({ type: "describeGroup", note: "Tokyo" }), [true, false, false], false],
 	["deleteGroup", () => ({ type: "deleteGroup" }), [true, false, false], true],
 	["completeGroup", () => ({ type: "completeGroup" }), [true, false, false], false],
+	["resetGroupCode", () => ({ type: "resetGroupCode" }), [true, false, false], false],
 	["addPerson", () => ({ type: "addPerson", displayName: "Lee" }), [true, true, false], false],
 	[
 		"renamePerson (self)",
@@ -172,14 +160,6 @@ const MATRIX: [string, (as: Actor) => GroupIntent, [boolean, boolean, boolean], 
 		"resolveConflict",
 		() => ({ type: "resolveConflict", conflictId: "c1", resolution: "kept_current", final: draft() }),
 		[true, true, false],
-		false,
-	],
-	["createInvite", () => ({ type: "createInvite", claimMemberId: null }), [true, true, false], false],
-	["revokeInvite (own)", (as) => ({ type: "revokeInvite", inviteId: `inv-${as}` }), [true, true, false], false],
-	[
-		"revokeInvite (others)",
-		(as) => ({ type: "revokeInvite", inviteId: `inv-${others[as]}` }),
-		[true, false, false],
 		false,
 	],
 	[
@@ -526,65 +506,6 @@ describe("planChange: mutations", () => {
 				final: draft({ description: "" }),
 			})
 		).toEqual({ ok: false, code: "HS422", reason: "The description must be 1 to 120 characters" });
-	});
-
-	test("createInvite: token from ctx, 14 days, the new invite's id", () => {
-		expect(plan(state("sam"), { type: "createInvite", claimMemberId: "jo" })).toEqual({
-			ok: true,
-			createdId: "id-1",
-			mutations: [
-				{
-					id: "id-2",
-					at,
-					type: "invite.create",
-					groupId: G,
-					inviteId: "id-1",
-					token: TOKEN,
-					claimMemberId: "jo",
-					expiresAt: "2026-11-22T10:00:00.000Z",
-				},
-			],
-		});
-	});
-
-	test("createInvite refusals", () => {
-		const reason = "An invite can only be for someone in this group who hasn't joined";
-		expect(plan(state("alex"), { type: "createInvite", claimMemberId: "sam" })).toEqual({
-			ok: false,
-			code: "HS422",
-			reason,
-		});
-		expect(plan(state("alex"), { type: "createInvite", claimMemberId: "nobody" })).toEqual({
-			ok: false,
-			code: "HS422",
-			reason,
-		});
-		expect(
-			plan(state("alex"), { type: "createInvite", claimMemberId: null }, context({ randomToken: () => "short" }))
-		).toEqual({
-			ok: false,
-			code: "HS422",
-			reason: "An invite token must be 32 random bytes in base64url",
-		});
-	});
-
-	test("revokeInvite; unknown or revoked links need nothing", () => {
-		expect(plan(state("sam"), { type: "revokeInvite", inviteId: "inv-sam" })).toEqual({
-			ok: true,
-			createdId: null,
-			mutations: [{ id: "id-1", at, type: "invite.revoke", groupId: G, inviteId: "inv-sam" }],
-		});
-		expect(plan(state("sam"), { type: "revokeInvite", inviteId: "nope" })).toEqual({
-			ok: true,
-			mutations: [],
-			createdId: null,
-		});
-		const revoked = state("alex", { invites: [{ ...invite("inv-alex", "user-a"), revokedAt: NOW }] });
-		expect(plan(revoked, { type: "revokeInvite", inviteId: "inv-alex" })).toEqual({
-			ok: true,
-			mutations: [],
-			createdId: null,
-		});
 	});
 });
 
@@ -1082,5 +1003,54 @@ describe("nudge", () => {
 		expect(nudge([sent("alex", "sam", HOURS_AGO(25))])).toMatchObject({ ok: true });
 		expect(nudge([sent("gus", "sam", HOURS_AGO(1)), sent("alex", "jo", HOURS_AGO(1))])).toMatchObject({ ok: true });
 		expect(nudge([])).toMatchObject({ ok: true });
+	});
+});
+
+describe("group codes and unique names", () => {
+	test("resetGroupCode queues group.recode for the owner", () => {
+		expect(plan(state("alex"), { type: "resetGroupCode" })).toEqual({
+			ok: true,
+			createdId: null,
+			mutations: [{ id: "id-1", at: NOW, type: "group.recode", groupId: G }],
+		});
+		expect(plan(state("sam"), { type: "resetGroupCode" })).toEqual({
+			ok: false,
+			code: "HS403",
+			reason: "Only the group's owner can do this",
+		});
+	});
+
+	test("isNameTaken compares active people's names ignoring case and outer spaces", () => {
+		expect(isNameTaken(MEMBERS, " jo ")).toBe(true);
+		expect(isNameTaken(MEMBERS, "KIM")).toBe(false);
+		expect(isNameTaken(MEMBERS, "Jo", "jo")).toBe(false);
+		expect(isNameTaken(MEMBERS, "Lee")).toBe(false);
+	});
+
+	test("addPerson refuses a name already in the group (HS409), not one of someone who left", () => {
+		expect(plan(state("alex"), { type: "addPerson", displayName: " NINA " })).toEqual({
+			ok: false,
+			code: "HS409",
+			reason: "NINA is already in this group",
+		});
+		expect(plan(state("alex"), { type: "addPerson", displayName: "kim" })).toMatchObject({ ok: true });
+	});
+
+	test("renamePerson refuses another person's name but allows a change of case", () => {
+		expect(plan(state("alex"), { type: "renamePerson", memberId: "jo", displayName: "sam" })).toEqual({
+			ok: false,
+			code: "HS409",
+			reason: "sam is already in this group",
+		});
+		expect(plan(state("alex"), { type: "renamePerson", memberId: "jo", displayName: "JO" })).toMatchObject({
+			ok: true,
+		});
+	});
+
+	test("an old duplicate may keep its name", () => {
+		const twins = [...MEMBERS, member("jo2", { userId: null, displayName: "Jo", role: "member", joinedAt: null })];
+		expect(
+			plan(state("alex", { members: twins }), { type: "renamePerson", memberId: "jo2", displayName: "jo " })
+		).toMatchObject({ ok: true });
 	});
 });

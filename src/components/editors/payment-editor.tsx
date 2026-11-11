@@ -88,7 +88,6 @@ export function PaymentEditor({ groupId, from, to, amountCents, open, onOpenChan
 					members,
 					entries,
 					conflicts: [],
-					invites: [],
 					me: { memberId: me.id, role: me.role, isAnonymous: user.isAnonymous },
 				}
 			: null;
@@ -156,7 +155,7 @@ export function PaymentEditor({ groupId, from, to, amountCents, open, onOpenChan
 			open={open}
 			onOpenChange={onOpenChange}
 			title={loaded ? title : "Payment"}
-			submitLabel="Record payment"
+			submitLabel="Settle"
 			canSubmit={loaded && valid && !blocked && !saving}
 			onSubmit={save}
 		>

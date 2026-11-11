@@ -76,6 +76,7 @@ describe("groups", () => {
 			deletedAt: null,
 			completedAt: null,
 			completedByMemberId: null,
+			joinCode: null,
 			rowVersion: 0,
 		});
 		expect(members.map.get("me-1")).toEqual({
@@ -116,6 +117,14 @@ describe("groups", () => {
 
 		await applyMutation(tables, change("group.delete", { groupId: "g1" }, LATER), ME);
 		expect(groups.map.get("g1")?.deletedAt).toBe(LATER);
+	});
+
+	test("resetting the group code leaves the old one until the pull brings the server's", async () => {
+		const { tables, groups } = await seeded();
+		const before = groups.map.get("g1");
+		await applyMutation(tables, change("group.recode", { groupId: "g1" }), ME);
+		expect(groups.map.get("g1")).toEqual(before!);
+		expect(before?.joinCode).toBe("HX7K2P");
 	});
 
 	test("changes to a group this device doesn't have do nothing", async () => {

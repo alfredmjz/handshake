@@ -8,6 +8,7 @@ import { ConfirmDialog } from "@/components/confirm-dialog";
 import { PaymentArrow } from "@/components/editors/payment-arrow";
 import { PaymentEditor } from "@/components/editors/payment-editor";
 import { ShakeConfirmation } from "@/components/editors/shake-confirmation";
+import { CompleteSummary } from "@/components/group/complete-summary";
 import { Amount } from "@/components/money";
 import { EmptyState, Notice } from "@/components/notices";
 import { BackLink, Screen, ScreenHeader, Section } from "@/components/screen";
@@ -22,14 +23,12 @@ import { Inline, Stack } from "@/components/ui/stack";
 import { useCommit, type Intent } from "@/lib/changes";
 import { useGroupSummary, usePendingPayments } from "@/lib/entries";
 import { useGroup } from "@/lib/groups";
-import type { Debt } from "@/lib/ledger";
 import { useMembers, useMyMember } from "@/lib/members";
 import { formatAmount } from "@/lib/money";
 import { allowedWhenCompleted, may } from "@/lib/permissions";
 import {
 	countPayments,
 	guestsLosingAccess,
-	listNames,
 	paymentCards,
 	settleRows,
 	type PaymentCard,
@@ -106,8 +105,13 @@ export function SettleUpPage() {
 	};
 
 	const guests = guestsLosingAccess(members);
-	const debtLine = (d: Debt) =>
-		`${name(d.fromMemberId)} still ${d.fromMemberId === me?.id ? "owe" : "owes"} ${object(d.toMemberId)} ${formatAmount(d.amountCents)}.`;
+	const owing = [...summary.debts].sort(
+		(x, y) =>
+			name(x.fromMemberId).localeCompare(name(y.fromMemberId), undefined, { sensitivity: "base" }) ||
+			name(x.toMemberId).localeCompare(name(y.toMemberId), undefined, { sensitivity: "base" })
+	);
+	const debtors = [...new Set(summary.debts.map((d) => d.fromMemberId))];
+	const totalOwed = summary.debts.reduce((sum, d) => sum + d.amountCents, 0);
 
 	return (
 		<Screen>
@@ -220,27 +224,26 @@ export function SettleUpPage() {
 				onOpenChange={setCompleting}
 				title={`Complete ${group.name}?`}
 				description={
-					<>
-						{summary.debts.length === 0 ? (
-							<p>Everyone is settled.</p>
-						) : (
-							<p>
-								{summary.debts.slice(0, 3).map(debtLine).join(" ")}
-								{summary.debts.length > 3 && ` And ${countPayments(summary.debts.length - 3).toLowerCase()} more.`}{" "}
-								Complete anyway?
-							</p>
-						)}
-						{guests.length > 0 && (
-							<p>
-								{listNames(guests.map((g) => g.displayName))} {guests.length === 1 ? "is a guest" : "are guests"}. They
-								will lose access to this group. {guests.length === 1 ? "Their name" : "Their names"} and history stay.
-							</p>
-						)}
-					</>
+					<span className="type-body font-semibold text-foreground">
+						{summary.debts.length === 0
+							? "Everyone is settled."
+							: `${debtors.length === 1 && debtors[0] === me?.id ? "You still owe" : `${debtors.length} ${debtors.length === 1 ? "person still owes" : "people still owe"}`} ${formatAmount(totalOwed)}`}
+					</span>
 				}
 				confirmLabel="Complete group"
 				onConfirm={complete}
-			/>
+			>
+				<CompleteSummary
+					rows={owing.map((d) => ({
+						key: `${d.fromMemberId}-${d.toMemberId}`,
+						fromId: d.fromMemberId,
+						text: `${name(d.fromMemberId)} → ${object(d.toMemberId)}`,
+						cents: d.amountCents,
+					}))}
+					waiting={pending.length}
+					guests={guests.map((g) => g.displayName)}
+				/>
+			</ConfirmDialog>
 		</Screen>
 	);
 }
@@ -382,7 +385,7 @@ function PaymentCardView({
 					)}
 					{((card.kind === "record" && canRecord) || (card.kind === "answer" && canAnswer)) && (
 						<Button size="sm" onClick={onShake}>
-							Shake on it
+							Settle
 						</Button>
 					)}
 				</Inline>

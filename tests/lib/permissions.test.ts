@@ -27,6 +27,7 @@ describe("permissions match the shared case table", () => {
 			"group.delete": true,
 			"group.complete": true,
 			"group.reopen": true,
+			"group.recode": true,
 			"member.add": true,
 			"member.rename.self": true,
 			"member.rename.others": true,

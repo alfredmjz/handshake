@@ -1,9 +1,10 @@
-import { useEffect, useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { useNavigate, useParams } from "react-router";
 import { toast } from "sonner";
 
 import { CheckDoodle, HandshakeMark } from "@/components/art/doodles";
 import { Face } from "@/components/art/face";
+import type { GuestCodeSheetState } from "@/components/guest-code-sheet";
 import { EmptyState } from "@/components/notices";
 import { Screen, ScreenHeader } from "@/components/screen";
 import { Button } from "@/components/ui/button";
@@ -13,30 +14,73 @@ import { Input } from "@/components/ui/input";
 import { List, ListRow } from "@/components/ui/list";
 import { Stack } from "@/components/ui/stack";
 import { defaultDisplayName, signInAsGuest, useCurrentUser } from "@/lib/auth";
+import { normaliseCode } from "@/lib/code-format";
 import { useOnline } from "@/lib/online";
 import { requestSync } from "@/lib/sync/controller";
-import { joinGroup, previewInvite, TransportError, type InvitePreview } from "@/lib/sync/supabase-transport";
+import { joinWithCode, previewGroup, TransportError, type GroupPreview } from "@/lib/sync/supabase-transport";
 import { byText } from "@/lib/utils";
 import { EmailSignIn } from "@/pages/sign-in";
 
-type Loaded = { token: string } & ({ preview: InvitePreview } | { error: "gone" | "failed" });
+const DOESNT_WORK = "This code doesn't work";
 
-function usePreview(token: string | undefined, online: boolean) {
+type Loaded = { code: string } & ({ preview: GroupPreview } | { error: "gone" | "failed" });
+
+function usePreview(code: string | null, online: boolean) {
 	const [loaded, setLoaded] = useState<Loaded | null>(null);
 	useEffect(() => {
-		if (!token || !online) return;
+		if (!code || !online) return;
 		let cancelled = false;
-		previewInvite(token).then(
-			(preview) => !cancelled && setLoaded({ token, preview }),
+		previewGroup(code).then(
+			(preview) => !cancelled && setLoaded({ code, preview }),
 			(error) =>
 				!cancelled &&
-				setLoaded({ token, error: error instanceof TransportError && error.code === "HS404" ? "gone" : "failed" })
+				setLoaded({ code, error: error instanceof TransportError && error.code === "HS404" ? "gone" : "failed" })
 		);
 		return () => {
 			cancelled = true;
 		};
-	}, [token, online]);
-	return loaded && loaded.token === token ? loaded : null;
+	}, [code, online]);
+	return loaded && loaded.code === code ? loaded : null;
+}
+
+// Which way in: a name-only person, someone new, or a guest coming back with their personal code.
+type Choice = { kind: "claim"; memberId: string } | { kind: "new" } | { kind: "back"; memberId: string | null };
+
+type Draft = { choice: Choice | null; name: string; personalCode: string };
+
+// Signed out, the choice is kept across the account or guest step (the URL stays); back signed in, the
+// join screen finishes it once.
+const stashKey = (code: string) => `handshake.join.${code}`;
+
+function stash(code: string, draft: Draft) {
+	try {
+		sessionStorage.setItem(stashKey(code), JSON.stringify(draft));
+	} catch {
+		// Without storage the choice is simply asked again.
+	}
+}
+
+function takeStash(code: string): Draft | null {
+	try {
+		const raw = sessionStorage.getItem(stashKey(code));
+		sessionStorage.removeItem(stashKey(code));
+		return raw ? (JSON.parse(raw) as Draft) : null;
+	} catch {
+		return null;
+	}
+}
+
+function draftReady(draft: Draft): boolean {
+	const { choice } = draft;
+	if (!choice) return false;
+	if (choice.kind === "new") return draft.name.trim().length > 0;
+	if (choice.kind === "back") return choice.memberId !== null && normaliseCode(draft.personalCode) !== null;
+	return true;
+}
+
+function nameTaken(preview: GroupPreview, name: string): boolean {
+	const key = name.trim().toLowerCase();
+	return [...preview.unclaimed, ...preview.returning].some((p) => p.displayName.trim().toLowerCase() === key);
 }
 
 function Frame({ signedIn, children }: { signedIn: boolean; children: ReactNode }) {
@@ -52,30 +96,27 @@ function Frame({ signedIn, children }: { signedIn: boolean; children: ReactNode 
 	);
 }
 
-// /join/:token. Signed out you pick an account or guest first; the URL stays, so you land back here to join.
+// /join/:code (a group code, or anything normaliseCode reads). Signed out you choose who you are, then an
+// account or guest; the URL stays, so you land back here and the join finishes.
 export function JoinPage({ signedIn }: { signedIn: boolean }) {
-	const { token } = useParams();
+	const params = useParams();
+	const code = normaliseCode(params.code ?? "");
 	const online = useOnline();
-	const loaded = usePreview(token, online);
+	const loaded = usePreview(code, online);
+	const [gone, setGone] = useState(false);
 
 	let body: ReactNode = null;
-	if (!online) {
+	if (!code || gone || (loaded && "error" in loaded && loaded.error === "gone")) {
+		body = <EmptyState title={`${DOESNT_WORK}. Ask for the group's code again.`} />;
+	} else if (!online) {
 		body = <EmptyState kind="shake" title="Joining needs a connection." />;
 	} else if (loaded && "error" in loaded) {
-		body = (
-			<EmptyState
-				title={
-					loaded.error === "gone"
-						? "This invite link doesn't work any more. Ask for a new one."
-						: "Couldn't open this invite. Try again in a moment."
-				}
-			/>
-		);
+		body = <EmptyState title="Couldn't open this code. Try again in a moment." />;
 	} else if (loaded) {
 		body = signedIn ? (
-			<JoinSignedIn token={loaded.token} preview={loaded.preview} />
+			<SignedInJoinChoice key={loaded.code} code={loaded.code} preview={loaded.preview} onGone={() => setGone(true)} />
 		) : (
-			<JoinSignedOut preview={loaded.preview} />
+			<JoinChoice key={loaded.code} code={loaded.code} preview={loaded.preview} onGone={() => setGone(true)} />
 		);
 	}
 
@@ -86,61 +127,79 @@ export function JoinPage({ signedIn }: { signedIn: boolean }) {
 	);
 }
 
-function JoinHeader({ preview }: { preview: InvitePreview }) {
+function PersonRadio({
+	id,
+	name,
+	checked,
+	onPick,
+}: {
+	id: string;
+	name: string;
+	checked: boolean;
+	onPick: () => void;
+}) {
 	return (
-		<ScreenHeader
-			eyebrow={preview.invitedBy ? `${preview.invitedBy} invited you to` : "You're invited to"}
-			title={preview.groupName}
-		/>
+		<ListRow
+			asChild
+			leading={<Face seed={id} name="" size={32} />}
+			title={name}
+			trailing={checked ? <CheckDoodle className="size-5" /> : undefined}
+		>
+			<button type="button" role="radio" aria-checked={checked} onClick={onPick} />
+		</ListRow>
 	);
 }
 
-function JoinSignedOut({ preview }: { preview: InvitePreview }) {
-	const [account, setAccount] = useState(false);
-	const [busy, setBusy] = useState(false);
-
-	async function asGuest() {
-		setBusy(true);
-		try {
-			await signInAsGuest();
-		} catch (error) {
-			toast.error("Couldn't continue as a guest", { description: error instanceof Error ? error.message : undefined });
-			setBusy(false);
-		}
-	}
-
+function OptionRadio({ title, checked, onPick }: { title: string; checked: boolean; onPick: () => void }) {
 	return (
-		<>
-			<JoinHeader preview={preview} />
-			{account ? (
-				<Card>
-					<EmailSignIn onBack={() => setAccount(false)} />
-				</Card>
-			) : (
-				<Stack>
-					<Button size="lg" className="w-full" onClick={() => setAccount(true)}>
-						Create an account
-					</Button>
-					<Button size="lg" variant="outline" className="w-full" disabled={busy} onClick={() => void asGuest()}>
-						Continue as guest
-					</Button>
-				</Stack>
-			)}
-		</>
+		<ListRow asChild title={title} trailing={checked ? <CheckDoodle className="size-5" /> : undefined}>
+			<button type="button" role="radio" aria-checked={checked} onClick={onPick} />
+		</ListRow>
 	);
 }
 
-const NOT_LISTED = "none";
+type ChoiceProps = { code: string; preview: GroupPreview; onGone: () => void };
 
-function JoinSignedIn({ token, preview }: { token: string; preview: InvitePreview }) {
+// An account's own name fills "I'm new here".
+function SignedInJoinChoice(props: ChoiceProps) {
 	const user = useCurrentUser();
-	const navigate = useNavigate();
-	const [claim, setClaim] = useState<string>(preview.claimMemberId ?? NOT_LISTED);
-	const [name, setName] = useState(user.isAnonymous ? "" : defaultDisplayName(user.email));
-	const [busy, setBusy] = useState(false);
-	const people = [...preview.unclaimed].sort(byText((p) => p.displayName));
+	return <JoinChoice {...props} signedIn defaultName={user.isAnonymous ? "" : defaultDisplayName(user.email)} />;
+}
 
-	if (preview.alreadyMember) {
+function JoinChoice({
+	code,
+	preview,
+	onGone,
+	signedIn = false,
+	defaultName = "",
+}: ChoiceProps & { signedIn?: boolean; defaultName?: string }) {
+	const navigate = useNavigate();
+	const [restored] = useState(() => (signedIn ? takeStash(code) : null));
+	const [choice, setChoice] = useState<Choice | null>(
+		restored?.choice ?? (preview.unclaimed.length === 0 && preview.returning.length === 0 ? { kind: "new" } : null)
+	);
+	const [name, setName] = useState(restored?.name || defaultName);
+	const [personalCode, setPersonalCode] = useState(restored?.personalCode ?? "");
+	const [error, setError] = useState<string | null>(null);
+	const [busy, setBusy] = useState(false);
+	const [account, setAccount] = useState(false);
+
+	const unclaimed = [...preview.unclaimed].sort(byText((p) => p.displayName));
+	const returning = [...preview.returning].sort(byText((p) => p.displayName));
+	const draft: Draft = { choice, name, personalCode };
+	const clash = choice?.kind === "new" && name.trim().length > 0 && nameTaken(preview, name);
+	const ready = draftReady(draft) && !clash;
+
+	const pick = (next: Choice) => {
+		setChoice(next);
+		setError(null);
+	};
+
+	const header = (
+		<ScreenHeader eyebrow={preview.ownerName ? `${preview.ownerName}'s group` : "A group"} title={preview.groupName} />
+	);
+
+	if (signedIn && preview.alreadyMember) {
 		return (
 			<>
 				<ScreenHeader eyebrow="You're already in" title={preview.groupName} />
@@ -151,68 +210,211 @@ function JoinSignedIn({ token, preview }: { token: string; preview: InvitePrevie
 		);
 	}
 
-	const claiming = claim !== NOT_LISTED;
-	const nameOk = claiming || name.trim().length > 0;
+	return (
+		<>
+			{header}
+			<FieldSet legend="Which one are you?">
+				<List role="radiogroup" aria-label="Which one are you?">
+					{unclaimed.map((p) => (
+						<PersonRadio
+							key={p.memberId}
+							id={p.memberId}
+							name={p.displayName}
+							checked={choice?.kind === "claim" && choice.memberId === p.memberId}
+							onPick={() => pick({ kind: "claim", memberId: p.memberId })}
+						/>
+					))}
+					<OptionRadio title="I'm new here" checked={choice?.kind === "new"} onPick={() => pick({ kind: "new" })} />
+					{returning.length > 0 && (
+						<OptionRadio
+							title="I'm already in this group"
+							checked={choice?.kind === "back"}
+							onPick={() => pick({ kind: "back", memberId: returning.length === 1 ? returning[0].memberId : null })}
+						/>
+					)}
+				</List>
+			</FieldSet>
+
+			{choice?.kind === "new" && (
+				<Field
+					label="Your name"
+					htmlFor="join-name"
+					error={clash ? `${name.trim()} is already in this group` : (error ?? undefined)}
+				>
+					<Input
+						id="join-name"
+						maxLength={60}
+						autoComplete="given-name"
+						value={name}
+						onChange={(e) => {
+							setName(e.target.value);
+							setError(null);
+						}}
+					/>
+				</Field>
+			)}
+
+			{choice?.kind === "back" && (
+				<>
+					<FieldSet legend="Your name">
+						<List role="radiogroup" aria-label="Your name">
+							{returning.map((p) => (
+								<PersonRadio
+									key={p.memberId}
+									id={p.memberId}
+									name={p.displayName}
+									checked={choice.memberId === p.memberId}
+									onPick={() => pick({ kind: "back", memberId: p.memberId })}
+								/>
+							))}
+						</List>
+					</FieldSet>
+					<Field
+						label="Your code"
+						htmlFor="personal-code"
+						hint="The code you got when you joined"
+						error={error ?? undefined}
+					>
+						<Input
+							id="personal-code"
+							variant="code"
+							autoCapitalize="characters"
+							autoComplete="off"
+							spellCheck={false}
+							placeholder="7KQ-M2D"
+							maxLength={9}
+							value={personalCode}
+							onChange={(e) => {
+								setPersonalCode(e.target.value.toUpperCase());
+								setError(null);
+							}}
+						/>
+					</Field>
+				</>
+			)}
+
+			{choice?.kind === "claim" && error && <p className="type-body-sm text-owe">{error}</p>}
+
+			{signedIn ? (
+				<JoinButton
+					code={code}
+					preview={preview}
+					draft={draft}
+					ready={ready}
+					auto={!!restored && draftReady(restored)}
+					busy={busy}
+					setBusy={setBusy}
+					onError={setError}
+					onGone={onGone}
+				/>
+			) : account ? (
+				<Card>
+					<EmailSignIn onBack={() => setAccount(false)} />
+				</Card>
+			) : (
+				<Stack>
+					<Button
+						size="lg"
+						className="w-full"
+						disabled={!ready}
+						onClick={() => {
+							stash(code, draft);
+							setAccount(true);
+						}}
+					>
+						Create an account
+					</Button>
+					<Button
+						size="lg"
+						variant="outline"
+						className="w-full"
+						disabled={!ready || busy}
+						onClick={() => {
+							stash(code, draft);
+							setBusy(true);
+							signInAsGuest().catch((e: unknown) => {
+								toast.error("Couldn't continue as a guest", {
+									description: e instanceof Error ? e.message : undefined,
+								});
+								setBusy(false);
+							});
+						}}
+					>
+						Continue as guest
+					</Button>
+				</Stack>
+			)}
+		</>
+	);
+}
+
+function JoinButton({
+	code,
+	preview,
+	draft,
+	ready,
+	auto,
+	busy,
+	setBusy,
+	onError,
+	onGone,
+}: {
+	code: string;
+	preview: GroupPreview;
+	draft: Draft;
+	ready: boolean;
+	// A choice made before signing in: join once without another tap.
+	auto: boolean;
+	busy: boolean;
+	setBusy: (busy: boolean) => void;
+	onError: (message: string) => void;
+	onGone: () => void;
+}) {
+	const user = useCurrentUser();
+	const navigate = useNavigate();
+	const started = useRef(false);
+	const back = draft.choice?.kind === "back";
 
 	async function join() {
+		const { choice } = draft;
+		if (!choice) return;
 		setBusy(true);
 		try {
-			const groupId = await joinGroup({
-				token,
-				claimMemberId: claiming ? claim : undefined,
-				displayName: claiming ? undefined : name.trim(),
+			const groupId = await joinWithCode({
+				code,
+				claimMemberId: choice.kind === "new" ? undefined : (choice.memberId ?? undefined),
+				displayName: choice.kind === "new" ? draft.name.trim() : undefined,
+				personalCode: choice.kind === "back" ? (normaliseCode(draft.personalCode) ?? undefined) : undefined,
 			});
 			requestSync();
-			navigate(`/groups/${groupId}`, { replace: true });
+			const state: GuestCodeSheetState | null =
+				user.isAnonymous && choice.kind !== "back" ? { showGuestCode: true } : null;
+			navigate(`/groups/${groupId}`, { replace: true, state });
 		} catch (error) {
 			setBusy(false);
-			if (error instanceof TransportError && error.code === "HS404")
-				toast.error("This invite link doesn't work any more");
-			else if (error instanceof TransportError && error.code === "network") toast.error("Joining needs a connection");
-			else toast.error("Couldn't join", { description: error instanceof Error ? error.message : undefined });
+			const codeOf = error instanceof TransportError ? error.code : null;
+			const message = error instanceof Error ? error.message : "";
+			if (codeOf === "HS404") {
+				toast.error(DOESNT_WORK);
+				onGone();
+			} else if (codeOf === "HS409" || codeOf === "HS422") onError(message);
+			else if (codeOf === "23514") onError("That name is too long");
+			else if (codeOf === "network") onError("Joining needs a connection.");
+			else toast.error("Couldn't join", { description: message || undefined });
 		}
 	}
 
+	useEffect(() => {
+		if (auto && !started.current) {
+			started.current = true;
+			void join();
+		}
+		// Runs once, for the choice restored on mount.
+	}, [auto]);
+
 	return (
-		<>
-			<JoinHeader preview={preview} />
-			{people.length > 0 && (
-				<FieldSet legend="Which one are you?">
-					<List role="radiogroup" aria-label="Which one are you?">
-						{people.map((p) => (
-							<ListRow
-								key={p.memberId}
-								asChild
-								leading={<Face seed={p.memberId} name="" size={32} />}
-								title={p.displayName}
-								trailing={claim === p.memberId ? <CheckDoodle className="size-5" /> : undefined}
-							>
-								<button
-									type="button"
-									role="radio"
-									aria-checked={claim === p.memberId}
-									onClick={() => setClaim(p.memberId)}
-								/>
-							</ListRow>
-						))}
-						<ListRow
-							asChild
-							title="I'm not on this list"
-							trailing={!claiming ? <CheckDoodle className="size-5" /> : undefined}
-						>
-							<button type="button" role="radio" aria-checked={!claiming} onClick={() => setClaim(NOT_LISTED)} />
-						</ListRow>
-					</List>
-				</FieldSet>
-			)}
-			{!claiming && (
-				<Field label="Your name" htmlFor="join-name">
-					<Input id="join-name" maxLength={60} value={name} onChange={(e) => setName(e.target.value)} />
-				</Field>
-			)}
-			<Button size="lg" disabled={busy || !nameOk} onClick={() => void join()}>
-				{busy ? "Joining…" : `Join ${preview.groupName}`}
-			</Button>
-		</>
+		<Button size="lg" disabled={busy || !ready} onClick={() => void join()}>
+			{busy ? "Joining…" : back ? "Get back in" : `Join ${preview.groupName}`}
+		</Button>
 	);
 }

@@ -2,6 +2,7 @@ import { useState } from "react";
 import { toast } from "sonner";
 
 import { EditorDialog } from "@/components/editor-dialog";
+import { MyGuestCodes } from "@/components/guest-code";
 import { Notice } from "@/components/notices";
 import { Button } from "@/components/ui/button";
 import { Field } from "@/components/ui/field";
@@ -11,7 +12,8 @@ import { useOnline } from "@/lib/online";
 import { requestSync } from "@/lib/sync/controller";
 import { TransportError } from "@/lib/sync/supabase-transport";
 
-// Shown on every screen for a guest: their data goes when a group completes, unless they add an email.
+// Shown on every screen for a guest: their data goes when a group completes, unless they add an email; and
+// their personal code, to get back in on another device.
 export function GuestBanner() {
 	const online = useOnline();
 	const [open, setOpen] = useState(false);
@@ -75,6 +77,7 @@ export function GuestBanner() {
 				}
 			>
 				You're a guest. When the group is completed, guests lose access. Add your email to keep it.
+				<MyGuestCodes className="flex flex-col" />
 			</Notice>
 			<EditorDialog
 				open={open}

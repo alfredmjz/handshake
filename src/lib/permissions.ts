@@ -5,6 +5,7 @@ export type Action =
 	| "group.delete"
 	| "group.complete"
 	| "group.reopen"
+	| "group.recode"
 	| "member.add"
 	| "member.rename.self"
 	| "member.rename.others"
@@ -29,6 +30,7 @@ const ALLOWED: Record<Action, readonly Role[]> = {
 	"group.delete": ["owner"],
 	"group.complete": ["owner"],
 	"group.reopen": ["owner"],
+	"group.recode": ["owner"],
 	"member.add": ["owner", "member"],
 	"member.rename.self": ["owner", "member", "guest"],
 	"member.rename.others": ["owner"],

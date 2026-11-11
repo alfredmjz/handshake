@@ -96,7 +96,7 @@ SELECT is((SELECT count(*)::INT FROM public.groups), 0, 'a non-member cannot see
 
 SELECT is(
     public.pull_changes('{}'::JSONB),
-    '{"group_ids": [], "changes": []}'::JSONB,
+    '{"group_ids": [], "moved_away": [], "changes": []}'::JSONB,
     'a non-member pulls nothing'
 );
 

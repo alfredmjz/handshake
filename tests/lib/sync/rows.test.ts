@@ -4,7 +4,7 @@ import { describe, expect, test } from "bun:test";
 import Dexie from "dexie";
 
 import { LocalDb } from "@/lib/local-db";
-import { createDexieSyncStore, dexieTables } from "@/lib/sync/dexie-store";
+import { createDexieSyncStore, dexieTables, readMovedAwayNotices } from "@/lib/sync/dexie-store";
 import type { LocalTables } from "@/lib/sync/local";
 import { createMemoryTables, serverBill, serverGroup, serverMember } from "../../support/memory-tables";
 
@@ -93,6 +93,7 @@ describe("createDexieSyncStore", () => {
 					conflicts: [],
 					invites: [],
 					nudges: [nudge],
+					guestCodes: [],
 				},
 			],
 		});
@@ -127,6 +128,7 @@ describe("LocalDb version 2", () => {
 			createdBy: "u1",
 			completedAt: null,
 			completedByMemberId: null,
+			joinCode: null,
 			rowVersion: 2,
 		} as never);
 		expect((await db.members.get("m1"))?.joinedAt).toBeNull();
@@ -185,5 +187,47 @@ describe("LocalDb version 4", () => {
 		expect((await db.groups.get("g1"))?.name).toBe("Trip");
 		expect(await db.nudges.count()).toBe(0);
 		expect(await db.cursors.count()).toBe(0);
+	});
+});
+
+describe("LocalDb version 5", () => {
+	test("gives groups a joinCode, adds guestCodes and pulls everything again", async () => {
+		const name = `rows-test-${++dbCount}`;
+		const v4 = new Dexie(name);
+		v4.version(4).stores({
+			groups: "id",
+			members: "id, groupId",
+			outbox: "++seq, &id",
+			cursors: "groupId",
+			meta: "key",
+			entries: "id, groupId, [groupId+entryDate]",
+			conflicts: "id, entryId, groupId",
+			invites: "id, groupId",
+			inviteTokens: "inviteId, groupId",
+			nudges: "id, groupId, toMemberId",
+		});
+		await v4.table("groups").put({ id: "g1", name: "Trip", note: null, rowVersion: 2 });
+		await v4.table("cursors").put({ groupId: "g1", version: 2 });
+		v4.close();
+
+		const db = new LocalDb(name);
+		expect((await db.groups.get("g1"))?.joinCode).toBeNull();
+		expect(await db.guestCodes.count()).toBe(0);
+		expect(await db.cursors.count()).toBe(0);
+	});
+});
+
+describe("moved-away notices", () => {
+	test("a pull that drops a group this guest lost to another device records a notice, once per group", async () => {
+		const db = new LocalDb(`rows-test-${++dbCount}`);
+		await db.groups.put(serverGroup({ id: "g1", name: "Banff" }));
+		await db.members.put(
+			serverMember({ id: "m1", groupId: "g1", userId: "user-1", role: "guest", displayName: "Kim" })
+		);
+		const store = createDexieSyncStore(db, "user-1");
+		await store.applyPull({ groupIds: [], changes: [], movedAway: ["g1"] });
+		await store.applyPull({ groupIds: [], changes: [], movedAway: ["g1"] });
+		expect(await readMovedAwayNotices(db)).toEqual([{ groupId: "g1", groupName: "Banff", displayName: "Kim" }]);
+		expect(await db.groups.count()).toBe(0);
 	});
 });

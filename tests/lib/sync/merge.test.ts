@@ -13,7 +13,18 @@ function change<T extends Mutation["type"]>(type: T, fields: Omit<MutationOf<T>,
 }
 
 function changes(groupId: string, version: number, rows: Partial<Omit<GroupChanges, "groupId" | "version">> = {}) {
-	return { groupId, version, groups: [], members: [], entries: [], conflicts: [], invites: [], nudges: [], ...rows };
+	return {
+		groupId,
+		version,
+		groups: [],
+		members: [],
+		entries: [],
+		conflicts: [],
+		invites: [],
+		nudges: [],
+		guestCodes: [],
+		...rows,
+	};
 }
 
 const alex = serverMember({ id: "alex", groupId: "g1", userId: ME, role: "owner" });
@@ -459,5 +470,62 @@ describe("nudges", () => {
 			ME
 		);
 		expect([...nudges.map.keys()]).toEqual(["n1"]);
+	});
+});
+
+describe("guest codes and moved-away notices", () => {
+	const code = (memberId: string, groupId = "g1", deletedAt: string | null = null) => ({
+		memberId,
+		groupId,
+		code: "K2PHX7",
+		createdAt: AT,
+		deletedAt,
+		rowVersion: 3,
+	});
+	const kim = serverMember({ id: "kim", groupId: "g1", userId: ME, role: "guest", displayName: "Kim" });
+
+	test("stores pulled guest codes, a deletion included; a full pull drops codes the server didn't send", async () => {
+		const { tables, guestCodes } = createMemoryTables();
+		await tables.guestCodes.put([code("stale")]);
+		await mergePull(
+			tables,
+			{
+				groupIds: ["g1"],
+				changes: [changes("g1", 3, { members: [alex], guestCodes: [code("kim"), code("bo", "g1", AT)] })],
+			},
+			[],
+			ME
+		);
+		expect([...guestCodes.map.keys()].sort()).toEqual(["bo", "kim"]);
+		expect(guestCodes.map.get("bo")?.deletedAt).toBe(AT);
+	});
+
+	test("a dropped group takes its guest codes", async () => {
+		const { tables, guestCodes } = createMemoryTables();
+		await tables.groups.put([serverGroup({ id: "g2" })]);
+		await tables.guestCodes.put([code("x", "g2")]);
+		await mergePull(tables, { groupIds: [], changes: [] }, [], ME);
+		expect(guestCodes.map.size).toBe(0);
+	});
+
+	test("a group this guest lost to another device gives a notice; one lost otherwise doesn't", async () => {
+		const { tables, groups } = createMemoryTables();
+		await tables.groups.put([serverGroup({ id: "g1", name: "Banff" }), serverGroup({ id: "g2", name: "Jasper" })]);
+		await tables.members.put([kim, { ...kim, id: "kim2", groupId: "g2" }]);
+		const notices = await mergePull(tables, { groupIds: [], changes: [], movedAway: ["g1"] }, [], ME);
+		expect(notices).toEqual([{ groupId: "g1", groupName: "Banff", displayName: "Kim" }]);
+		expect(groups.map.size).toBe(0);
+	});
+
+	test("no notice for someone who wasn't a guest there, or a server before 012", async () => {
+		const { tables } = createMemoryTables();
+		await tables.groups.put([serverGroup({ id: "g1" }), serverGroup({ id: "g2" })]);
+		await tables.members.put([alex, { ...kim, groupId: "g2" }]);
+		expect(await mergePull(tables, { groupIds: [], changes: [], movedAway: ["g1"] }, [], ME)).toEqual([]);
+
+		const old = createMemoryTables();
+		await old.tables.groups.put([serverGroup({ id: "g1" })]);
+		await old.tables.members.put([kim]);
+		expect(await mergePull(old.tables, { groupIds: [], changes: [] }, [], ME)).toEqual([]);
 	});
 });

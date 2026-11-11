@@ -308,37 +308,60 @@ the group. Two account rules sit outside the matrix: guests can't create groups 
 - **Later:** a "Make owner" handover, so an owner who is away can pass the job on (a new mutation, no
   schema change).
 
-### 9. Name-only people, invite links and guests
+### 9. Name-only people, the group code and guests
+
+Decided 2026-11-10 (replaces invite links).
 
 - **Chosen Solution:**
-  - The owner or any member adds name-only people, so bills can include them at once.
-  - An invite link is valid for **14 days**, can be used many times, and can be revoked. It can be tied
-    to a name-only person ("Invite Jo"), so whoever opens it becomes Jo. The owner and members make
-    invites; members revoke the ones they made, and the owner revokes any.
-  - Opening the link shows the group and two choices: **Create an account** (6-digit email code; joins
-    as a member) or **Continue as guest** (joins as a guest, no email).
+  - The owner or any member adds name-only people, so bills can include them at once. Names are unique in
+    a group, ignoring case and outer spaces, among the people still in it; the server checks every new or
+    changed name (adding, renaming, joining as someone new) and refuses with "<name> is already in this
+    group". Names that were duplicated before stay as they are.
+  - **One join code per group** replaces invite links: 6 characters from an alphabet without lookalikes
+    (`ABCDEFGHJKMNPQRSTUVWXYZ23456789`), shown as `HX7-K2P`, with the link `/join/HX7K2P`. Typed codes ignore
+    case and the dash. The server makes it (unique across groups), so a group created offline has none
+    until it syncs. It never expires; the owner can reset it, and the old one stops working at once. Owners
+    and members can see it. While a group is completed its code lets no one join; it works again after
+    reopening.
+  - Opening the link or typing the code shows the group and its owner, then three ways in: pick an
+    unclaimed name (a name-only person: no login, not removed), join as someone new under a name no one in
+    the group has, or **I'm already in this group**. A name someone has joined belongs to them.
+  - Joining asks **Create an account** (6-digit email code; joins as a member) or **Continue as guest**
+    (joins as a guest, no email).
   - Guests use **Supabase anonymous sign-in** (`signInAnonymously()`). An anonymous user is a real
     `auth.users` row with the `authenticated` role and an `is_anonymous` claim in its token, so sync,
     RLS and `push_changes()` work unchanged; the guest role limits what they can do.
+  - **Personal codes.** A guest gets a personal code when they join (as someone new or by claiming a
+    name): 6 characters from the same alphabet, unique within the group, made by the server. Only the
+    group's owner and that guest can see it, never other members. There are no resets, lock or rate limit;
+    the length is the protection. Members with an email have none.
+  - **I'm already in this group:** a guest on a new device, or one who lost their session, opens the link
+    or code, picks their name and enters their personal code. Their member row moves to the login they are
+    using now (a guest login, or one with an email), and the old login loses the group on its next pull,
+    where the device says "<name> is now signed in on another device". A name that belongs to a member
+    with an email can't be taken this way: "Sign in with your email to get back in".
   - A guest keeps their data by adding an email later ("Keep my data"): `updateUser({ email })`, then
     the 6-digit code. The user id stays the same, so their member rows and history stay theirs. An online
-    function `upgrade_guest()` then turns their `guest` rows into `member`.
+    function `upgrade_guest()` then turns their `guest` rows into `member`, and their personal codes are
+    deleted: email is their way back.
   - Anonymous users can't create groups (`group.create` checks `is_anonymous`).
-  - The token is 32 random bytes in base64url, made on the device. The server stores only its SHA-256
-    (`token_hash`). The creator's device keeps the token so it can share the link again.
-  - Creating a link works offline (it is a mutation). Share is enabled once the invite has synced.
   - Joining needs a connection and uses two functions instead of mutations, because someone who is not
-    yet a member cannot push or pull for the group: `preview_invite(token)` and
-    `join_group(token, claim_member_id, display_name)`. `preview_invite` also works signed out, so the
-    join screen can show the group before the person picks account or guest.
-- **Why multi-use:** a friend group shares one link in its group chat.
+    yet a member cannot push or pull for the group: `preview_group(code)` (works signed out, so the screen
+    can show the group before the person picks account or guest) and
+    `join_with_code(code, claim_member_id, display_name, personal_code)`. Resetting the code is a mutation
+    (`group.recode`), so it queues offline; the new code arrives with the next pull.
+- **Why one code:** a friend group shares one link in its group chat, and a short code can be read out or
+  typed from another phone. Nothing to create, expire or revoke per person.
+- **Why personal codes:** an anonymous login lives on one device; without a way back, a guest who changes
+  phones loses their place and their history.
 - **Why anonymous sign-in:** guests get the same offline sync as everyone else, with no second auth
   system, and upgrading keeps the same user.
 - **Setup:** `supabase/config.toml` sets `enable_anonymous_sign_ins = true` and
   `enable_manual_linking = true` (needed to add an email to an anonymous user). Production also needs
   CAPTCHA (Cloudflare Turnstile) on anonymous sign-ins; the default limit is 30 per hour per IP.
-- **Alternatives considered:** guests without any sign-in (a link that acts as a password; would need a
-  second permission path through every function); one link per person (more tapping).
+- **Alternatives considered:** invite links (built in 007: 14-day, revocable links, one per person if
+  wanted; more to manage than a group chat needs, and no way back for a guest); guests without any sign-in
+  (a code that acts as a password; would need a second permission path through every function).
 
 ### 10. Settle up is a progress view
 
@@ -387,12 +410,14 @@ the group. Two account rules sit outside the matrix: guests can't create groups 
   guests on a timer (not what the owner asked for); deleting the guest's shares too (balances would
   stop adding up).
 
-### 12. Join links
+### 12. Join links and codes
 
-- **Chosen Solution:** a `/join/:token` route. Someone signed out picks account or guest first and lands
-  back on the join screen (the URL is kept). The native apps need universal links and App Links, which
-  need a domain and store setup; until then, the Groups page has a "Have an invite link?" box to paste
-  it into.
+Decided 2026-11-10.
+
+- **Chosen Solution:** a `/join/:code` route (`/join/HX7K2P`). Someone signed out picks account or guest
+  first and lands back on the join screen (the URL is kept). The native apps need universal links and App
+  Links, which need a domain and store setup; until then, the Groups page has a "Have a code?" box that
+  takes the code (any case, with or without the dash) or a pasted link.
 
 ### 13. Dollars only
 
@@ -838,8 +863,9 @@ Built for 375px first and checked at 1440px, using the existing tokens and primi
 people alphabetically.
 
 1. **Groups.** Each group shows your balance in it: "You're owed $60.00" (success colour), "You owe
-   $30.00" (error colour) or "Settled up". Below the create box: "Have an invite link?" with a paste
-   field. Guests can't create groups, so they see only the paste box.
+   $30.00" (error colour) or "Settled up". Below the create box: "Have a code?" (a code or a
+   pasted link). Guests can't create groups, so they see only that box. A "<name> is now signed in on another
+   device" notice shows once for a group this device lost that way.
    Completed groups are listed below, under **Completed**.
 2. **Group.** The name, Rename (owner), and a menu with Leave group, and for the owner **Settle up and
    complete** and Delete group. A completed group shows "Completed on 3 Nov by Alex", has no add or edit
@@ -855,9 +881,12 @@ people alphabetically.
      **Undo**", or "Jo says they paid you $10.00 · **Confirm** · **Decline**". Then everyone else's debts
      ("Kim owes Alex $5.00"), read-only, and debts with name-only people, where any full member can record
      a payment. Someone who left shows "(left)". Payments show in Entries once they count.
-   - **People:** members (the owner labelled Owner), then guests, then "Not joined yet" name-only people.
-     The owner sees Add person, Remove, and invite links: create, copy, share (Web Share API, or the
-     native share sheet), revoke, and the expiry date.
+   - **People** (decided 2026-11-10): members (the owner labelled Owner), then guests, then "Not joined
+     yet" name-only people. Owners and members see the group code (`HX7-K2P`) with Copy link and Share (Web
+     Share API, or the native share sheet); the owner also has **Reset code** ("The old code stops
+     working"). A group not synced yet shows "Code after syncing". The owner sees each guest's personal
+     code next to their name; a guest sees their own ("Your code to get back in"); other members see none.
+     Add person and Remove as before; a name already in the group is refused.
 3. **Expense editor.** Full screen on phones, a dialog on desktop. Description, date (today), notes.
    One item to start: amount, **Paid by** (you first, then alphabetical), and **Split between** (a
    checkbox per person, everyone ticked). **Add item** turns it into a list of items, each with its own
@@ -874,9 +903,12 @@ people alphabetically.
    shows Alex's version and Sam's side by side (stacked on phones, with a toggle), changed fields
    highlighted, a choice per field, "Use all of Alex's" / "Use all of Sam's", and the resulting split
    before saving.
-7. **Join** (`/join/:token`). The group name, "Alex invited you", "Which one are you?" with the
-   unclaimed name-only people and "I'm not on this list", then **Create an account** or **Continue as
-   guest**. Offline: "Joining needs a connection."
+7. **Join** (`/join/:code`, decided 2026-11-10). The group name and "Alex's group", then "Which one are
+   you?" with the unclaimed name-only people, "I'm new here" (a name, unique in the group) and **I'm already
+   in this group** (the guests with a personal code; pick your name, type your code: "That code doesn't
+   match" when wrong, "Sign in with your email to get back in" for a name with an email). Then **Create an
+   account** or **Continue as guest**. An unknown, reset or completed group's code: "This code doesn't
+   work". Offline: "Joining needs a connection."
 8. **Guest banner.** On every screen for guests: "You're a guest. When the group is completed, guests
    lose access. Add your email to keep it", which opens the email and code steps.
 9. **Settings.** **Connected apps:** your tokens (name, created, last used), **Connect an app** (name it,

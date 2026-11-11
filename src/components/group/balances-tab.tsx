@@ -101,7 +101,7 @@ export function BalancesTab({ data }: { data: GroupData }) {
 														record({ from: debt.fromMemberId, to: debt.toMemberId, amountCents: debt.amountCents })
 													}
 												>
-													{iOwe ? "Record payment" : "Record received"}
+													Settle
 												</Button>
 											)}
 											{!iOwe && <NudgeButton data={data} memberId={otherId} />}
@@ -157,7 +157,7 @@ export function BalancesTab({ data }: { data: GroupData }) {
 														record({ from: debt.fromMemberId, to: debt.toMemberId, amountCents: debt.amountCents })
 													}
 												>
-													Record payment
+													Settle
 												</Button>
 											)}
 										</>

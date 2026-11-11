@@ -1,21 +1,16 @@
 import { describe, expect, test } from "bun:test";
 
-import { balanceFor, describeDebt, inviteTokenFrom, overallOf } from "@/lib/shell-view";
+import { balanceFor, describeDebt, joinedSummary, overallOf } from "@/lib/shell-view";
 
-const TOKEN = "Zk3-_abcdEFGH1234567890xyzQRSTUVWXYZ012345678";
-
-describe("inviteTokenFrom", () => {
-	test("reads a link, with or without query", () => {
-		expect(inviteTokenFrom(`https://handshake.app/join/${TOKEN}`)).toBe(TOKEN);
-		expect(inviteTokenFrom(`  http://localhost:5175/join/${TOKEN}?x=1 `)).toBe(TOKEN);
+describe("joinedSummary", () => {
+	test("names everyone up to three, alphabetically", () => {
+		expect(joinedSummary([])).toBe("");
+		expect(joinedSummary(["Jo"])).toBe("Jo");
+		expect(joinedSummary(["Sam", "jo"])).toBe("jo and Sam");
+		expect(joinedSummary(["Sam", "Ann", "Jo"])).toBe("Ann, Jo and Sam");
 	});
-	test("reads a bare token", () => {
-		expect(inviteTokenFrom(TOKEN)).toBe(TOKEN);
-	});
-	test("refuses other text", () => {
-		expect(inviteTokenFrom("hello there")).toBeNull();
-		expect(inviteTokenFrom("short")).toBeNull();
-		expect(inviteTokenFrom("")).toBeNull();
+	test("more than three: the first three and how many more", () => {
+		expect(joinedSummary(["Sam", "Ann", "Jo", "Kim", "Bo"])).toBe("Ann, Bo, Jo and 2 more");
 	});
 });
 

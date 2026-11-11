@@ -2,7 +2,7 @@ import type { Table } from "dexie";
 
 import type { LocalDb } from "@/lib/local-db";
 import type { SyncStore } from "@/lib/sync/engine";
-import { mergePull, type LocalTables, type Rows } from "@/lib/sync/local";
+import { mergePull, type LocalTables, type MovedAwayNotice, type Rows } from "@/lib/sync/local";
 import type { Mutation } from "@/lib/sync/types";
 
 // groupIndex names the field that holds the group id (the primary key itself for groups and cursors).
@@ -26,6 +26,7 @@ export function dexieTables(db: LocalDb): LocalTables {
 		invites: rows(db.invites, "groupId"),
 		inviteTokens: rows(db.inviteTokens, "groupId"),
 		nudges: rows(db.nudges, "groupId"),
+		guestCodes: rows(db.guestCodes, "groupId"),
 		cursors: rows(db.cursors, "groupId"),
 		groupIds: () => db.groups.toCollection().primaryKeys(),
 	};
@@ -42,6 +43,7 @@ export function writeTables(db: LocalDb) {
 		db.invites,
 		db.inviteTokens,
 		db.nudges,
+		db.guestCodes,
 		db.cursors,
 		db.outbox,
 	];
@@ -51,6 +53,22 @@ export function writeTables(db: LocalDb) {
 // device sheds the local effects of rejected changes.
 export async function resetCursors(db: LocalDb) {
 	await db.cursors.clear();
+}
+
+// Local only: "<name> is now signed in on another device" notices not yet dismissed, as JSON.
+export const MOVED_AWAY_KEY = "movedAwayNotices";
+
+export async function readMovedAwayNotices(db: LocalDb): Promise<MovedAwayNotice[]> {
+	const entry = await db.meta.get(MOVED_AWAY_KEY);
+	try {
+		return entry ? (JSON.parse(entry.value) as MovedAwayNotice[]) : [];
+	} catch {
+		return [];
+	}
+}
+
+export async function writeMovedAwayNotices(db: LocalDb, notices: MovedAwayNotice[]) {
+	await db.meta.put({ key: MOVED_AWAY_KEY, value: JSON.stringify(notices) });
 }
 
 async function pendingMutations(db: LocalDb): Promise<Mutation[]> {
@@ -65,8 +83,11 @@ export function createDexieSyncStore(db: LocalDb, userId: string): SyncStore {
 		},
 		cursors: async () => Object.fromEntries((await db.cursors.toArray()).map((c) => [c.groupId, c.version])),
 		applyPull: (pull) =>
-			db.transaction("rw", writeTables(db), async () => {
-				await mergePull(dexieTables(db), pull, await pendingMutations(db), userId);
+			db.transaction("rw", [...writeTables(db), db.meta], async () => {
+				const notices = await mergePull(dexieTables(db), pull, await pendingMutations(db), userId);
+				if (notices.length === 0) return;
+				const kept = (await readMovedAwayNotices(db)).filter((n) => !notices.some((m) => m.groupId === n.groupId));
+				await writeMovedAwayNotices(db, [...kept, ...notices]);
 			}),
 	};
 }

@@ -4,6 +4,7 @@ import type {
 	CursorRow,
 	EntryRow,
 	GroupRow,
+	GuestCodeRow,
 	InviteRow,
 	InviteTokenRow,
 	MemberRow,
@@ -57,6 +58,10 @@ export function createMemoryTables() {
 		(r) => r.id,
 		(r) => r.groupId
 	);
+	const guestCodes = memoryRows<GuestCodeRow>(
+		(r) => r.memberId,
+		(r) => r.groupId
+	);
 	const cursors = memoryRows<CursorRow>(
 		(r) => r.groupId,
 		(r) => r.groupId
@@ -70,11 +75,12 @@ export function createMemoryTables() {
 		invites,
 		inviteTokens,
 		nudges,
+		guestCodes,
 		cursors,
 		groupIds: async () => [...groups.map.keys()],
 	};
 
-	return { tables, groups, members, entries, conflicts, invites, inviteTokens, nudges, cursors };
+	return { tables, groups, members, entries, conflicts, invites, inviteTokens, nudges, guestCodes, cursors };
 }
 
 export function serverGroup(overrides: Partial<GroupRow> & Pick<GroupRow, "id">): GroupRow {
@@ -86,6 +92,7 @@ export function serverGroup(overrides: Partial<GroupRow> & Pick<GroupRow, "id">)
 		deletedAt: null,
 		completedAt: null,
 		completedByMemberId: null,
+		joinCode: "HX7K2P",
 		rowVersion: 1,
 		...overrides,
 	};

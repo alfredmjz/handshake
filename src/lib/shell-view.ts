@@ -1,9 +1,9 @@
-// The invite token from a pasted link ("https://…/join/abc") or a bare token; null when it isn't one.
-export function inviteTokenFrom(input: string): string | null {
-	const text = input.trim();
-	const inLink = /\/join\/([A-Za-z0-9_-]+)/.exec(text);
-	if (inLink) return inLink[1];
-	return /^[A-Za-z0-9_-]{20,}$/.test(text) ? text : null;
+// Who joined, for "3 joined · Ann, Jo and Sam": everyone up to three, else "Ann, Bo, Jo and 2 more".
+export function joinedSummary(names: string[]): string {
+	const sorted = [...names].sort((a, b) => a.localeCompare(b, undefined, { sensitivity: "base" }));
+	if (sorted.length <= 1) return sorted[0] ?? "";
+	if (sorted.length <= 3) return `${sorted.slice(0, -1).join(", ")} and ${sorted.at(-1)}`;
+	return `${sorted.slice(0, 3).join(", ")} and ${sorted.length - 3} more`;
 }
 
 export type Overall = { standing: "owed" | "owe" | "settled"; cents: number };

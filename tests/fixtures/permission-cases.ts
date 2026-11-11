@@ -3,7 +3,8 @@
 // both match it. `bun run gen:permission-cases` renders it into supabase/tests/permission_cases.test.sql,
 // and tests/lib/permission-cases-sql.test.ts fails if that file is out of date.
 //
-// Only booleans are pinned; each side words its own refusal reasons. nudge.send (chat-spec decision 4)
+// Only booleans are pinned; each side words its own refusal reasons. group.recode (2026-11-10) resets the
+// group code. nudge.send (chat-spec decision 4)
 // shipped before chat; the other chat actions (slice 8) join later.
 
 export type PermissionRole = "owner" | "member" | "guest";
@@ -22,6 +23,7 @@ export const PERMISSION_CASES: PermissionCase[] = [
 	{ action: "group.delete", owner: true, member: false, guest: false, whenCompleted: true },
 	{ action: "group.complete", owner: true, member: false, guest: false, whenCompleted: false },
 	{ action: "group.reopen", owner: true, member: false, guest: false, whenCompleted: true },
+	{ action: "group.recode", owner: true, member: false, guest: false, whenCompleted: false },
 	{ action: "member.add", owner: true, member: true, guest: false, whenCompleted: false },
 	{ action: "member.rename.self", owner: true, member: true, guest: true, whenCompleted: false },
 	{ action: "member.rename.others", owner: true, member: false, guest: false, whenCompleted: false },

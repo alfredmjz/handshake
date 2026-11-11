@@ -5,6 +5,7 @@ import type {
 	CursorRow,
 	EntryRow,
 	GroupRow,
+	GuestCodeRow,
 	InviteRow,
 	InviteTokenRow,
 	MemberRow,
@@ -24,6 +25,7 @@ export class LocalDb extends Dexie {
 	invites!: EntityTable<InviteRow, "id">;
 	inviteTokens!: EntityTable<InviteTokenRow, "inviteId">;
 	nudges!: EntityTable<NudgeRow, "id">;
+	guestCodes!: EntityTable<GuestCodeRow, "memberId">;
 	outbox!: EntityTable<OutboxEntry, "seq">;
 	cursors!: EntityTable<CursorEntry, "groupId">;
 	meta!: EntityTable<MetaEntry, "key">;
@@ -84,6 +86,18 @@ export class LocalDb extends Dexie {
 			.stores({ nudges: "id, groupId, toMemberId" })
 			.upgrade(async (tx) => {
 				// Nudges sent before this version: pull everything again to fill the table.
+				await tx.table("cursors").clear();
+			});
+		this.version(5)
+			.stores({ guestCodes: "memberId, groupId" })
+			.upgrade(async (tx) => {
+				await tx
+					.table("groups")
+					.toCollection()
+					.modify((group: Record<string, unknown>) => {
+						group.joinCode ??= null;
+					});
+				// Rows stored before group codes and guest codes: pull everything again to fill them in.
 				await tx.table("cursors").clear();
 			});
 	}

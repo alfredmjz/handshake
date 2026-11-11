@@ -19,7 +19,7 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { Inline } from "@/components/ui/stack";
 import { CurrentUserProvider, endIfAccountGone, signOut, type CurrentUser } from "@/lib/auth";
-import { CommitProvider, createCommitter, randomToken, type Commit } from "@/lib/changes";
+import { CommitProvider, createCommitter, type Commit } from "@/lib/changes";
 import { newId } from "@/lib/ids";
 import { claimLocalData, db } from "@/lib/local-db";
 import { requestSync, startSync } from "@/lib/sync/controller";
@@ -46,7 +46,6 @@ export function SignedInLayout({ user }: { user: CurrentUser }) {
 			isAnonymous: user.isAnonymous,
 			requestSync,
 			newId,
-			randomToken,
 			now: () => new Date(),
 		});
 		return async (intent) => {
@@ -125,11 +124,16 @@ export function SignedInLayout({ user }: { user: CurrentUser }) {
 										<Settings className="size-4" aria-hidden />
 										Settings
 									</DropdownMenuItem>
-									<DropdownMenuSeparator />
-									<DropdownMenuItem onSelect={() => void signOut()}>
-										<LogOut className="size-4" aria-hidden />
-										Sign out
-									</DropdownMenuItem>
+									{/* A guest who signs out can't sign back in; their way back is their code. */}
+									{!user.isAnonymous && (
+										<>
+											<DropdownMenuSeparator />
+											<DropdownMenuItem onSelect={() => void signOut()}>
+												<LogOut className="size-4" aria-hidden />
+												Sign out
+											</DropdownMenuItem>
+										</>
+									)}
 								</DropdownMenuContent>
 							</DropdownMenu>
 						</Inline>

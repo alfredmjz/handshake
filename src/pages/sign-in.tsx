@@ -1,16 +1,15 @@
 import { useState, type FormEvent } from "react";
 import { toast } from "sonner";
-import { useNavigate } from "react-router";
 
 import { HandshakeMark, ReceiptDoodle } from "@/components/art/doodles";
 import { Hand, type HandKind } from "@/components/art/hand";
+import { JoinCodeForm } from "@/components/join-code-form";
 import { Notice } from "@/components/notices";
 import { Button } from "@/components/ui/button";
 import { Field } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
 import { Stack } from "@/components/ui/stack";
 import { takeEndedNotice } from "@/lib/auth";
-import { inviteTokenFrom } from "@/lib/shell-view";
 import { supabase } from "@/lib/supabase";
 import { cn } from "@/lib/utils";
 
@@ -36,7 +35,7 @@ function HandsAroundReceipt() {
 	);
 }
 
-// Email, then the 6-digit code. Also shown from an invite link, so someone signed out can make an account.
+// Email, then the 6-digit code. Also shown from a group code, so someone signed out can make an account.
 export function EmailSignIn({ onBack }: { onBack?: () => void }) {
 	const [email, setEmail] = useState("");
 	const [code, setCode] = useState("");
@@ -131,51 +130,9 @@ export function EmailSignIn({ onBack }: { onBack?: () => void }) {
 	);
 }
 
-function InviteLinkForm({ onBack }: { onBack: () => void }) {
-	const navigate = useNavigate();
-	const [text, setText] = useState("");
-	const [error, setError] = useState(false);
-
-	function open(event: FormEvent) {
-		event.preventDefault();
-		const token = inviteTokenFrom(text);
-		if (token) navigate(`/join/${token}`);
-		else setError(true);
-	}
-
-	return (
-		<form onSubmit={open}>
-			<Stack>
-				<Field
-					label="Invite link"
-					htmlFor="invite-link"
-					error={error ? "That doesn't look like an invite link" : undefined}
-				>
-					<Input
-						id="invite-link"
-						placeholder="Paste it here"
-						autoFocus
-						value={text}
-						onChange={(e) => {
-							setText(e.target.value);
-							setError(false);
-						}}
-					/>
-				</Field>
-				<Button type="submit" size="lg" className="w-full" disabled={!text.trim()}>
-					Open
-				</Button>
-				<Button type="button" variant="ghost" className="w-full" onClick={onBack}>
-					Back
-				</Button>
-			</Stack>
-		</form>
-	);
-}
-
-// The signed-out front door: hands passing a receipt, and a cobalt sheet that asks for an email or a link.
+// The signed-out front door: hands passing a receipt, and a cobalt sheet that asks for an email or a group code.
 export function SignInPage() {
-	const [view, setView] = useState<"welcome" | "email" | "invite">("welcome");
+	const [view, setView] = useState<"welcome" | "email" | "code">("welcome");
 	const [ended] = useState(takeEndedNotice);
 
 	return (
@@ -210,9 +167,9 @@ export function SignInPage() {
 							variant="link"
 							size="inline"
 							className="self-center text-primary-foreground hover:text-primary-foreground/80"
-							onClick={() => setView("invite")}
+							onClick={() => setView("code")}
 						>
-							I have an invite link
+							Have a group code?
 						</Button>
 					</>
 				) : view === "email" ? (
@@ -222,8 +179,12 @@ export function SignInPage() {
 					</>
 				) : (
 					<>
-						<h1 className="type-h2">Join with a link</h1>
-						<InviteLinkForm onBack={() => setView("welcome")} />
+						<h1 className="type-h2">Join a group</h1>
+						<JoinCodeForm autoFocus>
+							<Button type="button" variant="ghost" className="w-full" onClick={() => setView("welcome")}>
+								Back
+							</Button>
+						</JoinCodeForm>
 					</>
 				)}
 			</section>

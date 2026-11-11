@@ -13,6 +13,7 @@ import { GroupMenu } from "@/components/group/group-menu";
 import { LedgerPage } from "@/components/group/ledger-page";
 import { PeopleTab } from "@/components/group/people-tab";
 import { todayIso } from "@/components/group/today";
+import { GuestCodeSheet } from "@/components/guest-code-sheet";
 import { EmptyState, Notice } from "@/components/notices";
 import { Screen, ScreenColumns, ScreenHeader } from "@/components/screen";
 import { Badge } from "@/components/ui/badge";
@@ -122,6 +123,7 @@ export function GroupPage() {
 
 			<ExpenseEditor groupId={group.id} open={adding} onOpenChange={setAdding} />
 			<ConflictPopup data={data} onResolve={setResolving} />
+			<GuestCodeSheet groupId={group.id} />
 			{resolving && (
 				<ConflictResolver data={data} entryId={resolving} open onOpenChange={(open) => !open && setResolving(null)} />
 			)}

@@ -12,7 +12,6 @@ Dexie.dependencies.indexedDB = indexedDB;
 Dexie.dependencies.IDBKeyRange = IDBKeyRange;
 
 const G = "g1";
-const TOKEN = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJ0123456";
 let dbCount = 0;
 
 let db: LocalDb;
@@ -28,7 +27,6 @@ function committer(userId = "user-a", isAnonymous = false) {
 		isAnonymous,
 		requestSync: () => void syncs++,
 		newId: () => ids.shift() ?? `id-${++n}`,
-		randomToken: () => TOKEN,
 		now: () => new Date("2026-11-08T10:00:00.000Z"),
 	});
 }
@@ -179,21 +177,6 @@ describe("commit", () => {
 				{ memberId: "alex", paidCents: 2000, owedCents: 1000, owedTo: { alex: 1000 } },
 				{ memberId: "sam", paidCents: 0, owedCents: 1000, owedTo: { alex: 1000 } },
 			],
-		});
-	});
-
-	test("createdId names the new invite, and its token is in inviteTokens", async () => {
-		const result = await commit({ type: "createInvite", groupId: G, claimMemberId: "jo" });
-		if (!result.ok) throw new Error(result.reason);
-
-		expect(await db.invites.get(result.createdId!)).toMatchObject({
-			claimMemberId: "jo",
-			expiresAt: "2026-11-22T10:00:00.000Z",
-		});
-		expect(await db.inviteTokens.get(result.createdId!)).toEqual({
-			inviteId: result.createdId!,
-			groupId: G,
-			token: TOKEN,
 		});
 	});
 

@@ -13,6 +13,9 @@ export type GroupRow = {
 	deletedAt: string | null;
 	completedAt: string | null;
 	completedByMemberId: string | null;
+	// The group code without its dash ("HX7K2P"). The server makes it, so it is null until the group has
+	// synced, and it stays the old one after a reset until the next pull.
+	joinCode: string | null;
 	// 0 until the server has accepted the row.
 	rowVersion: number;
 };
@@ -121,6 +124,17 @@ export type NudgeRow = {
 	rowVersion: number;
 };
 
+// A guest's personal code, for getting back in on another device. Pulled only by the group's owner (every
+// guest's) and by that guest (their own). deletedAt is set once they stop being a guest with a login.
+export type GuestCodeRow = {
+	memberId: string;
+	groupId: string;
+	code: string;
+	createdAt: string;
+	deletedAt: string | null;
+	rowVersion: number;
+};
+
 // Local only: the server keeps just the token's hash.
 export type InviteTokenRow = { inviteId: string; groupId: string; token: string };
 
@@ -134,6 +148,8 @@ type MutationBody =
 	| { type: "group.delete"; groupId: string }
 	| { type: "group.complete"; groupId: string }
 	| { type: "group.reopen"; groupId: string }
+	// A new group code, made by the server; the old one stops working.
+	| { type: "group.recode"; groupId: string }
 	| { type: "member.add"; groupId: string; memberId: string; displayName: string }
 	| { type: "member.rename"; groupId: string; memberId: string; displayName: string }
 	| { type: "member.remove"; groupId: string; memberId: string }
@@ -196,5 +212,8 @@ export type GroupChanges = {
 	conflicts: ConflictRow[];
 	invites: InviteRow[];
 	nudges: NudgeRow[];
+	guestCodes: GuestCodeRow[];
 };
-export type PullResult = { groupIds: string[]; changes: GroupChanges[] };
+// movedAway: groups this login lost because its guest name was taken back with the personal code on
+// another device. Missing from servers before 012.
+export type PullResult = { groupIds: string[]; changes: GroupChanges[]; movedAway?: string[] };

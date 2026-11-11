@@ -189,7 +189,7 @@ SELECT is(pg_temp.try('aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa', pg_temp.nudge('600
 -- ---------------------------------------------------------------------------
 SELECT is(
     (SELECT array_agg(k ORDER BY k) FROM jsonb_object_keys(pg_temp.pull('bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb')#>'{changes,0}') k),
-    ARRAY['conflicts', 'entries', 'group_id', 'groups', 'invites', 'members', 'nudges', 'version'],
+    ARRAY['conflicts', 'entries', 'group_id', 'groups', 'guest_codes', 'invites', 'members', 'nudges', 'version'],
     'a pulled group change has exactly these keys'
 );
 SELECT is(

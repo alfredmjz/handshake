@@ -14,7 +14,6 @@ import type {
 	ConflictRow,
 	EntryRow,
 	GroupRow,
-	InviteRow,
 	MemberRow,
 	Mutation,
 	NudgeRow,
@@ -26,7 +25,6 @@ export type GroupState = {
 	members: MemberRow[];
 	entries: EntryRow[];
 	conflicts: ConflictRow[];
-	invites: InviteRow[];
 	// Only the nudge intent reads it; missing is none.
 	nudges?: NudgeRow[];
 	me: { memberId: string; role: Role; isAnonymous: boolean };
@@ -59,8 +57,8 @@ export type GroupIntent =
 	| { type: "resolveConflict"; conflictId: string; resolution: ConflictResolution; final: ExpenseDraft | "deleted" }
 	| { type: "completeGroup" }
 	| { type: "reopenGroup" }
-	| { type: "createInvite"; claimMemberId: string | null }
-	| { type: "revokeInvite"; inviteId: string }
+	// Owner only: a new group code from the server; the old one stops working.
+	| { type: "resetGroupCode" }
 	// memberId: the person who owes me; the amount is what they owe me now.
 	| { type: "nudge"; memberId: string };
 
@@ -71,20 +69,17 @@ export type Intent =
 export type RefusalCode = "HS403" | "HS409" | "HS422";
 
 export type Plan =
-	// createdId: the new group, person, entry, invite or nudge.
+	// createdId: the new group, person, entry or nudge.
 	{ ok: true; mutations: Mutation[]; createdId: string | null } | { ok: false; code: RefusalCode; reason: string };
 
 export type PlanContext = {
 	newId(): string;
-	// 32 random bytes in base64url (43 characters).
-	randomToken(): string;
 	now: string;
 	today: string;
 	// group.create checks the account, not a group role.
 	isAnonymous: boolean;
 };
 
-const INVITE_LIFETIME_MS = 14 * 24 * 60 * 60 * 1000;
 const MAX_CENTS = 1_000_000_000_000;
 
 type MutationBody = Mutation extends infer M ? (M extends Mutation ? Omit<M, "id" | "at"> : never) : never;
@@ -224,6 +219,14 @@ const groupNoteProblem = (note: string | null) => {
 const displayNameProblem = (name: string) =>
 	nameLength(name) < 1 || nameLength(name) > 60 ? refuse("HS422", "A name must be 1 to 60 characters") : null;
 
+// private.require_unique_name: names are unique among the group's active people, ignoring case and outer spaces.
+export function isNameTaken(members: MemberRow[], name: string, exceptMemberId: string | null = null): boolean {
+	const key = name.trim().toLowerCase();
+	return members.some((m) => !m.deletedAt && m.id !== exceptMemberId && m.displayName.trim().toLowerCase() === key);
+}
+
+const nameClash = (name: string) => refuse("HS409", `${name.trim()} is already in this group`);
+
 // Turns what a person asks for into the mutations that do it, in apply order, or the refusal push_changes
 // would give (same code, same order of checks). Pure: everything it needs is in its arguments.
 export function planChange(state: GroupState | null, intent: Intent, ctx: PlanContext): Plan {
@@ -286,19 +289,27 @@ export function planChange(state: GroupState | null, intent: Intent, ctx: PlanCo
 			return (
 				check(state, "group.reopen") ?? (state!.group.completedAt ? one({ type: "group.reopen", groupId }) : nothing)
 			);
+		case "resetGroupCode":
+			return check(state, "group.recode") ?? one({ type: "group.recode", groupId });
 
 		case "addPerson": {
 			const refused = check(state, "member.add") ?? displayNameProblem(intent.displayName);
 			if (refused) return refused;
+			if (isNameTaken(state!.members, intent.displayName)) return nameClash(intent.displayName);
 			const memberId = ctx.newId();
 			return one({ type: "member.add", groupId, memberId, displayName: intent.displayName.trim() }, memberId);
 		}
 		case "renamePerson": {
 			const refused = check(state, intent.memberId === me ? "member.rename.self" : "member.rename.others");
 			if (refused) return refused;
-			if (!member(intent.memberId)) return refuse("HS422", "That person is not in this group");
+			const target = member(intent.memberId);
+			if (!target) return refuse("HS422", "That person is not in this group");
+			const renamed = target.displayName.trim().toLowerCase() !== intent.displayName.trim().toLowerCase();
 			return (
 				displayNameProblem(intent.displayName) ??
+				(renamed && isNameTaken(state!.members, intent.displayName, target.id)
+					? nameClash(intent.displayName)
+					: null) ??
 				one({ type: "member.rename", groupId, memberId: intent.memberId, displayName: intent.displayName.trim() })
 			);
 		}
@@ -431,43 +442,6 @@ export function planChange(state: GroupState | null, intent: Intent, ctx: PlanCo
 			return one({ type: "payment.undo", groupId, entryId: payment.id });
 		}
 
-		case "createInvite": {
-			const refused = check(state, "invite.create");
-			if (refused) return refused;
-			const token = ctx.randomToken();
-			if (!/^[A-Za-z0-9_-]{43}$/.test(token))
-				return refuse("HS422", "An invite token must be 32 random bytes in base64url");
-			if (intent.claimMemberId !== null) {
-				const claim = member(intent.claimMemberId);
-				if (!claim || claim.userId !== null || claim.deletedAt)
-					return refuse("HS422", "An invite can only be for someone in this group who hasn't joined");
-			}
-			const inviteId = ctx.newId();
-			return one(
-				{
-					type: "invite.create",
-					groupId,
-					inviteId,
-					token,
-					claimMemberId: intent.claimMemberId,
-					expiresAt: new Date(Date.parse(at) + INVITE_LIFETIME_MS).toISOString(),
-				},
-				inviteId
-			);
-		}
-		case "revokeInvite": {
-			// invites.created_by is a user id; a link this device doesn't have is checked as your own.
-			const invite = state?.invites.find((i) => i.id === intent.inviteId);
-			const myUserId = me ? member(me)?.userId : undefined;
-			const refused = check(
-				state,
-				!invite || invite.createdBy === myUserId ? "invite.revoke.own" : "invite.revoke.others"
-			);
-			if (refused) return refused;
-			if (!invite || invite.revokedAt) return nothing;
-			return one({ type: "invite.revoke", groupId, inviteId: invite.id });
-		}
-
 		case "nudge": {
 			const refused = check(state, "nudge.send");
 			if (refused) return refused;
@@ -486,15 +460,6 @@ export function planChange(state: GroupState | null, intent: Intent, ctx: PlanCo
 	}
 }
 
-// 32 random bytes in base64url, as invite tokens are.
-export function randomToken(): string {
-	const bytes = crypto.getRandomValues(new Uint8Array(32));
-	return btoa(String.fromCharCode(...bytes))
-		.replace(/\+/g, "-")
-		.replace(/\//g, "_")
-		.replace(/=+$/, "");
-}
-
 function localDate(date: Date) {
 	const pad = (n: number) => String(n).padStart(2, "0");
 	return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
@@ -507,10 +472,9 @@ async function readGroupState(db: LocalDb, groupId: string, userId: string, isAn
 	const members = await db.members.where("groupId").equals(groupId).toArray();
 	const mine = members.find((m) => m.userId === userId && !m.deletedAt);
 	if (!mine) return null;
-	const [entries, conflicts, invites, nudges] = await Promise.all([
+	const [entries, conflicts, nudges] = await Promise.all([
 		db.entries.where("groupId").equals(groupId).toArray(),
 		db.conflicts.where("groupId").equals(groupId).toArray(),
-		db.invites.where("groupId").equals(groupId).toArray(),
 		db.nudges.where("groupId").equals(groupId).toArray(),
 	]);
 	const state: GroupState = {
@@ -518,7 +482,6 @@ async function readGroupState(db: LocalDb, groupId: string, userId: string, isAn
 		members,
 		entries,
 		conflicts,
-		invites,
 		nudges,
 		me: { memberId: mine.id, role: mine.role, isAnonymous },
 	};
@@ -533,7 +496,6 @@ export type CommitterDeps = {
 	isAnonymous: boolean;
 	requestSync(): void;
 	newId(): string;
-	randomToken(): string;
 	now(): Date;
 };
 
@@ -545,7 +507,6 @@ export function createCommitter(deps: CommitterDeps): Commit {
 		const now = deps.now();
 		const ctx: PlanContext = {
 			newId: deps.newId,
-			randomToken: deps.randomToken,
 			now: now.toISOString(),
 			today: localDate(now),
 			isAnonymous,

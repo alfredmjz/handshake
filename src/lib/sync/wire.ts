@@ -6,17 +6,20 @@ import type {
 	GroupRow,
 	InviteRow,
 	MemberRow,
+	GuestCodeRow,
 	NudgeRow,
 	PullResult,
 	Share,
 } from "@/lib/sync/types";
 
-// pull_changes() rows as supabase/migrations/011_nudges.sql builds them.
+// pull_changes() rows as supabase/migrations/012_group_codes.sql builds them.
 export type RawGroup = {
 	id: string;
 	name: string;
 	note: string | null;
 	base_currency: string;
+	// Missing from servers before 012.
+	join_code?: string | null;
 	created_by: string | null;
 	created_at: string;
 	deleted_at: string | null;
@@ -101,6 +104,15 @@ export type RawNudge = {
 	row_version: number;
 };
 
+export type RawGuestCode = {
+	member_id: string;
+	group_id: string;
+	code: string;
+	created_at: string;
+	deleted_at: string | null;
+	row_version: number;
+};
+
 export type RawGroupChanges = {
 	group_id: string;
 	version: number;
@@ -111,9 +123,12 @@ export type RawGroupChanges = {
 	invites: RawInvite[];
 	// Missing from servers before 011.
 	nudges?: RawNudge[];
+	// Missing from servers before 012.
+	guest_codes?: RawGuestCode[];
 };
 
-export type RawPull = { group_ids: string[]; changes: RawGroupChanges[] };
+// moved_away is missing from servers before 012.
+export type RawPull = { group_ids: string[]; changes: RawGroupChanges[]; moved_away?: string[] };
 
 // base_currency is not kept on the device (dollars only).
 export function toGroupRow(raw: RawGroup): GroupRow {
@@ -126,6 +141,7 @@ export function toGroupRow(raw: RawGroup): GroupRow {
 		deletedAt: raw.deleted_at,
 		completedAt: raw.completed_at,
 		completedByMemberId: raw.completed_by_member_id,
+		joinCode: raw.join_code ?? null,
 		rowVersion: raw.row_version,
 	};
 }
@@ -221,6 +237,17 @@ export function toNudgeRow(raw: RawNudge): NudgeRow {
 	};
 }
 
+export function toGuestCodeRow(raw: RawGuestCode): GuestCodeRow {
+	return {
+		memberId: raw.member_id,
+		groupId: raw.group_id,
+		code: raw.code,
+		createdAt: raw.created_at,
+		deletedAt: raw.deleted_at,
+		rowVersion: raw.row_version,
+	};
+}
+
 function toGroupChanges(raw: RawGroupChanges): GroupChanges {
 	return {
 		groupId: raw.group_id,
@@ -231,9 +258,10 @@ function toGroupChanges(raw: RawGroupChanges): GroupChanges {
 		conflicts: raw.conflicts.map(toConflictRow),
 		invites: raw.invites.map(toInviteRow),
 		nudges: (raw.nudges ?? []).map(toNudgeRow),
+		guestCodes: (raw.guest_codes ?? []).map(toGuestCodeRow),
 	};
 }
 
 export function toPullResult(raw: RawPull): PullResult {
-	return { groupIds: raw.group_ids, changes: raw.changes.map(toGroupChanges) };
+	return { groupIds: raw.group_ids, changes: raw.changes.map(toGroupChanges), movedAway: raw.moved_away ?? [] };
 }

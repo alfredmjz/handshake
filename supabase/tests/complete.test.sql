@@ -189,7 +189,7 @@ SELECT is(pg_temp.pull('dddddddd-dddd-dddd-dddd-dddddddddddd')->'group_ids', '[]
 
 SELECT is(
     (SELECT array_agg(k ORDER BY k) FROM jsonb_object_keys(pg_temp.pull('aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa')#>'{changes,0,groups,0}') k),
-    ARRAY['base_currency', 'completed_at', 'completed_by_member_id', 'created_at', 'created_by', 'deleted_at', 'id', 'name', 'note', 'row_version'],
+    ARRAY['base_currency', 'completed_at', 'completed_by_member_id', 'created_at', 'created_by', 'deleted_at', 'id', 'join_code', 'name', 'note', 'row_version'],
     'a pulled group has exactly these keys'
 );
 SELECT is(

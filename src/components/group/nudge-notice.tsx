@@ -19,7 +19,7 @@ type NudgeNoticeProps = {
 	onPaid?: (amountCents: number) => void;
 };
 
-// "Alex nudged you · $20.00" on the card of a debt I still owe them, with I paid, until I pay them.
+// "Alex nudged you · $20.00" on the card of a debt I still owe them, with Settle, until I pay them.
 export function NudgeNotice({ groupId, fromId, fromName, meId, entries, onPaid }: NudgeNoticeProps) {
 	const nudge = openNudge(useLastNudge(groupId, fromId, meId) ?? null, entries, fromId, meId);
 	if (!nudge) return null;
@@ -28,7 +28,7 @@ export function NudgeNotice({ groupId, fromId, fromName, meId, entries, onPaid }
 			action={
 				onPaid && (
 					<Button size="sm" onClick={() => onPaid(nudge.amountCents)}>
-						I paid
+						Settle
 					</Button>
 				)
 			}

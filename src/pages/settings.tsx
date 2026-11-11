@@ -4,6 +4,7 @@ import { toast } from "sonner";
 
 import { ConfirmDialog } from "@/components/confirm-dialog";
 import { EditorDialog } from "@/components/editor-dialog";
+import { MyGuestCodes } from "@/components/guest-code";
 import { useOpenDebts } from "@/components/my-balances";
 import { Notice } from "@/components/notices";
 import { Screen, ScreenHeader, Section } from "@/components/screen";
@@ -263,10 +264,19 @@ export function SettingsPage() {
 				title="Settings"
 				lead={user.isAnonymous ? "Guest" : user.email}
 			/>
-			{!user.isAnonymous && <ConnectedApps />}
-			<Button variant="outline" className="self-start" onClick={() => void signOut()}>
-				Sign out
-			</Button>
+			{user.isAnonymous ? (
+				<Section title="Your code">
+					<MyGuestCodes className="type-body flex flex-col" />
+					<p className="type-body-sm text-muted-foreground">Save it to get back in on another device.</p>
+				</Section>
+			) : (
+				<>
+					<ConnectedApps />
+					<Button variant="outline" className="self-start" onClick={() => void signOut()}>
+						Sign out
+					</Button>
+				</>
+			)}
 			<DeleteAccount />
 		</Screen>
 	);

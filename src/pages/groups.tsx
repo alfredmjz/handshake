@@ -1,12 +1,14 @@
-import { useState, type FormEvent } from "react";
+import { useState } from "react";
+import { X } from "lucide-react";
 import { Link, useNavigate } from "react-router";
 
 import { CheckDoodle } from "@/components/art/doodles";
 import { BookCover, NewBookButton } from "@/components/book-cover";
 import { EditorDialog } from "@/components/editor-dialog";
+import { JoinCodeForm } from "@/components/join-code-form";
 import { Amount } from "@/components/money";
 import { useMyBalances, type GroupStanding } from "@/components/my-balances";
-import { EmptyState } from "@/components/notices";
+import { EmptyState, Notice } from "@/components/notices";
 import { Screen, ScreenHeader, Section } from "@/components/screen";
 import { showRefusal } from "@/components/signed-in-layout";
 import { Badge } from "@/components/ui/badge";
@@ -14,11 +16,13 @@ import { Button } from "@/components/ui/button";
 import { Field } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
+import { Stack } from "@/components/ui/stack";
 import { defaultDisplayName, useCurrentUser } from "@/lib/auth";
 import { useCommit } from "@/lib/changes";
+import { dismissMovedAwayNotice, useMovedAwayNotices } from "@/lib/codes";
 import { useGroupCategories } from "@/lib/entries";
 import { useGroups } from "@/lib/groups";
-import { inviteTokenFrom, overallOf } from "@/lib/shell-view";
+import { overallOf } from "@/lib/shell-view";
 import type { Category, GroupRow } from "@/lib/sync/types";
 
 const GRID = "grid grid-cols-2 gap-x-stack gap-y-section sm:grid-cols-3 lg:grid-cols-5";
@@ -71,48 +75,42 @@ function GroupCell({
 	);
 }
 
-function InviteLinkBox() {
-	const navigate = useNavigate();
+function GroupCodeBox() {
 	const [open, setOpen] = useState(false);
-	const [text, setText] = useState("");
-	const [error, setError] = useState(false);
-
-	function go(event: FormEvent) {
-		event.preventDefault();
-		const token = inviteTokenFrom(text);
-		if (token) navigate(`/join/${token}`);
-		else setError(true);
-	}
-
 	if (!open)
 		return (
 			<Button variant="link" size="inline" className="self-center" onClick={() => setOpen(true)}>
-				Have an invite link?
+				Have a group code?
 			</Button>
 		);
+	return <JoinCodeForm className="mx-auto w-full max-w-md" autoFocus />;
+}
+
+// "Sam is now signed in on another device": once for each group this device lost that way.
+function MovedAwayNotices() {
+	const notices = useMovedAwayNotices();
+	if (notices.length === 0) return null;
 	return (
-		<form onSubmit={go} className="mx-auto flex w-full max-w-md items-end gap-control">
-			<Field
-				label="Invite link"
-				htmlFor="paste-invite"
-				className="flex-1"
-				error={error ? "That doesn't look like an invite link" : undefined}
-			>
-				<Input
-					id="paste-invite"
-					placeholder="Paste it here"
-					autoFocus
-					value={text}
-					onChange={(e) => {
-						setText(e.target.value);
-						setError(false);
-					}}
-				/>
-			</Field>
-			<Button type="submit" disabled={!text.trim()}>
-				Open
-			</Button>
-		</form>
+		<Stack gap="control">
+			{notices.map((n) => (
+				<Notice
+					key={n.groupId}
+					action={
+						<Button
+							size="icon-sm"
+							variant="ghost"
+							aria-label="Dismiss"
+							title="Dismiss"
+							onClick={() => void dismissMovedAwayNotice(n.groupId)}
+						>
+							<X />
+						</Button>
+					}
+				>
+					<span className="font-semibold">{n.groupName}</span> · {n.displayName} is now signed in on another device
+				</Notice>
+			))}
+		</Stack>
 	);
 }
 
@@ -206,6 +204,7 @@ export function GroupsPage() {
 					))
 				}
 			/>
+			<MovedAwayNotices />
 
 			{groups === undefined ? (
 				<div className={GRID}>
@@ -217,7 +216,7 @@ export function GroupsPage() {
 					title={
 						canCreate
 							? "No groups yet. Start one for a trip, a home or a night out."
-							: "No groups yet. Open an invite link to join one."
+							: "No groups yet. Open a group code to join one."
 					}
 					action={canCreate ? <Button onClick={() => setCreating(true)}>Start a group</Button> : undefined}
 				/>
@@ -235,7 +234,7 @@ export function GroupsPage() {
 				</>
 			)}
 
-			<InviteLinkBox />
+			<GroupCodeBox />
 			{canCreate && <NewGroupDialog open={creating} onOpenChange={setCreating} />}
 		</Screen>
 	);

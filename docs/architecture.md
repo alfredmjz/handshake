@@ -1617,36 +1617,93 @@ JSONB` → `[{ "id", "name", "scope", "createdAt", "lastUsedAt" }]` (live only, 
 - `pull_changes()` (redefined whole): each group change gains `nudges`.
 - Tests: `supabase/tests/nudges.test.sql` (also pins the group change's key set).
 
+**`012_group_codes.sql`** (2026-11-10; owner decisions of 2026-11-10: one join code per group replaces invite
+links, and guests get a personal code)
+
+- Codes: 6 characters from `ABCDEFGHJKMNPQRSTUVWXYZ23456789` (no 0/O, 1/I/L), made by
+  `private.random_code()` from `extensions.gen_random_bytes` (bytes 248–255 skipped, so every character is
+  equally likely). Stored without the dash; `private.normalise_code()` upper-cases and drops dashes and
+  spaces, so typed codes are case-insensitive. Shown as `HX7-K2P`, linked as `/join/HX7K2P`.
+- `groups.join_code TEXT NOT NULL UNIQUE` (check `^[A-HJKMNP-Z2-9]{6}$`), default `private.new_join_code()`
+  (retries until unused), so `group.create` gets one without changing `apply_group_create`. Existing groups
+  were backfilled, each in a new version. Members read it through the existing `SELECT` on `groups`; a group
+  made offline has no code on the device until it syncs.
+- Matrix: `group.recode` for the owner only, not in a completed group. `group.recode { groupId }` sets a new
+  code in a new version; the old code stops working at once (`HS404`).
+- `public.guest_codes (member_id PK, group_id, code, created_at, deleted_at, row_version)`; `(group_id, code)`
+  unique among live codes; `(group_id, member_id)` references `group_members`. RLS: `SELECT` for the group's
+  active owner (every guest code) and for the guest whose row it is (their own); other members see none.
+  `private.give_guest_code()` makes one when a guest joins (no reset, no lock, no rate limit).
+  `deleted_at` (soft, so the owner's device learns it) is set by the trigger `group_members_drop_guest_code`
+  whenever a member row stops being a guest with a login (`role` leaves `guest` or `user_id` becomes NULL), in
+  that row's version: `upgrade_guest()`, `group.complete` (guests become name-only people),
+  `delete_account()`, and coming back as a login with an email. `private.hand_over()` re-stamps the group's
+  guest codes so a new owner, already past their versions, pulls them.
+- Unique names: `private.require_unique_name()` compares `lower(btrim(display_name))` with the group's active
+  people (someone who left doesn't hold their name). `member.add`, `member.rename` (skipped when the name
+  stays the same apart from case and spaces, so old duplicates stay) and `join_with_code` (someone new)
+  raise `HS409` "`<name>` is already in this group". `group.create`'s owner name is the first.
+- `public.preview_group(p_code TEXT)` (`anon`, `authenticated`) → `{ "groupId", "groupName", "ownerName",
+"unclaimed": [{ "memberId", "displayName" }], "returning": [{ "memberId", "displayName" }],
+"alreadyMember" }`. `unclaimed`: name-only people (no login, not left); `returning`: guests with a login
+  and a live personal code; both sorted by name. `HS404` "This code doesn't work" for an unknown code or a
+  deleted or completed group (it works again after reopen).
+- `public.join_with_code(p_code TEXT, p_claim_member_id UUID DEFAULT NULL, p_display_name TEXT DEFAULT NULL,
+p_personal_code TEXT DEFAULT NULL)` (`authenticated`) → the group id. Locks the group and finds the code
+  again. Already an active member → nothing changes. With `p_personal_code`: `p_claim_member_id` must be an
+  active person in the group (`HS422` "That person is not in this group"), not a member with an email
+  (`HS422` "Sign in with your email to get back in"), with that live code (`HS422` "That code doesn't
+  match"); the row's `user_id` moves to the caller (role `guest` if anonymous, else `member`), a
+  `guest_handoffs` row records the login it left, and the caller's own old left row (if any) lets go of their
+  login. Otherwise, in this order: the caller's old left row comes back; the name-only person
+  `p_claim_member_id` (`HS422` "That person is not in this group" / "Someone has already joined as that
+  person"); or someone new named `p_display_name` (else the profile name), unique. Anonymous callers join as
+  guests and get a personal code in the same version.
+- `public.guest_handoffs (id, group_id, member_id, from_user_id, moved_at)`; RLS `SELECT` for
+  `from_user_id = auth.uid()`.
+- `pull_changes()` (redefined whole): groups gain `join_code`; each group change gains `guest_codes` (the
+  rows RLS lets the caller see); the reply gains top-level `moved_away` (ids of groups this login lost to a
+  personal code, so the device can say "`<name>` is now signed in on another device" instead of treating it
+  as a removal).
+- `group_invites`, `invite.create`/`invite.revoke`, `preview_invite`, `join_group` stay (additive); the
+  client stops using them once the screens move to codes. `join_group` does not check names or make
+  personal codes.
+- Tests: `supabase/tests/group_codes.test.sql`; `categories_notes`, `complete`, `nudges` and `sync` tests pin
+  the new keys.
+
 #### What chat 3 builds against (as built)
 
 Functions (all `SET search_path = ''`):
 
-| Function                                                                                                 | Returns                                                                                                                                                                                                                               | Called by               |
-| -------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------- |
-| `public.push_changes(p_mutations JSONB)`                                                                 | `{ "applied": [id], "rejected": [{ "id", "code", "reason" }] }`                                                                                                                                                                       | `authenticated`         |
-| `public.pull_changes(p_cursors JSONB DEFAULT '{}')`                                                      | `{ "group_ids": [id], "changes": [{ "group_id", "version", "groups", "members", "entries", "conflicts", "invites", "nudges" }] }`                                                                                                     | `authenticated`         |
-| `public.preview_invite(p_token TEXT)`                                                                    | `{ "groupId", "groupName", "invitedBy", "claimMemberId", "unclaimed": [{ "memberId", "displayName" }], "alreadyMember" }`                                                                                                             | `anon`, `authenticated` |
-| `public.join_group(p_token TEXT, p_claim_member_id UUID DEFAULT NULL, p_display_name TEXT DEFAULT NULL)` | the group id (`UUID`)                                                                                                                                                                                                                 | `authenticated`         |
-| `public.upgrade_guest()`                                                                                 | `VOID`                                                                                                                                                                                                                                | `authenticated`         |
-| `public.create_api_token(p_name TEXT)`                                                                   | `{ "id", "token", "name", "createdAt" }`                                                                                                                                                                                              | `authenticated`         |
-| `public.list_api_tokens()`                                                                               | `[{ "id", "name", "scope", "createdAt", "lastUsedAt" }]`, newest first                                                                                                                                                                | `authenticated`         |
-| `public.revoke_api_token(p_id UUID)`                                                                     | `VOID`                                                                                                                                                                                                                                | `authenticated`         |
-| `api.v1_me(p_token_hash TEXT)`                                                                           | `{ "userId", "displayName" }`                                                                                                                                                                                                         | `handshake_api`         |
-| `api.v1_groups(p_token_hash TEXT)`                                                                       | `[{ "id", "name", "role", "memberId", "paidCents", "owedCents", "completedAt", "updatedAt" }]`                                                                                                                                        | `handshake_api`         |
-| `api.v1_group(p_token_hash TEXT, p_group_id UUID)`                                                       | one group as above plus `"members": [{ "memberId", "displayName", "active", "paidCents", "owedCents" }]`, or NULL                                                                                                                     | `handshake_api`         |
-| `api.v1_entries(p_token_hash TEXT, p_group_id UUID, p_cursor JSONB, p_limit INT)`                        | `{ "entries": [{ "id", "groupId", "kind", "description", "entryDate", "totalCents", "involved", "paidCents", "owedCents", "hasConflict", "createdAt", "updatedAt", "deletedAt" }], "cursor", "hasMore", "removedGroupIds" }`, or NULL | `handshake_api`         |
+| Function                                                                                                                                             | Returns                                                                                                                                                                                                                               | Called by               |
+| ---------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------- |
+| `public.push_changes(p_mutations JSONB)`                                                                                                             | `{ "applied": [id], "rejected": [{ "id", "code", "reason" }] }`                                                                                                                                                                       | `authenticated`         |
+| `public.pull_changes(p_cursors JSONB DEFAULT '{}')`                                                                                                  | `{ "group_ids": [id], "moved_away": [id], "changes": [{ "group_id", "version", "groups", "members", "entries", "conflicts", "invites", "nudges", "guest_codes" }] }`                                                                  | `authenticated`         |
+| `public.preview_invite(p_token TEXT)`                                                                                                                | `{ "groupId", "groupName", "invitedBy", "claimMemberId", "unclaimed": [{ "memberId", "displayName" }], "alreadyMember" }`                                                                                                             | `anon`, `authenticated` |
+| `public.join_group(p_token TEXT, p_claim_member_id UUID DEFAULT NULL, p_display_name TEXT DEFAULT NULL)`                                             | the group id (`UUID`)                                                                                                                                                                                                                 | `authenticated`         |
+| `public.preview_group(p_code TEXT)` (012)                                                                                                            | `{ "groupId", "groupName", "ownerName", "unclaimed": [{ "memberId", "displayName" }], "returning": [{ "memberId", "displayName" }], "alreadyMember" }`                                                                                | `anon`, `authenticated` |
+| `public.join_with_code(p_code TEXT, p_claim_member_id UUID DEFAULT NULL, p_display_name TEXT DEFAULT NULL, p_personal_code TEXT DEFAULT NULL)` (012) | the group id (`UUID`)                                                                                                                                                                                                                 | `authenticated`         |
+| `public.upgrade_guest()`                                                                                                                             | `VOID`                                                                                                                                                                                                                                | `authenticated`         |
+| `public.create_api_token(p_name TEXT)`                                                                                                               | `{ "id", "token", "name", "createdAt" }`                                                                                                                                                                                              | `authenticated`         |
+| `public.list_api_tokens()`                                                                                                                           | `[{ "id", "name", "scope", "createdAt", "lastUsedAt" }]`, newest first                                                                                                                                                                | `authenticated`         |
+| `public.revoke_api_token(p_id UUID)`                                                                                                                 | `VOID`                                                                                                                                                                                                                                | `authenticated`         |
+| `api.v1_me(p_token_hash TEXT)`                                                                                                                       | `{ "userId", "displayName" }`                                                                                                                                                                                                         | `handshake_api`         |
+| `api.v1_groups(p_token_hash TEXT)`                                                                                                                   | `[{ "id", "name", "role", "memberId", "paidCents", "owedCents", "completedAt", "updatedAt" }]`                                                                                                                                        | `handshake_api`         |
+| `api.v1_group(p_token_hash TEXT, p_group_id UUID)`                                                                                                   | one group as above plus `"members": [{ "memberId", "displayName", "active", "paidCents", "owedCents" }]`, or NULL                                                                                                                     | `handshake_api`         |
+| `api.v1_entries(p_token_hash TEXT, p_group_id UUID, p_cursor JSONB, p_limit INT)`                                                                    | `{ "entries": [{ "id", "groupId", "kind", "description", "entryDate", "totalCents", "involved", "paidCents", "owedCents", "hasConflict", "createdAt", "updatedAt", "deletedAt" }], "cursor", "hasMore", "removedGroupIds" }`, or NULL | `handshake_api`         |
 
-Pull rows, snake_case, with exactly these keys (pgTAP checks each set; as of 011):
+Pull rows, snake_case, with exactly these keys (pgTAP checks each set; as of 012):
 
 | Row                | Keys                                                                                                                                                                                                                                                                                                                                                   |
 | ------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `groups`           | `id`, `name`, `note`, `base_currency`, `created_by`, `created_at`, `deleted_at`, `completed_at`, `completed_by_member_id`, `row_version`                                                                                                                                                                                                               |
+| `groups`           | `id`, `name`, `note`, `base_currency`, `join_code`, `created_by`, `created_at`, `deleted_at`, `completed_at`, `completed_by_member_id`, `row_version`                                                                                                                                                                                                  |
 | `members`          | `id`, `group_id`, `user_id`, `display_name`, `role`, `joined_at`, `deleted_at`, `row_version`                                                                                                                                                                                                                                                          |
 | `entries`          | `id`, `group_id`, `kind`, `description`, `amount_cents`, `items`, `entry_date`, `notes`, `category`, `payment_status`, `payer_confirmed_at`, `receiver_confirmed_at`, `confirmed_at`, `closed_at`, `close_note`, `created_by_member_id`, `updated_by_member_id`, `created_at`, `updated_at`, `deleted_at`, `row_version`, `shares` (no `recorded_via`) |
 | `entries[].shares` | `member_id`, `paid_cents`, `owed_cents`, `owed_to` (payer member id → cents; sorted by `member_id`)                                                                                                                                                                                                                                                    |
 | `conflicts`        | `id`, `group_id`, `entry_id`, `base_version`, `base`, `proposed`, `proposed_by_member_id`, `created_at`, `resolved_at`, `resolved_by_member_id`, `resolution`, `row_version`                                                                                                                                                                           |
 | `invites`          | `id`, `group_id`, `claim_member_id`, `created_by`, `created_at`, `expires_at`, `revoked_at`, `row_version`                                                                                                                                                                                                                                             |
 | `nudges`           | `id`, `group_id`, `from_member_id`, `to_member_id`, `amount_cents`, `created_at`, `row_version`                                                                                                                                                                                                                                                        |
+| `guest_codes`      | `member_id`, `group_id`, `code`, `created_at`, `deleted_at`, `row_version` (only the rows the caller may see)                                                                                                                                                                                                                                          |
 
 The order of `changes` and of the rows in each list is not defined; the device must not rely on it.
 
@@ -1659,6 +1716,7 @@ permission matrix, `private.may`):
 | `group.rename`                                   | `groupId`, `name`                                                                                                                                                    | Owner                                                              |
 | `group.describe`                                 | `groupId`, `note` (null or blank clears it)                                                                                                                          | Owner (checked as `group.rename`)                                  |
 | `group.delete`, `group.complete`, `group.reopen` | `groupId`                                                                                                                                                            | Owner                                                              |
+| `group.recode` (012)                             | `groupId`                                                                                                                                                            | Owner (not in a completed group)                                   |
 | `member.add`                                     | `groupId`, `memberId`, `displayName`                                                                                                                                 | Owner, member                                                      |
 | `member.rename`                                  | `groupId`, `memberId`, `displayName`                                                                                                                                 | Owner; anyone for themselves                                       |
 | `member.remove`                                  | `groupId`, `memberId`                                                                                                                                                | Owner; anyone for themselves (leaving)                             |

@@ -27,7 +27,7 @@ type PaymentButtonsProps = {
 	size?: "sm" | "default";
 };
 
-// Shake on it (confirm) and Decline for the side still to answer; Undo for whoever recorded it, while it waits.
+// Settle (confirm) and Decline for the side still to answer; Undo for whoever recorded it, while it waits.
 export function PaymentButtons({ entry, data, onConfirmed, size = "sm" }: PaymentButtonsProps) {
 	const run = useRun();
 	const [declining, setDeclining] = useState(false);
@@ -49,7 +49,7 @@ export function PaymentButtons({ entry, data, onConfirmed, size = "sm" }: Paymen
 						if (plan.ok && plan.mutations.length > 0) onConfirmed?.(entry.id);
 					}}
 				>
-					Shake on it
+					Settle
 				</Button>
 				<Button size={size} variant="outline" onClick={() => setDeclining(true)}>
 					Decline

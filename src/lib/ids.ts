@@ -9,12 +9,3 @@ export function newId(): string {
 	const hex = Array.from(bytes, (b) => b.toString(16).padStart(2, "0")).join("");
 	return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
 }
-
-// 32 random bytes in base64url (43 characters), e.g. an invite token.
-export function randomToken(): string {
-	const bytes = crypto.getRandomValues(new Uint8Array(32));
-	return btoa(String.fromCharCode(...bytes))
-		.replace(/\+/g, "-")
-		.replace(/\//g, "_")
-		.replace(/=+$/, "");
-}

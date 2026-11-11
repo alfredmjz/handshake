@@ -6,7 +6,7 @@ import type { PushResult } from "@/lib/sync/types";
 import { toPullResult, type RawPull } from "@/lib/sync/wire";
 
 // code is the SQLSTATE or HS code the database raised ("HS403", "22P02", …), or "network" when the request
-// never got an answer from the database. Every function but previewInvite needs a session: signed out, the
+// never got an answer from the database. Every function but previewGroup needs a session: signed out, the
 // call is refused with 42501 (no EXECUTE for anon) before the function's own 28000 check could run.
 export class TransportError extends Error {
 	code: string;
@@ -35,34 +35,48 @@ export const supabaseTransport: SyncTransport = {
 	pull: async (cursors) => toPullResult(await call<RawPull>("pull_changes", { p_cursors: cursors })),
 };
 
-export type InvitePreview = {
+export type GroupPreview = {
 	groupId: string;
 	groupName: string;
-	// Null when the link's maker has deleted their account.
-	invitedBy: string | null;
-	// The link's name-only person while they can still be claimed.
-	claimMemberId: string | null;
+	// Null only if the group has no active owner.
+	ownerName: string | null;
+	// Name-only people anyone may pick, by name.
 	unclaimed: { memberId: string; displayName: string }[];
+	// Guests with a personal code, by name: "I'm already in this group".
+	returning: { memberId: string; displayName: string }[];
 	alreadyMember: boolean;
 };
 
-// Works signed out. HS404 when the link is unknown, revoked, expired, or its group deleted or completed.
-export function previewInvite(token: string): Promise<InvitePreview> {
-	return call("preview_invite", { p_token: token });
+// Works signed out. The code may be typed in any case, with or without its dash. HS404 "This code doesn't
+// work" when it is unknown, was reset, or its group is deleted or completed.
+export function previewGroup(code: string): Promise<GroupPreview> {
+	return call("preview_group", { p_code: code });
 }
 
-// Returns the group id; then requestSync() so the group arrives. HS404 as previewInvite;
-// HS422 when the picked person isn't in the group or has already been claimed; 22P02 for a malformed id;
-// 23514 for a display name over 60 characters.
-export function joinGroup(input: { token: string; claimMemberId?: string; displayName?: string }): Promise<string> {
-	return call("join_group", {
-		p_token: input.token,
+// Returns the group id; then requestSync() so the group arrives. Does nothing if already a member.
+// - New name: { code, displayName } (blank falls back to the profile name). HS409 "<name> is already in this
+//   group"; 23514 for a name over 60 characters.
+// - A name-only person: { code, claimMemberId }. HS422 "That person is not in this group" or "Someone has
+//   already joined as that person".
+// - Coming back: { code, claimMemberId, personalCode } (any case, dash ignored). HS422 "That code doesn't
+//   match", "Sign in with your email to get back in" (that name has an email), "That person is not in this
+//   group".
+// HS404 as previewGroup; 22P02 for a malformed claimMemberId. Guests (anonymous) join as guests.
+export function joinWithCode(input: {
+	code: string;
+	claimMemberId?: string;
+	displayName?: string;
+	personalCode?: string;
+}): Promise<string> {
+	return call("join_with_code", {
+		p_code: input.code,
 		p_claim_member_id: input.claimMemberId ?? null,
 		p_display_name: input.displayName ?? null,
+		p_personal_code: input.personalCode ?? null,
 	});
 }
 
-// After a guest's email is confirmed. HS403 while the account is still anonymous.
+// After a guest's email is confirmed. HS403 while the account is still anonymous. Their personal codes go.
 export async function upgradeGuest(): Promise<void> {
 	await call("upgrade_guest");
 }
