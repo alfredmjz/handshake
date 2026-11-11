@@ -85,8 +85,12 @@ export function createDexieSyncStore(db: LocalDb, userId: string): SyncStore {
 		applyPull: (pull) =>
 			db.transaction("rw", [...writeTables(db), db.meta], async () => {
 				const notices = await mergePull(dexieTables(db), pull, await pendingMutations(db), userId);
-				if (notices.length === 0) return;
-				const kept = (await readMovedAwayNotices(db)).filter((n) => !notices.some((m) => m.groupId === n.groupId));
+				const before = await readMovedAwayNotices(db);
+				// A group this login is back in (its name taken back here) no longer needs its notice.
+				const kept = before.filter(
+					(n) => !notices.some((m) => m.groupId === n.groupId) && !pull.groupIds.includes(n.groupId)
+				);
+				if (notices.length === 0 && kept.length === before.length) return;
 				await writeMovedAwayNotices(db, [...kept, ...notices]);
 			}),
 	};

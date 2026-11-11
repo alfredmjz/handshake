@@ -1,7 +1,7 @@
 # Handshake — Agent Guidelines
 
-Handshake tracks who owes who inside a friend group and helps groups plan trips together. No real
-money moves in or out: it only records and plans. It is a separate app from Pholio (the owner's
+Handshake tracks who owes who inside a friend group. No real money moves in or out: it only keeps the
+record. It is a separate app from Pholio (the owner's
 personal finance tracker) and stays standalone, with its own UI. Handshake never calls Pholio: Pholio
 reads from Handshake through Handshake's versioned, read-only API (`/api/v1`), never through
 Handshake's database (see `docs/shared-ledger-spec.md`).

@@ -126,7 +126,7 @@ export function KitPage() {
 						<Button variant="ghost">Later</Button>
 						<Button variant="destructive">Delete</Button>
 						<Button variant="link" size="inline">
-							Have a group code?
+							Have a code?
 						</Button>
 						<Button size="icon" variant="ghost" aria-label="More">
 							<MoreHorizontal />

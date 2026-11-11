@@ -14,10 +14,17 @@ import { Input } from "@/components/ui/input";
 import { List, ListRow } from "@/components/ui/list";
 import { Stack } from "@/components/ui/stack";
 import { defaultDisplayName, signInAsGuest, useCurrentUser } from "@/lib/auth";
-import { normaliseCode } from "@/lib/code-format";
+import { codeKind, normaliseCode } from "@/lib/code-format";
 import { useOnline } from "@/lib/online";
 import { requestSync } from "@/lib/sync/controller";
-import { joinWithCode, previewGroup, TransportError, type GroupPreview } from "@/lib/sync/supabase-transport";
+import {
+	joinWithCode,
+	previewCode,
+	returnWithCode,
+	TransportError,
+	type CodePreview,
+	type GroupPreview,
+} from "@/lib/sync/supabase-transport";
 import { byText } from "@/lib/utils";
 import { EmailSignIn } from "@/pages/sign-in";
 
@@ -33,14 +40,14 @@ function AlreadyIn({ groupId, groupName }: { groupId: string; groupName: string 
 	return null;
 }
 
-type Loaded = { code: string } & ({ preview: GroupPreview } | { error: "gone" | "failed" });
+type Loaded = { code: string } & ({ preview: CodePreview } | { error: "gone" | "failed" });
 
 function usePreview(code: string | null, online: boolean) {
 	const [loaded, setLoaded] = useState<Loaded | null>(null);
 	useEffect(() => {
 		if (!code || !online) return;
 		let cancelled = false;
-		previewGroup(code).then(
+		previewCode(code).then(
 			(preview) => !cancelled && setLoaded({ code, preview }),
 			(error) =>
 				!cancelled &&
@@ -84,8 +91,13 @@ function draftReady(draft: Draft): boolean {
 	const { choice } = draft;
 	if (!choice) return false;
 	if (choice.kind === "new") return draft.name.trim().length > 0;
-	if (choice.kind === "back") return choice.memberId !== null && normaliseCode(draft.personalCode) !== null;
+	if (choice.kind === "back") return choice.memberId !== null && personalCode(draft.personalCode) !== null;
 	return true;
+}
+
+function personalCode(input: string): string | null {
+	const code = normaliseCode(input);
+	return code && codeKind(code) === "personal" ? code : null;
 }
 
 function nameTaken(preview: GroupPreview, name: string): boolean {
@@ -106,8 +118,9 @@ function Frame({ signedIn, children }: { signedIn: boolean; children: ReactNode 
 	);
 }
 
-// /join/:code (a group code, or anything normaliseCode reads). Signed out you choose who you are, then an
-// account or guest; the URL stays, so you land back here and the join finishes.
+// /join/:code (a group code, a guest's personal code, or anything normaliseCode reads). A group code: signed
+// out you choose who you are, then an account or guest; the URL stays, so you land back here and the join
+// finishes. A personal code goes straight back in as that guest.
 export function JoinPage({ signedIn }: { signedIn: boolean }) {
 	const params = useParams();
 	const code = normaliseCode(params.code ?? "");
@@ -117,17 +130,29 @@ export function JoinPage({ signedIn }: { signedIn: boolean }) {
 
 	let body: ReactNode = null;
 	if (!code || gone || (loaded && "error" in loaded && loaded.error === "gone")) {
-		body = <EmptyState title={`${DOESNT_WORK}. Ask for the group's code again.`} />;
+		// A personal code that doesn't work has no one else to ask; a group's code can be asked for again.
+		const personal = code !== null && codeKind(code) === "personal";
+		body = <EmptyState title={personal ? `${DOESNT_WORK}.` : `${DOESNT_WORK}. Ask for the group's code again.`} />;
 	} else if (!online) {
 		body = <EmptyState kind="shake" title="Joining needs a connection." />;
 	} else if (loaded && "error" in loaded) {
 		body = <EmptyState title="Couldn't open this code. Try again in a moment." />;
 	} else if (loaded) {
-		body = signedIn ? (
-			<SignedInJoinChoice key={loaded.code} code={loaded.code} preview={loaded.preview} onGone={() => setGone(true)} />
-		) : (
-			<JoinChoice key={loaded.code} code={loaded.code} preview={loaded.preview} onGone={() => setGone(true)} />
-		);
+		const { preview } = loaded;
+		body =
+			preview.kind === "personal" ? (
+				<PersonalReturn
+					key={loaded.code}
+					code={loaded.code}
+					preview={preview}
+					signedIn={signedIn}
+					onGone={() => setGone(true)}
+				/>
+			) : signedIn ? (
+				<SignedInJoinChoice key={loaded.code} code={loaded.code} preview={preview} onGone={() => setGone(true)} />
+			) : (
+				<JoinChoice key={loaded.code} code={loaded.code} preview={preview} onGone={() => setGone(true)} />
+			);
 	}
 
 	return (
@@ -282,7 +307,7 @@ function JoinChoice({
 							autoCapitalize="characters"
 							autoComplete="off"
 							spellCheck={false}
-							placeholder="7KQ-M2D"
+							placeholder="7KQM-2DXH"
 							maxLength={9}
 							value={personalCode}
 							onChange={(e) => {
@@ -385,7 +410,7 @@ function JoinButton({
 				code,
 				claimMemberId: choice.kind === "new" ? undefined : (choice.memberId ?? undefined),
 				displayName: choice.kind === "new" ? draft.name.trim() : undefined,
-				personalCode: choice.kind === "back" ? (normaliseCode(draft.personalCode) ?? undefined) : undefined,
+				personalCode: choice.kind === "back" ? (personalCode(draft.personalCode) ?? undefined) : undefined,
 			});
 			requestSync();
 			const state: GuestCodeSheetState | null =
@@ -417,5 +442,105 @@ function JoinButton({
 		<Button size="lg" disabled={busy || !ready} onClick={() => void join()}>
 			{busy ? "Joining…" : back ? "Get back in" : `Join ${preview.groupName}`}
 		</Button>
+	);
+}
+
+type PersonalPreview = Extract<CodePreview, { kind: "personal" }>;
+
+// Signed out, "Continue as guest" remembers to finish here once the guest login exists.
+const returnKey = (code: string) => `handshake.return.${code}`;
+
+function stashReturn(code: string) {
+	try {
+		sessionStorage.setItem(returnKey(code), "1");
+	} catch {
+		// Without storage the button is simply tapped again.
+	}
+}
+
+function takeReturnStash(code: string): boolean {
+	try {
+		const wanted = sessionStorage.getItem(returnKey(code)) === "1";
+		sessionStorage.removeItem(returnKey(code));
+		return wanted;
+	} catch {
+		return false;
+	}
+}
+
+// A personal code: "Welcome back, Gus" and one button, straight into the group under that name.
+function PersonalReturn({
+	code,
+	preview,
+	signedIn,
+	onGone,
+}: {
+	code: string;
+	preview: PersonalPreview;
+	signedIn: boolean;
+	onGone: () => void;
+}) {
+	const navigate = useNavigate();
+	const [auto] = useState(() => signedIn && takeReturnStash(code));
+	const [busy, setBusy] = useState(false);
+	const [error, setError] = useState<string | null>(null);
+	const started = useRef(false);
+
+	async function getBackIn() {
+		setBusy(true);
+		setError(null);
+		try {
+			const groupId = await returnWithCode(code);
+			requestSync();
+			navigate(`/groups/${groupId}`, { replace: true });
+		} catch (e) {
+			setBusy(false);
+			const codeOf = e instanceof TransportError ? e.code : null;
+			if (codeOf === "HS404") {
+				toast.error(DOESNT_WORK);
+				onGone();
+			} else if (codeOf === "HS422") setError(e instanceof Error ? e.message : DOESNT_WORK);
+			else if (codeOf === "network") setError("Joining needs a connection.");
+			else toast.error("Couldn't get back in", { description: e instanceof Error ? e.message : undefined });
+		}
+	}
+
+	useEffect(() => {
+		if (auto && !started.current && !preview.alreadyMember) {
+			started.current = true;
+			void getBackIn();
+		}
+		// Runs once, for "Continue as guest" tapped before signing in.
+	}, [auto]);
+
+	if (signedIn && preview.alreadyMember) return <AlreadyIn groupId={preview.groupId} groupName={preview.groupName} />;
+
+	return (
+		<>
+			<ScreenHeader eyebrow={preview.groupName} title={`Welcome back, ${preview.displayName}`} />
+			{error && <p className="type-body-sm text-owe">{error}</p>}
+			{signedIn ? (
+				<Button size="lg" disabled={busy} onClick={() => void getBackIn()}>
+					{busy ? "Joining…" : "Get back in"}
+				</Button>
+			) : (
+				<Button
+					size="lg"
+					disabled={busy}
+					onClick={() => {
+						stashReturn(code);
+						setBusy(true);
+						signInAsGuest().catch((e: unknown) => {
+							toast.error("Couldn't continue as a guest", {
+								description: e instanceof Error ? e.message : undefined,
+							});
+							setBusy(false);
+						});
+					}}
+				>
+					Continue as guest
+				</Button>
+			)}
+		</>
 	);
 }

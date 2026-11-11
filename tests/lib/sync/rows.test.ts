@@ -230,4 +230,16 @@ describe("moved-away notices", () => {
 		expect(await readMovedAwayNotices(db)).toEqual([{ groupId: "g1", groupName: "Banff", displayName: "Kim" }]);
 		expect(await db.groups.count()).toBe(0);
 	});
+
+	test("the notice goes once this login is back in the group", async () => {
+		const db = new LocalDb(`rows-test-${++dbCount}`);
+		await db.groups.put(serverGroup({ id: "g1", name: "Banff" }));
+		await db.members.put(
+			serverMember({ id: "m1", groupId: "g1", userId: "user-1", role: "guest", displayName: "Kim" })
+		);
+		const store = createDexieSyncStore(db, "user-1");
+		await store.applyPull({ groupIds: [], changes: [], movedAway: ["g1"] });
+		await store.applyPull({ groupIds: ["g1"], changes: [], movedAway: [] });
+		expect(await readMovedAwayNotices(db)).toEqual([]);
+	});
 });

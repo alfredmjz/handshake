@@ -169,7 +169,7 @@ export function SignInPage() {
 							className="self-center text-primary-foreground hover:text-primary-foreground/80"
 							onClick={() => setView("code")}
 						>
-							Have a group code?
+							Have a code?
 						</Button>
 					</>
 				) : view === "email" ? (

@@ -1,6 +1,6 @@
 # Handshake
 
-Track who owes who in your friend group, and plan trips together. No real money moves; Handshake
+Track who owes who in your friend group. No real money moves; Handshake
 only keeps the record. It works offline and syncs when you're back online.
 
 ## Quick start

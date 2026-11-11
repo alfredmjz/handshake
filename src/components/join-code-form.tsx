@@ -7,7 +7,8 @@ import { Input } from "@/components/ui/input";
 import { joinPath, normaliseCode } from "@/lib/code-format";
 import { cn } from "@/lib/utils";
 
-// A group code ("HX7-K2P", any case, with or without the dash) or a pasted /join/ link; opens the join screen.
+// A group code ("HX7-K2P"), a guest's personal code ("7KQM-2DXH"), any case, with or without the dash, or a
+// pasted /join/ link; opens the join screen, which tells them apart.
 export function JoinCodeForm({
 	className,
 	autoFocus,
@@ -33,13 +34,13 @@ export function JoinCodeForm({
 		<form onSubmit={open} className={cn("flex flex-col gap-stack", className)}>
 			<div className="flex items-end gap-control">
 				<Field
-					label="Group code"
-					htmlFor="group-code"
+					label="Group or personal code"
+					htmlFor="join-code"
 					className="flex-1"
-					error={error ? "That doesn't look like a group code" : undefined}
+					error={error ? "That doesn't look like a code" : undefined}
 				>
 					<Input
-						id="group-code"
+						id="join-code"
 						placeholder="HX7-K2P or a link"
 						autoCapitalize="characters"
 						autoComplete="off"

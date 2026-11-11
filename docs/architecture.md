@@ -1671,6 +1671,30 @@ p_personal_code TEXT DEFAULT NULL)` (`authenticated`) → the group id. Locks th
 - Tests: `supabase/tests/group_codes.test.sql`; `categories_notes`, `complete`, `nudges` and `sync` tests pin
   the new keys.
 
+**`013_personal_code_join.sql`** (2026-11-11; owner decisions of 2026-11-11: a guest gets back in with their
+personal code alone)
+
+- Personal codes are 8 characters (check `^[A-HJKMNP-Z2-9]{8}$`), from `private.random_code(p_length)` through
+  `private.new_personal_code()`: unique among live codes across all groups (unique index on `code` where
+  `deleted_at IS NULL`, replacing 012's per-group one) and never equal to a group code. `give_guest_code()`
+  uses it. `private.renew_short_guest_codes()` replaced every older code (deleted ones too) in one new
+  version per group, so devices pull them; codes already 8 characters are left alone, so a re-run changes
+  nothing. Shown as `7KQM-2DXH`.
+- `private.find_personal_code(p_code)`: the live code, in a group neither deleted nor completed, of someone
+  still in it with a login; `HS404` "This code doesn't work" otherwise.
+- `public.preview_code(p_code TEXT)` (`anon`, `authenticated`): 6 characters → `{ "kind": "group" }` plus
+  `preview_group`'s fields; 8 → `{ "kind": "personal", "groupId", "groupName", "displayName",
+"alreadyMember" }`; anything else, or a personal code on a row that isn't a guest, `HS404`.
+- `public.return_with_code(p_code TEXT)` (`authenticated`, anonymous or not) → the group id. Locks the group
+  and finds the code again; already an active member → nothing changes; a non-guest row → `HS422` "Sign in
+  with your email to get back in" (a guard: codes only exist for guests). Otherwise as `join_with_code`'s
+  come-back path: the caller's old left row lets go of their login, a `guest_handoffs` row records the
+  login it left (`moved_away` on its next pull), and the row moves to the caller (`guest` if anonymous, else
+  `member`, which drops the code).
+- `preview_group` and `join_with_code` are unchanged; the come-back path compares the typed code with the
+  stored one, so it now takes 8-character codes.
+- Tests: `supabase/tests/personal_code_join.test.sql`; `group_codes.test.sql` expects 8-character codes.
+
 #### What chat 3 builds against (as built)
 
 Functions (all `SET search_path = ''`):
@@ -1683,6 +1707,8 @@ Functions (all `SET search_path = ''`):
 | `public.join_group(p_token TEXT, p_claim_member_id UUID DEFAULT NULL, p_display_name TEXT DEFAULT NULL)`                                             | the group id (`UUID`)                                                                                                                                                                                                                 | `authenticated`         |
 | `public.preview_group(p_code TEXT)` (012)                                                                                                            | `{ "groupId", "groupName", "ownerName", "unclaimed": [{ "memberId", "displayName" }], "returning": [{ "memberId", "displayName" }], "alreadyMember" }`                                                                                | `anon`, `authenticated` |
 | `public.join_with_code(p_code TEXT, p_claim_member_id UUID DEFAULT NULL, p_display_name TEXT DEFAULT NULL, p_personal_code TEXT DEFAULT NULL)` (012) | the group id (`UUID`)                                                                                                                                                                                                                 | `authenticated`         |
+| `public.preview_code(p_code TEXT)` (013)                                                                                                             | `{ "kind": "group", …preview_group }` or `{ "kind": "personal", "groupId", "groupName", "displayName", "alreadyMember" }`                                                                                                             | `anon`, `authenticated` |
+| `public.return_with_code(p_code TEXT)` (013)                                                                                                         | the group id (`UUID`)                                                                                                                                                                                                                 | `authenticated`         |
 | `public.upgrade_guest()`                                                                                                                             | `VOID`                                                                                                                                                                                                                                | `authenticated`         |
 | `public.create_api_token(p_name TEXT)`                                                                                                               | `{ "id", "token", "name", "createdAt" }`                                                                                                                                                                                              | `authenticated`         |
 | `public.list_api_tokens()`                                                                                                                           | `[{ "id", "name", "scope", "createdAt", "lastUsedAt" }]`, newest first                                                                                                                                                                | `authenticated`         |

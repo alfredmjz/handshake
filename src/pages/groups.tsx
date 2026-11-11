@@ -80,7 +80,7 @@ function GroupCodeBox() {
 	if (!open)
 		return (
 			<Button variant="link" size="inline" className="self-center" onClick={() => setOpen(true)}>
-				Have a group code?
+				Have a code?
 			</Button>
 		);
 	return <JoinCodeForm className="mx-auto w-full max-w-md" autoFocus />;

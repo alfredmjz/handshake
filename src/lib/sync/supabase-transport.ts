@@ -53,6 +53,23 @@ export function previewGroup(code: string): Promise<GroupPreview> {
 	return call("preview_group", { p_code: code });
 }
 
+export type CodePreview =
+	| ({ kind: "group" } & GroupPreview)
+	| { kind: "personal"; groupId: string; groupName: string; displayName: string; alreadyMember: boolean };
+
+// Works signed out. Any code the join box takes (6 characters: a group code; 8: a guest's personal code).
+// HS404 "This code doesn't work" for an unknown code, a deleted or completed group, or a personal code whose
+// guest has left or added an email.
+export function previewCode(code: string): Promise<CodePreview> {
+	return call("preview_code", { p_code: code });
+}
+
+// Takes back the guest's name a personal code belongs to and returns the group id; then requestSync(). Does
+// nothing if already in the group. HS404 as previewCode; HS422 "Sign in with your email to get back in".
+export function returnWithCode(code: string): Promise<string> {
+	return call("return_with_code", { p_code: code });
+}
+
 // Returns the group id; then requestSync() so the group arrives. Does nothing if already a member.
 // - New name: { code, displayName } (blank falls back to the profile name). HS409 "<name> is already in this
 //   group"; 23514 for a name over 60 characters.

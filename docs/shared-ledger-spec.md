@@ -332,7 +332,9 @@ Decided 2026-11-10 (replaces invite links).
     `auth.users` row with the `authenticated` role and an `is_anonymous` claim in its token, so sync,
     RLS and `push_changes()` work unchanged; the guest role limits what they can do.
   - **Personal codes.** A guest gets a personal code when they join (as someone new or by claiming a
-    name): 6 characters from the same alphabet, unique within the group, made by the server. Only the
+    name): 8 characters from the same alphabet, shown in two halves (`7KQM-2DXH`), unique across all
+    groups and never equal to a group code, made by the server (since 013, 2026-11-11; the first 6-character
+    codes were replaced). Only the
     group's owner and that guest can see it, never other members. There are no resets, lock or rate limit;
     the length is the protection. Members with an email have none.
   - **I'm already in this group:** a guest on a new device, or one who lost their session, opens the link
@@ -340,6 +342,11 @@ Decided 2026-11-10 (replaces invite links).
     using now (a guest login, or one with an email), and the old login loses the group on its next pull,
     where the device says "<name> is now signed in on another device". A name that belongs to a member
     with an email can't be taken this way: "Sign in with your email to get back in".
+  - **The personal code alone** (decided 2026-11-11) does the same without the group code: typed in the
+    same box as a group code or opened as `/join/<personal code>`, it shows "Welcome back, <name>" and the
+    group, then goes straight in under that name (signed out: **Continue as guest** first). The length tells
+    the two kinds apart (6: group, 8: personal). A code whose guest has left or added an email, or whose
+    group is deleted or completed, "doesn't work".
   - A guest keeps their data by adding an email later ("Keep my data"): `updateUser({ email })`, then
     the 6-digit code. The user id stays the same, so their member rows and history stay theirs. An online
     function `upgrade_guest()` then turns their `guest` rows into `member`, and their personal codes are
@@ -348,7 +355,8 @@ Decided 2026-11-10 (replaces invite links).
   - Joining needs a connection and uses two functions instead of mutations, because someone who is not
     yet a member cannot push or pull for the group: `preview_group(code)` (works signed out, so the screen
     can show the group before the person picks account or guest) and
-    `join_with_code(code, claim_member_id, display_name, personal_code)`. Resetting the code is a mutation
+    `join_with_code(code, claim_member_id, display_name, personal_code)`; for any code, `preview_code(code)`
+    (also signed out: a group, or the guest a personal code belongs to) and `return_with_code(code)`. Resetting the code is a mutation
     (`group.recode`), so it queues offline; the new code arrives with the next pull.
 - **Why one code:** a friend group shares one link in its group chat, and a short code can be read out or
   typed from another phone. Nothing to create, expire or revoke per person.
@@ -414,10 +422,11 @@ Decided 2026-11-10 (replaces invite links).
 
 Decided 2026-11-10.
 
-- **Chosen Solution:** a `/join/:code` route (`/join/HX7K2P`). Someone signed out picks account or guest
-  first and lands back on the join screen (the URL is kept). The native apps need universal links and App
-  Links, which need a domain and store setup; until then, the Groups page has a "Have a code?" box that
-  takes the code (any case, with or without the dash) or a pasted link.
+- **Chosen Solution:** a `/join/:code` route (`/join/HX7K2P`, or a personal code, `/join/7KQM2DXH`).
+  Someone signed out picks account or guest first and lands back on the join screen (the URL is kept). The
+  native apps need universal links and App Links, which need a domain and store setup; until then, the
+  Groups page and the signed-out Welcome have a "Have a code?" box that takes either kind of code (any case,
+  with or without the dash) or a pasted link (decided 2026-11-11: one box for both kinds).
 
 ### 13. Dollars only
 
@@ -908,7 +917,9 @@ people alphabetically.
    in this group** (the guests with a personal code; pick your name, type your code: "That code doesn't
    match" when wrong, "Sign in with your email to get back in" for a name with an email). Then **Create an
    account** or **Continue as guest**. An unknown, reset or completed group's code: "This code doesn't
-   work". Offline: "Joining needs a connection."
+   work". Offline: "Joining needs a connection." A personal code (2026-11-11) shows the group name and
+   "Welcome back, Gus" with one button, **Get back in** (signed out: **Continue as guest**), and lands in
+   the group as Gus; one that doesn't open anything: "This code doesn't work".
 8. **Guest banner.** On every screen for guests: "You're a guest. When the group is completed, guests
    lose access. Add your email to keep it", which opens the email and code steps.
 9. **Settings.** **Connected apps:** your tokens (name, created, last used), **Connect an app** (name it,

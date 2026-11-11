@@ -219,9 +219,9 @@ SELECT results_eq(
     'Jo is now Kim''s login, a guest, joined, at the group''s latest version'
 );
 SELECT results_eq(
-    $$ SELECT group_id::TEXT, code ~ '^[ABCDEFGHJKMNPQRSTUVWXYZ23456789]{6}$', deleted_at IS NULL, row_version FROM public.guest_codes WHERE member_id = '20000000-0000-0000-0000-0000000000c1' $$,
+    $$ SELECT group_id::TEXT, code ~ '^[ABCDEFGHJKMNPQRSTUVWXYZ23456789]{8}$', deleted_at IS NULL, row_version FROM public.guest_codes WHERE member_id = '20000000-0000-0000-0000-0000000000c1' $$,
     $$ VALUES ('10000000-0000-0000-0000-000000000001', TRUE, TRUE, pg_temp.head('10000000-0000-0000-0000-000000000001')) $$,
-    'Jo has a personal code, stamped with the same version'
+    'Jo has an 8-character personal code (013), stamped with the same version'
 );
 
 SELECT is(
@@ -325,7 +325,7 @@ SELECT is(
 -- ---------------------------------------------------------------------------
 SELECT pg_temp.guest_code('20000000-0000-0000-0000-0000000000c1') AS jo_code \gset
 SELECT is(
-    pg_temp.join_error('dddddddd-dddd-dddd-dddd-dddddddddddd', pg_temp.code('10000000-0000-0000-0000-000000000001'), '20000000-0000-0000-0000-0000000000c1', NULL, CASE WHEN :'jo_code' = 'AAAAAA' THEN 'BBBBBB' ELSE 'AAAAAA' END),
+    pg_temp.join_error('dddddddd-dddd-dddd-dddd-dddddddddddd', pg_temp.code('10000000-0000-0000-0000-000000000001'), '20000000-0000-0000-0000-0000000000c1', NULL, CASE WHEN :'jo_code' = 'AAAAAAAA' THEN 'BBBBBBBB' ELSE 'AAAAAAAA' END),
     'HS422 That code doesn''t match',
     'Kim''s new phone with the wrong personal code is refused'
 );
