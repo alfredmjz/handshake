@@ -10,6 +10,7 @@ import { Field } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
 import { Stack } from "@/components/ui/stack";
 import { takeEndedNotice } from "@/lib/auth";
+import { devLoginAvailable, switchToTestAccount, TEST_ACCOUNTS } from "@/lib/dev-login";
 import { supabase } from "@/lib/supabase";
 import { cn } from "@/lib/utils";
 
@@ -130,6 +131,36 @@ export function EmailSignIn({ onBack }: { onBack?: () => void }) {
 	);
 }
 
+// Local development only: straight in as one of the test accounts, no emailed code.
+function TestAccountLinks() {
+	const [busy, setBusy] = useState(false);
+	return (
+		<p className="type-label flex flex-wrap items-center justify-center gap-x-stack gap-y-1 text-primary-foreground/70">
+			<span>Test account (local):</span>
+			{TEST_ACCOUNTS.map((account) => (
+				<Button
+					key={account.id}
+					variant="link"
+					size="inline"
+					className="type-label text-primary-foreground/85 hover:text-primary-foreground"
+					disabled={busy}
+					onClick={async () => {
+						setBusy(true);
+						try {
+							await switchToTestAccount(account.id);
+						} catch (error) {
+							toast.error("Couldn't sign in", { description: (error as Error).message });
+						}
+						setBusy(false);
+					}}
+				>
+					{account.label}
+				</Button>
+			))}
+		</p>
+	);
+}
+
 // The signed-out front door: hands passing a receipt, and a cobalt sheet that asks for an email or a group code.
 export function SignInPage() {
 	const [view, setView] = useState<"welcome" | "email" | "code">("welcome");
@@ -171,6 +202,7 @@ export function SignInPage() {
 						>
 							Have a code?
 						</Button>
+						{import.meta.env.DEV && devLoginAvailable() && <TestAccountLinks />}
 					</>
 				) : view === "email" ? (
 					<>

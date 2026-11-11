@@ -94,16 +94,20 @@ const config: Config = {
 			keyframes: {
 				// A new bill or payment is put down on the page: it drops in, tilted, and settles flat.
 				land: {
-					from: { opacity: "0", transform: "translateY(-0.75rem) rotate(-1.2deg) scale(0.98)" },
+					from: { opacity: "0", transform: "translateY(-1.5rem) rotate(-2deg) scale(0.97)" },
+					"35%": { opacity: "1" },
 					to: { opacity: "1", transform: "none" },
 				},
 				// What just changed keeps a cobalt wash until you've had a moment to see it.
 				"just-changed": {
-					"0%, 55%": { backgroundColor: "hsl(var(--primary) / 0.08)" },
+					"0%, 60%": { backgroundColor: "hsl(var(--primary) / 0.14)" },
 					"100%": { backgroundColor: "hsl(var(--primary) / 0)" },
 				},
-				"cover-open": { from: { transform: "rotateY(0deg)" }, to: { transform: "rotateY(-112deg)" } },
-				"cover-face-hide": { "0%, 30%": { opacity: "1" }, "42%, 100%": { opacity: "0" } },
+				// Opening a group prints its receipt: the paper comes out of the top, a line at a time.
+				print: {
+					from: { clipPath: "inset(0 0 100% 0)", transform: "translateY(-1rem)" },
+					to: { clipPath: "inset(0 0 0 0)", transform: "none" },
+				},
 				"hand-in-left": {
 					"0%": { transform: "translateX(-46px)", opacity: "0" },
 					"40%, 100%": { transform: "translateX(0)", opacity: "1" },
@@ -125,9 +129,8 @@ const config: Config = {
 			},
 			animation: {
 				land: "land var(--duration-settle) var(--ease-bounce) both",
-				"just-changed": "just-changed 2.4s var(--ease-out) both",
-				"cover-open": "cover-open var(--duration-moment) var(--ease-in-out) .32s both",
-				"cover-face-hide": "cover-face-hide var(--duration-moment) linear .32s both",
+				"just-changed": "just-changed 4s var(--ease-out) both",
+				print: "print 0.9s var(--ease-out) 0.12s both",
 				"hand-in-left": "hand-in-left 1.9s cubic-bezier(.3,.7,.2,1) both",
 				"hand-in-right": "hand-in-right 1.9s cubic-bezier(.3,.7,.2,1) both",
 				shake: "shake 1.9s ease-in-out both",

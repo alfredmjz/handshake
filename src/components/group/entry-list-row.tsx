@@ -69,7 +69,8 @@ export function EntryListRow({
 			asChild
 			className={cn(
 				arrived &&
-					"-mx-2 rounded-lg px-2 [animation:land_var(--duration-settle)_var(--ease-bounce)_both,just-changed_2.4s_var(--ease-out)_both]"
+					// Waits for the editor to close, so the drop happens where you can see it.
+					"-mx-2 rounded-lg px-2 [animation:land_var(--duration-moment)_var(--ease-bounce)_280ms_both,just-changed_4s_var(--ease-out)_280ms_both]"
 			)}
 			leading={<HandDisc kind={isPayment ? "shake" : (entry.category ?? "new")} size={46} />}
 			title={isPayment ? paymentTitle(entry, names) : entry.description}

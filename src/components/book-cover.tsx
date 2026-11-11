@@ -1,5 +1,3 @@
-import { useState, type CSSProperties, type ReactNode } from "react";
-
 import { Hand, type HandKind } from "@/components/art/hand";
 import { cn } from "@/lib/utils";
 
@@ -20,8 +18,8 @@ function PagesBehind() {
 	return <div aria-hidden className="absolute inset-[4px_-4px_-4px_4px] rounded-book border border-ink/20 bg-paper" />;
 }
 
-function Spine({ wide = false }: { wide?: boolean }) {
-	return <span aria-hidden className={cn("absolute inset-y-0 left-0 bg-ink/15", wide ? "w-3.5" : "w-3")} />;
+function Spine() {
+	return <span aria-hidden className="absolute inset-y-0 left-0 w-3 bg-ink/15" />;
 }
 
 type BookCoverProps = {
@@ -30,13 +28,12 @@ type BookCoverProps = {
 	note?: string | null;
 	kind: HandKind;
 	className?: string;
-	style?: CSSProperties;
 };
 
 // The small cover in the Groups grid.
-export function BookCover({ name, note, kind, className, style }: BookCoverProps) {
+export function BookCover({ name, note, kind, className }: BookCoverProps) {
 	return (
-		<div className={cn("relative aspect-[5/6] w-full", className)} style={style}>
+		<div className={cn("relative aspect-[5/6] w-full", className)}>
 			<PagesBehind />
 			<div className={cn("absolute inset-0 overflow-hidden rounded-book", COVER_TINT[kind])}>
 				<Spine />
@@ -48,65 +45,6 @@ export function BookCover({ name, note, kind, className, style }: BookCoverProps
 					{note && <span className="type-label line-clamp-1 break-words font-display">{note}</span>}
 				</span>
 			</div>
-		</div>
-	);
-}
-
-function CoverFace({ name, note, kind }: { name: string; note: string | null; kind: HandKind }) {
-	return (
-		<>
-			<Spine wide />
-			<span className="absolute right-panel top-1/2 size-24 -translate-y-1/2 overflow-hidden">
-				<Hand kind={kind} size={96} />
-			</span>
-			<span className="absolute inset-y-0 left-8 right-32 flex flex-col justify-center gap-0.5 text-left text-ink">
-				<span className="type-h3 line-clamp-2 break-words">{name}</span>
-				{note && <span className="type-label line-clamp-1 break-words font-display">{note}</span>}
-			</span>
-		</>
-	);
-}
-
-type BookProps = {
-	name: string;
-	note: string | null;
-	kind: HandKind;
-	// The ledger page, always open: what you came for is never behind a tap.
-	children: ReactNode;
-	// Arriving from the shelf: the cover swings open once on its spine to show the page.
-	opening?: boolean;
-	className?: string;
-	style?: CSSProperties;
-};
-
-// The group's notebook on its own page. The spine keeps the cover's colour; the ruled margin is the page's.
-export function Book({ name, note, kind, children, opening = false, className, style }: BookProps) {
-	const [covered, setCovered] = useState(opening);
-
-	return (
-		<div className={cn("book-stage relative", className)} style={style}>
-			<PagesBehind />
-			<div className="relative overflow-hidden rounded-book border border-ink/15 bg-raised py-panel pl-[calc(var(--space-panel)+1.25rem)] pr-panel">
-				<span aria-hidden className={cn("absolute inset-y-0 left-0 w-2.5", COVER_TINT[kind])} />
-				<span aria-hidden className="absolute inset-y-0 left-[1.125rem] border-l-[1.5px] border-owe-mark/30" />
-				{children}
-			</div>
-			{covered && (
-				<div
-					aria-hidden
-					className={cn(
-						"book-cover-opening pointer-events-none absolute inset-0 animate-cover-open overflow-hidden rounded-book",
-						COVER_TINT[kind]
-					)}
-					onAnimationEnd={(e) => {
-						if (e.animationName === "cover-open") setCovered(false);
-					}}
-				>
-					<span className="contents [&>*]:animate-cover-face-hide">
-						<CoverFace name={name} note={note} kind={kind} />
-					</span>
-				</div>
-			)}
 		</div>
 	);
 }

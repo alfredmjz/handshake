@@ -65,7 +65,7 @@ export function BalancesTab({ data }: { data: GroupData }) {
 			{mine.length === 0 ? (
 				<div className="flex items-center gap-stack">
 					{/* Loose tiles fall into place: everything between you and the others is in order. */}
-					<Settle play intensity={0.6} aria-label="" aria-hidden className="w-28 shrink-0 sm:w-32" />
+					<Settle play intensity={0.6} aria-label="" aria-hidden className="w-36 shrink-0 sm:w-40" />
 					<Inline gap="control" className="type-body">
 						<CheckDoodle className="size-6" />
 						You're all square.

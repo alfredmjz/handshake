@@ -315,33 +315,15 @@
 		stroke-linejoin: round;
 	}
 
-	/* The group cover swings open on its spine. */
-	.book-stage {
-		perspective: 1100px;
-		perspective-origin: 0 50%;
+	/* A group's receipt: torn along the bottom in small teeth, lifted off the page by a soft shadow. */
+	.receipt-torn {
+		--tooth: 0.5rem;
+		mask:
+			linear-gradient(#000 0 0) top / 100% calc(100% - var(--tooth) + 1px) no-repeat,
+			conic-gradient(from -45deg at 50% 100%, #000 90deg, #0000 0) bottom / calc(var(--tooth) * 2) var(--tooth) repeat-x;
 	}
-	.book-cover-opening {
-		transform-origin: 0 50%;
-		backface-visibility: hidden;
-	}
-}
-
-/* Opening a group: its cover lifts off the shelf into place while the rest of the page crossfades. */
-::view-transition-group(*) {
-	animation-duration: var(--duration-settle);
-	animation-timing-function: var(--ease-spring);
-}
-::view-transition-old(root),
-::view-transition-new(root) {
-	animation-duration: var(--duration-quick);
-	animation-timing-function: var(--ease-out);
-}
-
-@media (prefers-reduced-motion: reduce) {
-	::view-transition-group(*),
-	::view-transition-old(*),
-	::view-transition-new(*) {
-		animation: none !important;
+	.receipt-shadow {
+		filter: drop-shadow(0 1px 0 hsl(var(--ink) / 0.08)) drop-shadow(0 10px 18px hsl(var(--ink) / 0.12));
 	}
 }
 

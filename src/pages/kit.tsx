@@ -5,7 +5,8 @@ import { BellDoodle, CheckDoodle, HandshakeMark, ReceiptDoodle, SquiggleArrow } 
 import { Face, FacePile } from "@/components/art/face";
 import { Hand, HandDisc, type HandKind } from "@/components/art/hand";
 import { ShakeScene } from "@/components/art/shake-scene";
-import { Book, BookCover, NewBookButton } from "@/components/book-cover";
+import { BookCover, NewBookButton } from "@/components/book-cover";
+import { GroupReceipt } from "@/components/group/group-receipt";
 import { ConfirmDialog } from "@/components/confirm-dialog";
 import { DebtCard } from "@/components/group/debt-card";
 import { GuestBanner } from "@/components/guest-banner";
@@ -267,17 +268,28 @@ export function KitPage() {
 						<NewBookButton label="Start a group" onClick={() => undefined} />
 					</div>
 					<div className="max-w-md">
-						<Book name="Japan 2027" note="Tokyo and Kyoto, April" kind="travel">
-							<Stack gap="control" className="h-full">
-								<span className="type-h2">Japan 2027</span>
-								<Inline>
-									<FacePile people={PEOPLE.map((p) => ({ id: p.id, name: p.label }))} size={30} />
-									<span className="type-label text-muted-foreground">4 friends</span>
-								</Inline>
-								<span className="mt-auto type-label text-muted-foreground">You're owed</span>
-								<Amount cents={6000} size="lg" tone="owed" />
-							</Stack>
-						</Book>
+						<GroupReceipt
+							name="Japan 2027"
+							note="Tokyo and Kyoto, April"
+							kind="travel"
+							bills={[
+								{ id: "ramen", description: "Ramen at Ichiran", amountCents: 6240, items: [], href: "/kit" },
+								{
+									id: "hostel",
+									description: "Hostel in Asakusa",
+									amountCents: 31200,
+									items: [
+										{ id: "n1", description: "Night one", amountCents: 15600 },
+										{ id: "n2", description: "Night two", amountCents: 15600 },
+									],
+									href: "/kit",
+								},
+								{ id: "train", description: "Shinkansen to Kyoto", amountCents: 12000, items: [], href: "/kit" },
+							]}
+							totalCents={49440}
+							myShareCents={12360}
+							entriesHref="/kit"
+						/>
 					</div>
 				</Section>
 

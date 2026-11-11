@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { LogOut, Settings } from "lucide-react";
+import { LogOut, Settings, Users } from "lucide-react";
 import { Link, Outlet, useNavigate } from "react-router";
 import { toast } from "sonner";
 
@@ -21,6 +21,13 @@ import { Inline } from "@/components/ui/stack";
 import { CurrentUserProvider, endIfAccountGone, signOut, type CurrentUser } from "@/lib/auth";
 import { CommitProvider, createCommitter, type Commit } from "@/lib/changes";
 import { newId } from "@/lib/ids";
+import {
+	currentTestAccount,
+	devLoginAvailable,
+	switchToTestAccount,
+	TEST_ACCOUNTS,
+	type TestAccount,
+} from "@/lib/dev-login";
 import { claimLocalData, db } from "@/lib/local-db";
 import { requestSync, startSync } from "@/lib/sync/controller";
 import { createDexieSyncStore, resetCursors } from "@/lib/sync/dexie-store";
@@ -97,6 +104,34 @@ export function SignedInLayout({ user }: { user: CurrentUser }) {
 	return <Shell user={user} commit={commit} />;
 }
 
+// Local development only: switch to another test account without going back to the Welcome screen.
+function TestAccountItems() {
+	const [current, setCurrent] = useState<TestAccount | null>(null);
+	useEffect(() => {
+		void currentTestAccount().then(setCurrent);
+	}, []);
+	return (
+		<>
+			<DropdownMenuSeparator />
+			<DropdownMenuLabel className="type-caption text-muted-foreground">Test accounts (local)</DropdownMenuLabel>
+			{TEST_ACCOUNTS.map((account) => (
+				<DropdownMenuItem
+					key={account.id}
+					disabled={account.id === current}
+					onSelect={() =>
+						void switchToTestAccount(account.id).catch((error: Error) =>
+							toast.error("Couldn't switch", { description: error.message })
+						)
+					}
+				>
+					<Users className="size-4" aria-hidden />
+					{account.id === current ? `${account.label} (you)` : `Switch to ${account.label}`}
+				</DropdownMenuItem>
+			))}
+		</>
+	);
+}
+
 function Shell({ user, commit }: { user: CurrentUser; commit: Commit }) {
 	const navigate = useNavigate();
 	const sync = useSyncState();
@@ -153,6 +188,7 @@ function Shell({ user, commit }: { user: CurrentUser; commit: Commit }) {
 											</DropdownMenuItem>
 										</>
 									)}
+									{import.meta.env.DEV && devLoginAvailable() && <TestAccountItems />}
 								</DropdownMenuContent>
 							</DropdownMenu>
 						</Inline>

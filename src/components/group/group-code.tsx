@@ -26,7 +26,7 @@ function Joined({ names }: { names: string[] }) {
 		return (
 			<div className="flex items-center gap-stack">
 				{/* Tiles on dashed links round a hub: each link turns solid as someone comes in. */}
-				<Hub play intensity={0.55} aria-label="" aria-hidden className="w-24 shrink-0" />
+				<Hub play intensity={0.55} aria-label="" aria-hidden className="w-36 shrink-0" />
 				<p className="type-body-sm text-muted-foreground">No one has joined yet</p>
 			</div>
 		);

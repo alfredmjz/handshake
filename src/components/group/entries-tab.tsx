@@ -4,6 +4,7 @@ import { EntryListRow } from "@/components/group/entry-list-row";
 import type { GroupData } from "@/components/group/group-data";
 import { todayIso } from "@/components/group/today";
 import { EmptyState } from "@/components/notices";
+import { Plot } from "@/components/ui/hairline";
 import { List, ListHeading } from "@/components/ui/list";
 import { dayLabel, groupByDay, isVisibleTo } from "@/lib/group-view";
 
@@ -17,7 +18,12 @@ export function EntriesTab({ data }: { data: GroupData }) {
 	const shown = seen.current;
 
 	if (visible.length === 0) {
-		return <EmptyState kind="new" title="No expenses yet." />;
+		return (
+			<EmptyState
+				art={<Plot play intensity={0.6} aria-label="" aria-hidden className="w-48" />}
+				title="No expenses yet."
+			/>
+		);
 	}
 
 	return (

@@ -116,6 +116,10 @@ export function Rebuild({ style, ...props }: ComponentProps<typeof Hairline.Rebu
 	return <Hairline.Rebuild style={{ ...tokens, ...style }} {...props} />;
 }
 
+export function Plot({ style, ...props }: ComponentProps<typeof Hairline.Plot>) {
+	return <Hairline.Plot style={{ ...tokens, ...style }} {...props} />;
+}
+
 export function Stack({ style, ...props }: ComponentProps<typeof Hairline.Stack>) {
 	return <Hairline.Stack style={{ ...tokens, ...style }} {...props} />;
 }

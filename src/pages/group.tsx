@@ -2,16 +2,14 @@ import { useState } from "react";
 import { Link, useLocation, useParams, useSearchParams } from "react-router";
 
 import { CheckDoodle } from "@/components/art/doodles";
-import { Book } from "@/components/book-cover";
 import { ExpenseEditor } from "@/components/editors/expense-editor";
 import { BalancesTab } from "@/components/group/balances-tab";
-import { BetweenYou } from "@/components/group/between-you";
 import { ConflictPopup } from "@/components/group/conflict-popup";
 import { ConflictResolver } from "@/components/group/conflict-resolver";
 import { EntriesTab } from "@/components/group/entries-tab";
-import { useGroupData } from "@/components/group/group-data";
+import { useGroupData, type GroupData } from "@/components/group/group-data";
 import { GroupMenu } from "@/components/group/group-menu";
-import { LedgerPage } from "@/components/group/ledger-page";
+import { GroupReceipt, type ReceiptBill } from "@/components/group/group-receipt";
 import { PeopleTab } from "@/components/group/people-tab";
 import { todayIso } from "@/components/group/today";
 import { GuestCodeSheet } from "@/components/guest-code-sheet";
@@ -26,6 +24,31 @@ import { shortDate } from "@/lib/group-view";
 // ?tab=balances opens a tab directly (the nudge bell links there).
 const TABS = ["entries", "balances", "people"] as const;
 
+// The group's bills for its receipt, oldest first, and what they cost in all and you in particular.
+function receiptOf(data: GroupData) {
+	const bills = data.entries.filter((e) => e.kind === "expense").reverse();
+	const me = data.me?.id;
+	return {
+		bills: bills.map((e): ReceiptBill => ({
+			id: e.id,
+			description: e.description,
+			amountCents: e.amountCents,
+			// One amount needs no breakdown; a bill of several items lists each under it.
+			items:
+				e.items && e.items.length > 1
+					? e.items.map((item, n) => ({
+							id: item.id,
+							description: item.description?.trim() || `Item ${n + 1}`,
+							amountCents: item.amountCents,
+						}))
+					: [],
+			href: `/groups/${e.groupId}/entries/${e.id}`,
+		})),
+		totalCents: bills.reduce((sum, e) => sum + e.amountCents, 0),
+		myShareCents: bills.reduce((sum, e) => sum + (e.shares.find((s) => s.memberId === me)?.owedCents ?? 0), 0),
+	};
+}
+
 export function GroupPage() {
 	const { groupId = "" } = useParams();
 	const data = useGroupData(groupId);
@@ -34,7 +57,7 @@ export function GroupPage() {
 	const [search, setSearch] = useSearchParams();
 	const tab = TABS.find((t) => t === search.get("tab")) ?? "entries";
 	const { group, me, names } = data;
-	// Opened from the shelf: the cover swings open on the way in. A reload or a deep link lands on the page.
+	// Opened from the shelf: the receipt prints on the way in. A reload or a deep link lands on it printed.
 	const fromShelf = (useLocation().state as { fromShelf?: boolean } | null)?.fromShelf === true;
 
 	if (data.loading) return null;
@@ -56,7 +79,6 @@ export function GroupPage() {
 	}
 
 	const completed = !!group.completedAt;
-	const balance = data.summary?.people.find((p) => p.memberId === me.id)?.balanceCents ?? 0;
 	const kind = data.category ?? "new";
 	const unsynced = data.unsynced.has(group.id);
 	const openConflicts = data.conflicts.length;
@@ -64,21 +86,14 @@ export function GroupPage() {
 
 	const aside = (
 		<>
-			<Book
+			<GroupReceipt
 				name={group.name}
 				note={group.note}
 				kind={kind}
-				opening={fromShelf}
-				style={{ viewTransitionName: `book-${group.id}` }}
-			>
-				<LedgerPage
-					name={group.name}
-					note={group.note}
-					kind={kind}
-					people={data.active.map((m) => ({ id: m.id, name: m.displayName }))}
-					balanceCents={balance}
-				/>
-			</Book>
+				{...receiptOf(data)}
+				entriesHref={`/groups/${group.id}?tab=entries`}
+				printing={fromShelf}
+			/>
 			{(unsynced || openConflicts > 0) && (
 				<Inline gap="control">
 					{openConflicts > 0 && <Badge tone="owe">Needs resolving</Badge>}
@@ -102,9 +117,6 @@ export function GroupPage() {
 					</Button>
 				</Inline>
 			)}
-			<div className="hidden lg:block">
-				<BetweenYou data={data} />
-			</div>
 		</>
 	);
 
