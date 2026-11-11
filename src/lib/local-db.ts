@@ -1,17 +1,20 @@
-import Dexie, { type DexieOptions, type EntityTable } from "dexie";
+import Dexie, { type EntityTable } from "dexie";
 
 import type {
 	ConflictRow,
 	CursorRow,
 	EntryRow,
 	GroupRow,
+	GuestCodeRow,
 	InviteRow,
 	InviteTokenRow,
 	MemberRow,
 	Mutation,
+	NudgeRow,
 } from "@/lib/sync/types";
 
 export type OutboxEntry = { seq: number; id: string; mutation: Mutation };
+export type CursorEntry = CursorRow;
 type MetaEntry = { key: string; value: string };
 
 export class LocalDb extends Dexie {
@@ -21,13 +24,14 @@ export class LocalDb extends Dexie {
 	conflicts!: EntityTable<ConflictRow, "id">;
 	invites!: EntityTable<InviteRow, "id">;
 	inviteTokens!: EntityTable<InviteTokenRow, "inviteId">;
+	nudges!: EntityTable<NudgeRow, "id">;
+	guestCodes!: EntityTable<GuestCodeRow, "memberId">;
 	outbox!: EntityTable<OutboxEntry, "seq">;
-	cursors!: EntityTable<CursorRow, "groupId">;
+	cursors!: EntityTable<CursorEntry, "groupId">;
 	meta!: EntityTable<MetaEntry, "key">;
 
-	// Tests pass fake-indexeddb in `options`.
-	constructor(name = "handshake", options?: DexieOptions) {
-		super(name, options);
+	constructor(name = "handshake") {
+		super(name);
 		this.version(1).stores({
 			groups: "id",
 			members: "id, groupId",
@@ -37,24 +41,16 @@ export class LocalDb extends Dexie {
 		});
 		this.version(2)
 			.stores({
-				groups: "id",
-				members: "id, groupId",
 				entries: "id, groupId, [groupId+entryDate]",
 				conflicts: "id, entryId, groupId",
 				invites: "id, groupId",
 				inviteTokens: "inviteId, groupId",
-				outbox: "++seq, &id",
-				cursors: "groupId",
-				meta: "key",
 			})
 			.upgrade(async (tx) => {
-				// Version 1 rows lack the new columns, and its cursors predate entries, conflicts and invites:
-				// starting the cursors again makes the next pull send every group whole.
-				await tx.table("cursors").clear();
 				await tx
 					.table("groups")
 					.toCollection()
-					.modify((group: GroupRow & { baseCurrency?: string }) => {
+					.modify((group: Record<string, unknown>) => {
 						delete group.baseCurrency;
 						group.completedAt ??= null;
 						group.completedByMemberId ??= null;
@@ -62,17 +58,55 @@ export class LocalDb extends Dexie {
 				await tx
 					.table("members")
 					.toCollection()
-					.modify((member: MemberRow) => {
+					.modify((member: Record<string, unknown>) => {
 						member.joinedAt ??= null;
 					});
+				// Version 1 never stored entries, conflicts, invites or joinedAt: pull everything again.
+				await tx.table("cursors").clear();
+			});
+		this.version(3)
+			.stores({})
+			.upgrade(async (tx) => {
+				await tx
+					.table("groups")
+					.toCollection()
+					.modify((group: Record<string, unknown>) => {
+						group.note ??= null;
+					});
+				await tx
+					.table("entries")
+					.toCollection()
+					.modify((entry: Record<string, unknown>) => {
+						entry.category ??= null;
+					});
+				// Rows stored before notes and categories: pull everything again to fill them in.
+				await tx.table("cursors").clear();
+			});
+		this.version(4)
+			.stores({ nudges: "id, groupId, toMemberId" })
+			.upgrade(async (tx) => {
+				// Nudges sent before this version: pull everything again to fill the table.
+				await tx.table("cursors").clear();
+			});
+		this.version(5)
+			.stores({ guestCodes: "memberId, groupId" })
+			.upgrade(async (tx) => {
+				await tx
+					.table("groups")
+					.toCollection()
+					.modify((group: Record<string, unknown>) => {
+						group.joinCode ??= null;
+					});
+				// Rows stored before group codes and guest codes: pull everything again to fill them in.
+				await tx.table("cursors").clear();
 			});
 	}
 }
 
 export const db = new LocalDb();
 
-export async function clearLocalData(database: LocalDb = db) {
-	await database.transaction("rw", database.tables, () => Promise.all(database.tables.map((table) => table.clear())));
+export async function clearLocalData() {
+	await db.transaction("rw", db.tables, () => Promise.all(db.tables.map((table) => table.clear())));
 }
 
 // Local data belongs to one account; another account signing in on this device starts clean.

@@ -1,23 +1,25 @@
-import type { Item, PaymentStatus } from "@/lib/ledger";
-import type { Role } from "@/lib/permissions";
 import type {
-	ConflictResolution,
 	ConflictRow,
 	EntryRow,
-	EntrySnapshot,
+	EntryVersion,
+	GroupChanges,
 	GroupRow,
 	InviteRow,
 	MemberRow,
+	GuestCodeRow,
+	NudgeRow,
 	PullResult,
+	Share,
 } from "@/lib/sync/types";
 
-// pull_changes() rows, snake_case, with exactly the keys in docs/architecture.md §11.2. Timestamps and
-// dates arrive as Postgres's JSON text and are kept as they are.
-
-type RawGroup = {
+// pull_changes() rows as supabase/migrations/012_group_codes.sql builds them.
+export type RawGroup = {
 	id: string;
 	name: string;
+	note: string | null;
 	base_currency: string;
+	// Missing from servers before 012.
+	join_code?: string | null;
 	created_by: string | null;
 	created_at: string;
 	deleted_at: string | null;
@@ -26,29 +28,31 @@ type RawGroup = {
 	row_version: number;
 };
 
-type RawMember = {
+export type RawMember = {
 	id: string;
 	group_id: string;
 	user_id: string | null;
 	display_name: string;
-	role: Role;
+	role: MemberRow["role"];
 	joined_at: string | null;
 	deleted_at: string | null;
 	row_version: number;
 };
 
-type RawShare = { member_id: string; paid_cents: number; owed_cents: number; owed_to: Record<string, number> };
+export type RawShare = { member_id: string; paid_cents: number; owed_cents: number; owed_to: Record<string, number> };
 
-type RawEntry = {
+export type RawEntry = {
 	id: string;
 	group_id: string;
-	kind: "expense" | "payment";
+	kind: EntryRow["kind"];
 	description: string;
 	amount_cents: number;
-	items: Item[] | null;
+	// Stored as the device sent it, so already camelCase.
+	items: EntryRow["items"];
 	entry_date: string;
 	notes: string | null;
-	payment_status: PaymentStatus | null;
+	category: EntryRow["category"];
+	payment_status: EntryRow["paymentStatus"];
 	payer_confirmed_at: string | null;
 	receiver_confirmed_at: string | null;
 	confirmed_at: string | null;
@@ -63,23 +67,23 @@ type RawEntry = {
 	shares: RawShare[];
 };
 
-type RawConflict = {
+export type RawConflict = {
 	id: string;
 	group_id: string;
 	entry_id: string;
 	base_version: number;
-	// Stored camelCase, as the device wrote it (§11.1).
-	base: EntrySnapshot | null;
-	proposed: EntrySnapshot | null;
+	// Built in camelCase by the server.
+	base: ConflictRow["base"];
+	proposed: ConflictRow["proposed"];
 	proposed_by_member_id: string;
 	created_at: string;
 	resolved_at: string | null;
 	resolved_by_member_id: string | null;
-	resolution: ConflictResolution | null;
+	resolution: ConflictRow["resolution"];
 	row_version: number;
 };
 
-type RawInvite = {
+export type RawInvite = {
 	id: string;
 	group_id: string;
 	claim_member_id: string | null;
@@ -90,33 +94,59 @@ type RawInvite = {
 	row_version: number;
 };
 
-export type RawPull = {
-	group_ids: string[];
-	changes: {
-		group_id: string;
-		version: number;
-		groups: RawGroup[];
-		members: RawMember[];
-		entries: RawEntry[];
-		conflicts: RawConflict[];
-		invites: RawInvite[];
-	}[];
+export type RawNudge = {
+	id: string;
+	group_id: string;
+	from_member_id: string;
+	to_member_id: string;
+	amount_cents: number;
+	created_at: string;
+	row_version: number;
 };
 
-function toGroupRow(raw: RawGroup): GroupRow {
+export type RawGuestCode = {
+	member_id: string;
+	group_id: string;
+	code: string;
+	created_at: string;
+	deleted_at: string | null;
+	row_version: number;
+};
+
+export type RawGroupChanges = {
+	group_id: string;
+	version: number;
+	groups: RawGroup[];
+	members: RawMember[];
+	entries: RawEntry[];
+	conflicts: RawConflict[];
+	invites: RawInvite[];
+	// Missing from servers before 011.
+	nudges?: RawNudge[];
+	// Missing from servers before 012.
+	guest_codes?: RawGuestCode[];
+};
+
+// moved_away is missing from servers before 012.
+export type RawPull = { group_ids: string[]; changes: RawGroupChanges[]; moved_away?: string[] };
+
+// base_currency is not kept on the device (dollars only).
+export function toGroupRow(raw: RawGroup): GroupRow {
 	return {
 		id: raw.id,
 		name: raw.name,
+		note: raw.note ?? null,
 		createdBy: raw.created_by,
 		createdAt: raw.created_at,
 		deletedAt: raw.deleted_at,
 		completedAt: raw.completed_at,
 		completedByMemberId: raw.completed_by_member_id,
+		joinCode: raw.join_code ?? null,
 		rowVersion: raw.row_version,
 	};
 }
 
-function toMemberRow(raw: RawMember): MemberRow {
+export function toMemberRow(raw: RawMember): MemberRow {
 	return {
 		id: raw.id,
 		groupId: raw.group_id,
@@ -129,7 +159,11 @@ function toMemberRow(raw: RawMember): MemberRow {
 	};
 }
 
-function toEntryRow(raw: RawEntry): EntryRow {
+function toShare(raw: RawShare): Share {
+	return { memberId: raw.member_id, paidCents: raw.paid_cents, owedCents: raw.owed_cents, owedTo: raw.owed_to };
+}
+
+export function toEntryRow(raw: RawEntry): EntryRow {
 	return {
 		id: raw.id,
 		groupId: raw.group_id,
@@ -139,6 +173,7 @@ function toEntryRow(raw: RawEntry): EntryRow {
 		items: raw.items,
 		entryDate: raw.entry_date,
 		notes: raw.notes,
+		category: raw.category ?? null,
 		paymentStatus: raw.payment_status,
 		payerConfirmedAt: raw.payer_confirmed_at,
 		receiverConfirmedAt: raw.receiver_confirmed_at,
@@ -151,23 +186,23 @@ function toEntryRow(raw: RawEntry): EntryRow {
 		updatedAt: raw.updated_at,
 		deletedAt: raw.deleted_at,
 		rowVersion: raw.row_version,
-		shares: raw.shares.map((share) => ({
-			memberId: share.member_id,
-			paidCents: share.paid_cents,
-			owedCents: share.owed_cents,
-			owedTo: share.owed_to,
-		})),
+		shares: raw.shares.map(toShare),
 	};
 }
 
-function toConflictRow(raw: RawConflict): ConflictRow {
+// Snapshots written before 010 have no category: none.
+function withCategory<T extends EntryVersion>(version: T | null): T | null {
+	return version && { ...version, category: version.category ?? null };
+}
+
+export function toConflictRow(raw: RawConflict): ConflictRow {
 	return {
 		id: raw.id,
 		groupId: raw.group_id,
 		entryId: raw.entry_id,
 		baseVersion: raw.base_version,
-		base: raw.base,
-		proposed: raw.proposed,
+		base: withCategory(raw.base),
+		proposed: withCategory(raw.proposed),
 		proposedByMemberId: raw.proposed_by_member_id,
 		createdAt: raw.created_at,
 		resolvedAt: raw.resolved_at,
@@ -177,7 +212,7 @@ function toConflictRow(raw: RawConflict): ConflictRow {
 	};
 }
 
-function toInviteRow(raw: RawInvite): InviteRow {
+export function toInviteRow(raw: RawInvite): InviteRow {
 	return {
 		id: raw.id,
 		groupId: raw.group_id,
@@ -190,17 +225,43 @@ function toInviteRow(raw: RawInvite): InviteRow {
 	};
 }
 
-export function toPullResult(raw: RawPull): PullResult {
+export function toNudgeRow(raw: RawNudge): NudgeRow {
 	return {
-		groupIds: raw.group_ids,
-		changes: raw.changes.map((change) => ({
-			groupId: change.group_id,
-			version: change.version,
-			groups: change.groups.map(toGroupRow),
-			members: change.members.map(toMemberRow),
-			entries: change.entries.map(toEntryRow),
-			conflicts: change.conflicts.map(toConflictRow),
-			invites: change.invites.map(toInviteRow),
-		})),
+		id: raw.id,
+		groupId: raw.group_id,
+		fromMemberId: raw.from_member_id,
+		toMemberId: raw.to_member_id,
+		amountCents: raw.amount_cents,
+		createdAt: raw.created_at,
+		rowVersion: raw.row_version,
 	};
+}
+
+export function toGuestCodeRow(raw: RawGuestCode): GuestCodeRow {
+	return {
+		memberId: raw.member_id,
+		groupId: raw.group_id,
+		code: raw.code,
+		createdAt: raw.created_at,
+		deletedAt: raw.deleted_at,
+		rowVersion: raw.row_version,
+	};
+}
+
+function toGroupChanges(raw: RawGroupChanges): GroupChanges {
+	return {
+		groupId: raw.group_id,
+		version: raw.version,
+		groups: raw.groups.map(toGroupRow),
+		members: raw.members.map(toMemberRow),
+		entries: raw.entries.map(toEntryRow),
+		conflicts: raw.conflicts.map(toConflictRow),
+		invites: raw.invites.map(toInviteRow),
+		nudges: (raw.nudges ?? []).map(toNudgeRow),
+		guestCodes: (raw.guest_codes ?? []).map(toGuestCodeRow),
+	};
+}
+
+export function toPullResult(raw: RawPull): PullResult {
+	return { groupIds: raw.group_ids, changes: raw.changes.map(toGroupChanges), movedAway: raw.moved_away ?? [] };
 }

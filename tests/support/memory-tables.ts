@@ -4,26 +4,29 @@ import type {
 	CursorRow,
 	EntryRow,
 	GroupRow,
+	GuestCodeRow,
 	InviteRow,
 	InviteTokenRow,
 	MemberRow,
+	NudgeRow,
+	Share,
 } from "@/lib/sync/types";
 
-// Rows<T> over a Map, keyed by `key` and grouped by `groupOf`. Rows are copied in and out, as Dexie does.
-function memoryRows<T>(key: (row: T) => string, groupOf: (row: T) => string) {
+export type MemoryRows<T> = Rows<T> & { map: Map<string, T> };
+
+export function memoryRows<T>(key: (row: T) => string, groupOf: (row: T) => string): MemoryRows<T> {
 	const map = new Map<string, T>();
-	const rows: Rows<T> = {
-		get: async (id) => (map.has(id) ? structuredClone(map.get(id)) : undefined),
-		byGroup: async (groupId) =>
-			[...map.values()].filter((row) => groupOf(row) === groupId).map((row) => structuredClone(row)),
-		put: async (list) => {
-			for (const row of list) map.set(key(row), structuredClone(row));
+	return {
+		map,
+		get: async (id) => map.get(id),
+		byGroup: async (groupId) => [...map.values()].filter((row) => groupOf(row) === groupId),
+		put: async (rows) => {
+			for (const row of rows) map.set(key(row), structuredClone(row));
 		},
 		delete: async (ids) => {
 			for (const id of ids) map.delete(id);
 		},
 	};
-	return { rows, map };
 }
 
 export function createMemoryTables() {
@@ -51,42 +54,45 @@ export function createMemoryTables() {
 		(r) => r.inviteId,
 		(r) => r.groupId
 	);
+	const nudges = memoryRows<NudgeRow>(
+		(r) => r.id,
+		(r) => r.groupId
+	);
+	const guestCodes = memoryRows<GuestCodeRow>(
+		(r) => r.memberId,
+		(r) => r.groupId
+	);
 	const cursors = memoryRows<CursorRow>(
 		(r) => r.groupId,
 		(r) => r.groupId
 	);
 
 	const tables: LocalTables = {
-		groups: groups.rows,
-		members: members.rows,
-		entries: entries.rows,
-		conflicts: conflicts.rows,
-		invites: invites.rows,
-		inviteTokens: inviteTokens.rows,
-		cursors: cursors.rows,
+		groups,
+		members,
+		entries,
+		conflicts,
+		invites,
+		inviteTokens,
+		nudges,
+		guestCodes,
+		cursors,
 		groupIds: async () => [...groups.map.keys()],
 	};
 
-	return {
-		tables,
-		groups: groups.map,
-		members: members.map,
-		entries: entries.map,
-		conflicts: conflicts.map,
-		invites: invites.map,
-		inviteTokens: inviteTokens.map,
-		cursors: cursors.map,
-	};
+	return { tables, groups, members, entries, conflicts, invites, inviteTokens, nudges, guestCodes, cursors };
 }
 
 export function serverGroup(overrides: Partial<GroupRow> & Pick<GroupRow, "id">): GroupRow {
 	return {
 		name: "Trip",
+		note: null,
 		createdBy: "user-1",
 		createdAt: "2026-11-01T12:00:00.000Z",
 		deletedAt: null,
 		completedAt: null,
 		completedByMemberId: null,
+		joinCode: "HX7K2P",
 		rowVersion: 1,
 		...overrides,
 	};
@@ -104,27 +110,31 @@ export function serverMember(overrides: Partial<MemberRow> & Pick<MemberRow, "id
 	};
 }
 
-export function serverEntry(overrides: Partial<EntryRow> & Pick<EntryRow, "id" | "groupId">): EntryRow {
+export function serverBill(
+	overrides: Partial<EntryRow> & Pick<EntryRow, "id" | "groupId" | "createdByMemberId">
+): EntryRow {
+	const payer = overrides.createdByMemberId;
+	const shares: Share[] = [{ memberId: payer, paidCents: 1000, owedCents: 1000, owedTo: { [payer]: 1000 } }];
 	return {
 		kind: "expense",
 		description: "Dinner",
 		amountCents: 1000,
-		items: [{ id: "i1", amountCents: 1000, paidBy: "m1", splitAmong: ["m1"] }],
+		items: [{ id: "i1", amountCents: 1000, paidBy: payer, splitAmong: [payer] }],
 		entryDate: "2026-11-01",
 		notes: null,
+		category: null,
 		paymentStatus: null,
 		payerConfirmedAt: null,
 		receiverConfirmedAt: null,
 		confirmedAt: null,
 		closedAt: null,
 		closeNote: null,
-		createdByMemberId: "m1",
-		updatedByMemberId: "m1",
+		updatedByMemberId: payer,
 		createdAt: "2026-11-01T12:00:00.000Z",
 		updatedAt: "2026-11-01T12:00:00.000Z",
 		deletedAt: null,
 		rowVersion: 1,
-		shares: [{ memberId: "m1", paidCents: 1000, owedCents: 1000, owedTo: { m1: 1000 } }],
+		shares,
 		...overrides,
 	};
 }

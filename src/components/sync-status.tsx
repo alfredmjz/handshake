@@ -1,42 +1,73 @@
-import { Check, CircleAlert, Cloud, CloudOff, RefreshCw, type LucideIcon } from "lucide-react";
-
+import { HandsGlyph, type HandsPose } from "@/components/art/hands-glyph";
 import { useWaitingChanges } from "@/lib/groups";
-import { requestSync, useSyncStatus, type SyncStatus } from "@/lib/sync/controller";
+import { useSyncStatus, type SyncStatus } from "@/lib/sync/controller";
 import { cn } from "@/lib/utils";
 
-function describe(status: SyncStatus, waiting: number): { label: string; Icon: LucideIcon; tone?: string } {
-	const suffix = waiting > 0 ? ` · ${waiting} waiting` : "";
+export type SyncState = "synced" | "syncing" | "waiting" | "offline" | "error";
+
+const POSE: Record<SyncState, HandsPose> = {
+	synced: "clasped",
+	syncing: "shaking",
+	waiting: "clasped",
+	offline: "apart",
+	error: "apart",
+};
+
+function describe(status: SyncStatus, waiting: number): { state: SyncState; spoken: string } {
+	const pending = waiting > 0 ? `, ${waiting} ${waiting === 1 ? "change" : "changes"} waiting` : "";
 	switch (status.state) {
 		case "offline":
-			return { label: `Offline${suffix}`, Icon: CloudOff };
+			return { state: "offline", spoken: `Offline${pending}` };
 		case "syncing":
-			return { label: "Syncing", Icon: RefreshCw, tone: "[&_svg]:animate-spin" };
+			return { state: "syncing", spoken: "Syncing" };
 		case "error":
-			return { label: `Not synced${suffix}`, Icon: CircleAlert, tone: "border-error/40 text-error" };
+			return { state: "error", spoken: `Not synced${pending}` };
 		case "idle":
-			return waiting > 0 ? { label: `${waiting} waiting`, Icon: Cloud } : { label: "Synced", Icon: Check };
+			return waiting > 0 ? { state: "waiting", spoken: `Online${pending}` } : { state: "synced", spoken: "Synced" };
 	}
 }
 
-export function SyncStatusBadge() {
+// Where this device stands with the server, in words and as a state for the mark.
+export function useSyncState() {
 	const status = useSyncStatus();
-	const waiting = useWaitingChanges();
-	const { label, Icon, tone } = describe(status, waiting);
+	const waiting = useWaitingChanges() ?? 0;
+	return { ...describe(status, waiting), waiting, error: status.state === "error" ? status.error : null };
+}
 
+// The logo's hands say how the device stands with the server: clasped when everything is on it, shaking
+// while it syncs, let go when offline or failing. Changes still waiting show as a small tilted count tag.
+export function SyncMark({
+	state,
+	waiting = 0,
+	className,
+}: {
+	state: SyncState;
+	waiting?: number;
+	className?: string;
+}) {
 	return (
-		<button
-			type="button"
-			onClick={requestSync}
-			aria-label={`${label}. Sync now`}
-			title={status.state === "error" ? `Couldn't reach the server (${status.error}). Tap to try again.` : "Sync now"}
-			aria-live="polite"
-			className={cn(
-				"type-caption inline-flex items-center gap-1.5 rounded-full border border-border px-2.5 py-1 text-muted-foreground transition-colors hover:bg-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
-				tone
+		<span className={cn("relative inline-flex shrink-0", className)}>
+			<HandsGlyph
+				pose={POSE[state]}
+				strokeWidth={4.4}
+				className={cn("h-full w-full transition-opacity duration-quick ease-out", state === "offline" && "opacity-55")}
+			/>
+			{state === "error" ? (
+				<span
+					aria-hidden
+					className="absolute -right-1 -top-0.5 size-2.5 rounded-full border-[1.5px] border-paper bg-owe-mark"
+				/>
+			) : (
+				waiting > 0 &&
+				state !== "synced" && (
+					<span
+						aria-hidden
+						className="type-micro absolute -right-2.5 -top-1.5 flex h-[1.125rem] min-w-[1.125rem] rotate-6 animate-land items-center justify-center rounded-full border-[1.5px] border-ink bg-waiting px-1 font-semibold tabular-nums text-ink"
+					>
+						{waiting > 9 ? "9+" : waiting}
+					</span>
+				)
 			)}
-		>
-			<Icon className="size-3.5" aria-hidden />
-			{label}
-		</button>
+		</span>
 	);
 }

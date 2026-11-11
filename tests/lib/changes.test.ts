@@ -1,645 +1,1056 @@
 import { describe, expect, test } from "bun:test";
 
-import { planChange, type ExpenseDraft, type GroupState, type Intent, type PlanContext } from "@/lib/changes";
-import { computeShares, type Share } from "@/lib/ledger";
-import type { Role } from "@/lib/permissions";
-import type { ConflictRow, EntryRow, InviteRow, MemberRow } from "@/lib/sync/types";
-import { PERMISSION_CASES } from "../fixtures/permission-cases";
-import { serverEntry, serverGroup, serverMember } from "../support/memory-tables";
+import {
+	canAnswer,
+	isNameTaken,
+	paymentCountsAtOnce,
+	pendingPaymentBetween,
+	planChange,
+	type ExpenseDraft,
+	type GroupIntent,
+	type GroupState,
+	type Intent,
+	type PlanContext,
+} from "@/lib/changes";
+import type { ConflictRow, EntryRow, MemberRow, NudgeRow } from "@/lib/sync/types";
+import { serverBill, serverGroup, serverMember } from "../support/memory-tables";
 
-const NOW = "2026-11-04T18:00:00.000Z";
-const G = "g";
+const G = "g1";
+const NOW = "2026-11-08T10:00:00.000Z";
 
-function ctx(overrides: Partial<PlanContext> = {}): PlanContext {
-	let n = 0;
-	return {
-		newId: () => `id${++n}`,
-		randomToken: () => "T".repeat(43),
-		now: NOW,
-		today: "2026-11-04",
-		isAnonymous: false,
-		...overrides,
-	};
-}
+const member = (id: string, overrides: Partial<MemberRow>) => serverMember({ id, groupId: G, ...overrides });
 
-// Owner Olive, member Max and guest Gus have logins; Nia and Ned are name-only; Lee left.
+// Alex owns the group, Sam is a member, Gus a guest; Jo and Nina were added by name; Kim left.
 const MEMBERS: MemberRow[] = [
-	serverMember({ id: "o", groupId: G, userId: "u-o", displayName: "Olive", role: "owner" }),
-	serverMember({ id: "mem", groupId: G, userId: "u-m", displayName: "Max", role: "member" }),
-	serverMember({ id: "g", groupId: G, userId: "u-g", displayName: "Gus", role: "guest" }),
-	serverMember({ id: "n1", groupId: G, userId: null, displayName: "Nia", role: "member", joinedAt: null }),
-	serverMember({ id: "n2", groupId: G, userId: null, displayName: "Ned", role: "member", joinedAt: null }),
-	serverMember({
-		id: "left",
-		groupId: G,
-		userId: "u-l",
-		displayName: "Lee",
-		role: "member",
-		deletedAt: "2026-11-02T00:00:00Z",
-	}),
+	member("alex", { userId: "user-a", displayName: "Alex", role: "owner" }),
+	member("sam", { userId: "user-s", displayName: "Sam", role: "member" }),
+	member("gus", { userId: "user-g", displayName: "Gus", role: "guest" }),
+	member("jo", { userId: null, displayName: "Jo", role: "member", joinedAt: null }),
+	member("nina", { userId: null, displayName: "Nina", role: "member", joinedAt: null }),
+	member("kim", { userId: "user-k", displayName: "Kim", role: "member", deletedAt: "2026-11-02T00:00:00.000Z" }),
 ];
-const MEMBER_FOR: Record<Role, string> = { owner: "o", member: "mem", guest: "g" };
-// Someone with a login who isn't `me`, to be the other side of a handshake.
-const OTHER_FOR: Record<Role, string> = { owner: "mem", member: "o", guest: "o" };
 
-const items = (paidBy: string, splitAmong: string[], amountCents = 1000) => [
-	{ id: "i1", amountCents, paidBy, splitAmong },
-];
-const draft = (overrides: Partial<ExpenseDraft> = {}): ExpenseDraft => ({
-	description: "Dinner",
-	entryDate: "2026-11-04",
-	notes: null,
-	items: items("o", ["o", "mem", "g"]),
-	...overrides,
-});
-const bill = (id: string, createdBy: string, overrides: Partial<EntryRow> = {}) => {
-	const split = [...new Set([createdBy, "n1"])];
-	return serverEntry({
+function payment(id: string, from: string, to: string, overrides: Partial<EntryRow> = {}): EntryRow {
+	return serverBill({
 		id,
 		groupId: G,
-		createdByMemberId: createdBy,
-		updatedByMemberId: createdBy,
-		items: items(createdBy, split),
-		shares: computeShares(items(createdBy, split)),
-		rowVersion: 7,
-		...overrides,
-	});
-};
-const paymentShares = (from: string, to: string, amountCents = 500): Share[] =>
-	computeShares([{ id: "p", amountCents, paidBy: from, splitAmong: [to] }]);
-const pendingPayment = (id: string, from: string, to: string, startedBy: string) =>
-	serverEntry({
-		id,
-		groupId: G,
+		createdByMemberId: from,
 		kind: "payment",
 		description: "Payment",
 		amountCents: 500,
 		items: null,
 		paymentStatus: "pending",
-		payerConfirmedAt: startedBy === from ? NOW : null,
-		receiverConfirmedAt: startedBy === to ? NOW : null,
-		createdByMemberId: startedBy,
-		updatedByMemberId: startedBy,
-		shares: paymentShares(from, to),
+		payerConfirmedAt: "2026-11-02T00:00:00.000Z",
+		shares: [
+			{ memberId: to, paidCents: 0, owedCents: 500, owedTo: { [from]: 500 } },
+			{ memberId: from, paidCents: 500, owedCents: 0, owedTo: {} },
+		],
+		...overrides,
 	});
+}
+
 const conflict = (overrides: Partial<ConflictRow> = {}): ConflictRow => ({
-	id: "c",
+	id: "c1",
 	groupId: G,
-	entryId: "b-o",
-	baseVersion: 5,
+	entryId: "bill-alex",
+	baseVersion: 1,
 	base: null,
 	proposed: null,
-	proposedByMemberId: "mem",
-	createdAt: NOW,
+	proposedByMemberId: "sam",
+	createdAt: "2026-11-03T00:00:00.000Z",
 	resolvedAt: null,
 	resolvedByMemberId: null,
 	resolution: null,
-	rowVersion: 8,
-	...overrides,
-});
-const invite = (id: string, createdBy: string | null, overrides: Partial<InviteRow> = {}): InviteRow => ({
-	id,
-	groupId: G,
-	claimMemberId: null,
-	createdBy,
-	createdAt: NOW,
-	expiresAt: "2026-11-18T18:00:00.000Z",
-	revokedAt: null,
-	rowVersion: 3,
+	rowVersion: 5,
 	...overrides,
 });
 
-function state(role: Role, overrides: Partial<GroupState> = {}): GroupState {
-	const memberId = MEMBER_FOR[role];
-	const me = MEMBERS.find((m) => m.id === memberId)!;
+// Each of Alex, Sam and Gus has a bill of their own, one
+// pending payment to answer and one to undo: sam→alex (Sam's), gus→sam (Gus's), alex→gus (Alex's).
+function state(as: "alex" | "sam" | "gus", overrides: Partial<GroupState> = {}): GroupState {
+	const me = MEMBERS.find((m) => m.id === as)!;
 	return {
-		group: serverGroup({ id: G }),
+		group: serverGroup({ id: G, createdBy: "user-a" }),
 		members: MEMBERS,
-		entries: [bill("b-o", "o"), bill("b-mem", "mem"), bill("b-g", "g"), bill("b-n1", "n1")],
+		entries: [
+			serverBill({ id: "bill-alex", groupId: G, createdByMemberId: "alex", rowVersion: 4 }),
+			serverBill({ id: "bill-sam", groupId: G, createdByMemberId: "sam", rowVersion: 6 }),
+			serverBill({ id: "bill-gus", groupId: G, createdByMemberId: "gus", rowVersion: 7 }),
+			payment("p-sam-alex", "sam", "alex"),
+			payment("p-gus-sam", "gus", "sam"),
+			payment("p-alex-gus", "alex", "gus"),
+		],
 		conflicts: [conflict()],
-		invites: [invite("inv-o", "u-o"), invite("inv-mem", "u-m"), invite("inv-gone", null)],
-		me: { memberId, userId: me.userId!, role },
+		me: { memberId: me.id, role: me.role, isAnonymous: me.role === "guest" },
 		...overrides,
 	};
 }
 
-// One intent per row of the permission case table, built for whoever is asking.
-const INTENT_FOR: Record<string, (role: Role) => { intent: Intent; state?: Partial<GroupState> }> = {
-	"group.rename": () => ({ intent: { groupId: G, type: "renameGroup", name: "Banff" } }),
-	"group.delete": () => ({ intent: { groupId: G, type: "deleteGroup" } }),
-	"group.complete": () => ({ intent: { groupId: G, type: "completeGroup" } }),
-	"group.reopen": () => ({
-		intent: { groupId: G, type: "reopenGroup" },
-		state: { group: serverGroup({ id: G, completedAt: NOW, completedByMemberId: "o" }) },
-	}),
-	"member.add": () => ({ intent: { groupId: G, type: "addPerson", displayName: "Kim" } }),
-	"member.rename.self": (role) => ({
-		intent: { groupId: G, type: "renamePerson", memberId: MEMBER_FOR[role], displayName: "Me" },
-	}),
-	"member.rename.others": () => ({ intent: { groupId: G, type: "renamePerson", memberId: "n1", displayName: "Nina" } }),
-	"member.remove.self": (role) => ({ intent: { groupId: G, type: "removePerson", memberId: MEMBER_FOR[role] } }),
-	"member.remove.others": () => ({ intent: { groupId: G, type: "removePerson", memberId: "n1" } }),
-	"entry.create": () => ({ intent: { groupId: G, type: "addExpense", draft: draft() } }),
-	"entry.update": () => ({ intent: { groupId: G, type: "editExpense", entryId: "b-o", draft: draft() } }),
-	"entry.delete.own": (role) => ({ intent: { groupId: G, type: "deleteEntry", entryId: `b-${MEMBER_FOR[role]}` } }),
-	"entry.delete.others": () => ({ intent: { groupId: G, type: "deleteEntry", entryId: "b-n1" } }),
-	"conflict.resolve": () => ({
-		intent: { groupId: G, type: "resolveConflict", conflictId: "c", resolution: "kept_current", final: draft() },
-	}),
-	"invite.create": () => ({ intent: { groupId: G, type: "createInvite", claimMemberId: "n1" } }),
-	"invite.revoke.own": (role) => ({
-		intent: { groupId: G, type: "revokeInvite", inviteId: "mine" },
-		state: { invites: [invite("mine", `u-${role === "owner" ? "o" : role === "member" ? "m" : "g"}`)] },
-	}),
-	"invite.revoke.others": () => ({ intent: { groupId: G, type: "revokeInvite", inviteId: "inv-gone" } }),
-	"payment.record.own": (role) => ({
-		intent: {
-			groupId: G,
-			type: "recordPayment",
-			from: MEMBER_FOR[role],
-			to: "n1",
-			amountCents: 500,
-			entryDate: "2026-11-04",
-			notes: null,
-		},
-	}),
-	"payment.record.others": () => ({
-		intent: {
-			groupId: G,
-			type: "recordPayment",
-			from: "n1",
-			to: "n2",
-			amountCents: 500,
-			entryDate: "2026-11-04",
-			notes: null,
-		},
-	}),
-	"payment.respond": (role) => ({
-		intent: { groupId: G, type: "confirmPayment", entryId: "p" },
-		state: { entries: [pendingPayment("p", OTHER_FOR[role], MEMBER_FOR[role], OTHER_FOR[role])] },
-	}),
-	"payment.undo": (role) => ({
-		intent: { groupId: G, type: "undoPayment", entryId: "p" },
-		state: { entries: [pendingPayment("p", MEMBER_FOR[role], OTHER_FOR[role], MEMBER_FOR[role])] },
-	}),
-};
+function context(overrides: Partial<PlanContext> = {}): PlanContext {
+	let n = 0;
+	return {
+		newId: () => `id-${++n}`,
+		now: NOW,
+		today: "2026-11-08",
+		isAnonymous: false,
+		...overrides,
+	};
+}
 
-describe("planChange: the role matrix, one intent per action", () => {
-	test("every action in the case table has an intent", () => {
-		expect(Object.keys(INTENT_FOR).sort()).toEqual(PERMISSION_CASES.map((c) => c.action).sort());
-	});
+const plan = (s: GroupState | null, intent: GroupIntent | Intent, ctx = context()) =>
+	planChange(
+		s,
+		("groupId" in intent || intent.type === "createGroup" ? intent : { groupId: G, ...intent }) as Intent,
+		ctx
+	);
 
-	for (const permission of PERMISSION_CASES) {
-		for (const role of ["owner", "member", "guest"] as const) {
-			const allowed = permission[role];
-			test(`${permission.action} by the ${role}: ${allowed ? "allowed" : "HS403"}`, () => {
-				const { intent, state: extra } = INTENT_FOR[permission.action](role);
-				const plan = planChange(state(role, extra), intent, ctx());
-				if (allowed) expect(plan).toMatchObject({ ok: true });
-				else expect(plan).toMatchObject({ ok: false, code: "HS403" });
+const draft = (overrides: Partial<ExpenseDraft> = {}): ExpenseDraft => ({
+	description: "Dinner",
+	entryDate: "2026-11-07",
+	notes: null,
+	category: null,
+	items: [{ id: "i1", amountCents: 3000, paidBy: "alex", splitAmong: ["alex", "sam", "gus"] }],
+	...overrides,
+});
+
+// Dinner 30.00 paid by Alex, split three ways: each owes 10.00 to Alex.
+const DINNER_SHARES = [
+	{ memberId: "alex", paidCents: 3000, owedCents: 1000, owedTo: { alex: 1000 } },
+	{ memberId: "sam", paidCents: 0, owedCents: 1000, owedTo: { alex: 1000 } },
+	{ memberId: "gus", paidCents: 0, owedCents: 1000, owedTo: { alex: 1000 } },
+];
+
+type Actor = "alex" | "sam" | "gus";
+const others: Record<Actor, Actor> = { alex: "sam", sam: "alex", gus: "alex" };
+const toAnswer: Record<Actor, string> = { alex: "p-sam-alex", sam: "p-gus-sam", gus: "p-alex-gus" };
+const toUndo: Record<Actor, string> = { alex: "p-alex-gus", sam: "p-sam-alex", gus: "p-gus-sam" };
+
+// Spec decision 8, one row per intent: [owner, member, guest] allowed, and allowed in a completed group.
+const MATRIX: [string, (as: Actor) => GroupIntent, [boolean, boolean, boolean], boolean][] = [
+	["renameGroup", () => ({ type: "renameGroup", name: "Japan" }), [true, false, false], false],
+	["describeGroup", () => ({ type: "describeGroup", note: "Tokyo" }), [true, false, false], false],
+	["deleteGroup", () => ({ type: "deleteGroup" }), [true, false, false], true],
+	["completeGroup", () => ({ type: "completeGroup" }), [true, false, false], false],
+	["resetGroupCode", () => ({ type: "resetGroupCode" }), [true, false, false], false],
+	["addPerson", () => ({ type: "addPerson", displayName: "Lee" }), [true, true, false], false],
+	[
+		"renamePerson (self)",
+		(as) => ({ type: "renamePerson", memberId: as, displayName: "Me" }),
+		[true, true, true],
+		false,
+	],
+	[
+		"renamePerson (others)",
+		() => ({ type: "renamePerson", memberId: "jo", displayName: "Joanne" }),
+		[true, false, false],
+		false,
+	],
+	["removePerson (leave)", (as) => ({ type: "removePerson", memberId: as }), [true, true, true], true],
+	["removePerson (others)", () => ({ type: "removePerson", memberId: "jo" }), [true, false, false], false],
+	["addExpense", () => ({ type: "addExpense", draft: draft() }), [true, true, true], false],
+	["editExpense", (as) => ({ type: "editExpense", entryId: `bill-${as}`, draft: draft() }), [true, true, false], false],
+	["deleteEntry (own)", (as) => ({ type: "deleteEntry", entryId: `bill-${as}` }), [true, true, true], false],
+	[
+		"deleteEntry (others)",
+		(as) => ({ type: "deleteEntry", entryId: `bill-${others[as]}` }),
+		[true, true, false],
+		false,
+	],
+	[
+		"resolveConflict",
+		() => ({ type: "resolveConflict", conflictId: "c1", resolution: "kept_current", final: draft() }),
+		[true, true, false],
+		false,
+	],
+	[
+		"recordPayment (own)",
+		(as) => ({ type: "recordPayment", from: as, to: "jo", amountCents: 1000, entryDate: "2026-11-08", notes: null }),
+		[true, true, true],
+		false,
+	],
+	[
+		"recordPayment (others)",
+		() => ({ type: "recordPayment", from: "jo", to: "nina", amountCents: 1000, entryDate: "2026-11-08", notes: null }),
+		[true, true, false],
+		false,
+	],
+	["confirmPayment", (as) => ({ type: "confirmPayment", entryId: toAnswer[as] }), [true, true, true], true],
+	["declinePayment", (as) => ({ type: "declinePayment", entryId: toAnswer[as], note: null }), [true, true, true], true],
+	["undoPayment", (as) => ({ type: "undoPayment", entryId: toUndo[as] }), [true, true, true], false],
+];
+
+describe("planChange: role matrix", () => {
+	const actors: Actor[] = ["alex", "sam", "gus"];
+	for (const [name, intentFor, allowed, whenCompleted] of MATRIX) {
+		for (const [i, as] of actors.entries()) {
+			test(`${name} as ${state(as).me.role}`, () => {
+				const result = plan(state(as), intentFor(as));
+				if (allowed[i]) {
+					expect(result).toMatchObject({ ok: true });
+					if (result.ok) expect(result.mutations.length).toBe(1);
+				} else {
+					expect(result).toMatchObject({ ok: false, code: "HS403" });
+				}
+			});
+			test(`${name} as ${state(as).me.role} in a completed group`, () => {
+				const completed = state(as, { group: serverGroup({ id: G, completedAt: NOW, completedByMemberId: "alex" }) });
+				const result = plan(completed, intentFor(as));
+				if (allowed[i] && whenCompleted) expect(result).toMatchObject({ ok: true });
+				else
+					expect(result).toEqual({
+						ok: false,
+						code: "HS403",
+						reason: allowed[i] ? "This group is completed" : expect.any(String),
+					});
 			});
 		}
-
-		const completed = permission.whenCompleted;
-		test(`${permission.action} in a completed group: ${completed ? "allowed" : "HS403"}`, () => {
-			const role = permission.owner ? "owner" : "member";
-			const { intent, state: extra } = INTENT_FOR[permission.action](role);
-			const done = serverGroup({ id: G, completedAt: NOW, completedByMemberId: "o" });
-			const plan = planChange(state(role, { ...extra, group: done }), intent, ctx());
-			if (completed) expect(plan).toMatchObject({ ok: true });
-			else expect(plan).toEqual({ ok: false, code: "HS403", reason: "This group is completed" });
-		});
 	}
 
-	test("someone who isn't in the group, or a group this device doesn't have, gets HS403", () => {
-		const intent: Intent = { groupId: G, type: "renameGroup", name: "x" };
-		expect(planChange(null, intent, ctx())).toMatchObject({ ok: false, code: "HS403" });
-		expect(planChange(state("owner", { me: null }), intent, ctx())).toMatchObject({ ok: false, code: "HS403" });
+	test("reopenGroup: owner only, and only does something in a completed group", () => {
+		const completed = (as: Actor) =>
+			state(as, { group: serverGroup({ id: G, completedAt: NOW, completedByMemberId: "alex" }) });
+		expect(plan(completed("alex"), { type: "reopenGroup" })).toMatchObject({
+			ok: true,
+			mutations: [{ type: "group.reopen" }],
+		});
+		expect(plan(completed("sam"), { type: "reopenGroup" })).toMatchObject({ ok: false, code: "HS403" });
+		expect(plan(completed("gus"), { type: "reopenGroup" })).toMatchObject({ ok: false, code: "HS403" });
+		expect(plan(state("alex"), { type: "reopenGroup" })).toEqual({ ok: true, mutations: [], createdId: null });
 	});
 
-	test("nothing works in a deleted group, deleting included", () => {
-		const gone = state("owner", { group: serverGroup({ id: G, deletedAt: NOW }) });
-		expect(planChange(gone, { groupId: G, type: "deleteGroup" }, ctx())).toEqual({
+	test("the role refusal names who may", () => {
+		expect(plan(state("sam"), { type: "renameGroup", name: "X" })).toEqual({
 			ok: false,
 			code: "HS403",
+			reason: "Only the group's owner can do this",
+		});
+		expect(plan(state("gus"), { type: "addPerson", displayName: "Lee" })).toEqual({
+			ok: false,
+			code: "HS403",
+			reason: "Guests can't do this",
+		});
+	});
+
+	test("checks run in the server's order: member, deleted, completed, role", () => {
+		expect(plan(null, { type: "addPerson", displayName: "Lee" })).toEqual({
+			ok: false,
+			code: "HS403",
+			reason: "You are not a member of this group",
+		});
+		const deletedAndCompleted = state("gus", {
+			group: serverGroup({ id: G, deletedAt: NOW, completedAt: NOW, completedByMemberId: "alex" }),
+		});
+		expect(plan(deletedAndCompleted, { type: "addPerson", displayName: "Lee" })).toMatchObject({
 			reason: "This group was deleted",
+		});
+		const completed = state("gus", { group: serverGroup({ id: G, completedAt: NOW, completedByMemberId: "alex" }) });
+		expect(plan(completed, { type: "addPerson", displayName: "Lee" })).toMatchObject({
+			reason: "This group is completed",
+		});
+		// The role check comes before the intent's own checks.
+		expect(plan(state("gus"), { type: "addPerson", displayName: "" })).toMatchObject({
+			reason: "Guests can't do this",
 		});
 	});
 });
 
-describe("planChange: each intent's mutations", () => {
+describe("planChange: mutations", () => {
+	const at = NOW;
+
 	test("createGroup", () => {
-		expect(planChange(null, { type: "createGroup", name: " Banff ", displayName: " Alex " }, ctx())).toEqual({
+		expect(plan(null, { type: "createGroup", name: " Japan 2027 ", displayName: "alex" })).toEqual({
 			ok: true,
-			createdId: "id1",
+			createdId: "id-1",
 			mutations: [
 				{
-					id: "id3",
-					at: NOW,
+					id: "id-3",
+					at,
 					type: "group.create",
-					groupId: "id1",
-					memberId: "id2",
-					name: "Banff",
-					displayName: "Alex",
+					groupId: "id-1",
+					memberId: "id-2",
+					name: "Japan 2027",
+					displayName: "alex",
+					note: null,
 				},
 			],
 		});
 	});
 
-	test("createGroup: guests can't, and names must fit", () => {
+	test("createGroup is refused for guests", () => {
 		expect(
-			planChange(null, { type: "createGroup", name: "Banff", displayName: "A" }, ctx({ isAnonymous: true }))
-		).toMatchObject({
+			plan(null, { type: "createGroup", name: "Japan", displayName: "Me" }, context({ isAnonymous: true }))
+		).toEqual({
 			ok: false,
 			code: "HS403",
+			reason: "Guests can't create groups",
 		});
-		expect(planChange(null, { type: "createGroup", name: "  ", displayName: "A" }, ctx())).toMatchObject({
+	});
+
+	test("group names and display names are 1 to 80 and 1 to 60 characters", () => {
+		expect(plan(null, { type: "createGroup", name: "  ", displayName: "Me" })).toEqual({
+			ok: false,
 			code: "HS422",
+			reason: "A group name must be 1 to 80 characters",
 		});
-		expect(planChange(null, { type: "createGroup", name: "x".repeat(81), displayName: "A" }, ctx())).toMatchObject({
+		expect(plan(state("alex"), { type: "renameGroup", name: "x".repeat(81) })).toMatchObject({ code: "HS422" });
+		expect(plan(state("alex"), { type: "renameGroup", name: "x".repeat(80) })).toMatchObject({ ok: true });
+		expect(plan(state("alex"), { type: "addPerson", displayName: "x".repeat(61) })).toEqual({
+			ok: false,
 			code: "HS422",
+			reason: "A name must be 1 to 60 characters",
 		});
-		expect(planChange(null, { type: "createGroup", name: "Banff", displayName: "" }, ctx())).toMatchObject({
+		expect(plan(state("alex"), { type: "renamePerson", memberId: "jo", displayName: " " })).toMatchObject({
 			code: "HS422",
 		});
 	});
 
 	test("renameGroup, deleteGroup, completeGroup", () => {
-		const s = state("owner");
-		expect(planChange(s, { groupId: G, type: "renameGroup", name: " Banff " }, ctx())).toEqual({
+		expect(plan(state("alex"), { type: "renameGroup", name: "Kyoto " })).toEqual({
 			ok: true,
 			createdId: null,
-			mutations: [{ id: "id1", at: NOW, type: "group.rename", groupId: G, name: "Banff" }],
+			mutations: [{ id: "id-1", at, type: "group.rename", groupId: G, name: "Kyoto" }],
 		});
-		expect(planChange(s, { groupId: G, type: "deleteGroup" }, ctx())).toMatchObject({
-			mutations: [{ type: "group.delete", groupId: G }],
+		expect(plan(state("alex"), { type: "deleteGroup" })).toMatchObject({
+			mutations: [{ id: "id-1", at, type: "group.delete", groupId: G }],
 		});
-		expect(planChange(s, { groupId: G, type: "completeGroup" }, ctx())).toMatchObject({
-			mutations: [{ type: "group.complete", groupId: G }],
+		expect(plan(state("alex"), { type: "completeGroup" })).toMatchObject({
+			mutations: [{ id: "id-1", at, type: "group.complete", groupId: G }],
 		});
 	});
 
-	test("reopening an open group plans nothing", () => {
-		expect(planChange(state("owner"), { groupId: G, type: "reopenGroup" }, ctx())).toEqual({
+	test("addPerson names the new person", () => {
+		expect(plan(state("sam"), { type: "addPerson", displayName: " Lee " })).toEqual({
+			ok: true,
+			createdId: "id-1",
+			mutations: [{ id: "id-2", at, type: "member.add", groupId: G, memberId: "id-1", displayName: "Lee" }],
+		});
+	});
+
+	test("renamePerson and removePerson", () => {
+		expect(plan(state("gus"), { type: "renamePerson", memberId: "gus", displayName: "Gussie" })).toEqual({
+			ok: true,
+			createdId: null,
+			mutations: [{ id: "id-1", at, type: "member.rename", groupId: G, memberId: "gus", displayName: "Gussie" }],
+		});
+		expect(plan(state("alex"), { type: "renamePerson", memberId: "nobody", displayName: "X" })).toEqual({
+			ok: false,
+			code: "HS422",
+			reason: "That person is not in this group",
+		});
+		expect(plan(state("alex"), { type: "removePerson", memberId: "jo" })).toEqual({
+			ok: true,
+			createdId: null,
+			mutations: [{ id: "id-1", at, type: "member.remove", groupId: G, memberId: "jo" }],
+		});
+		// Leaving is removing yourself.
+		expect(plan(state("gus"), { type: "removePerson", memberId: "gus" })).toMatchObject({
+			mutations: [{ type: "member.remove", memberId: "gus" }],
+		});
+		expect(plan(state("alex"), { type: "removePerson", memberId: "nobody" })).toMatchObject({ code: "HS422" });
+		// Kim has left already: nothing to do, as on the server.
+		expect(plan(state("alex"), { type: "removePerson", memberId: "kim" })).toEqual({
 			ok: true,
 			mutations: [],
 			createdId: null,
 		});
 	});
 
-	test("addPerson, renamePerson, removePerson", () => {
-		const s = state("owner");
-		expect(planChange(s, { groupId: G, type: "addPerson", displayName: " Kim " }, ctx())).toEqual({
-			ok: true,
-			createdId: "id1",
-			mutations: [{ id: "id2", at: NOW, type: "member.add", groupId: G, memberId: "id1", displayName: "Kim" }],
-		});
+	test("addExpense derives the amount and shares from the items", () => {
 		expect(
-			planChange(s, { groupId: G, type: "renamePerson", memberId: "n1", displayName: "Nina" }, ctx())
-		).toMatchObject({
-			mutations: [{ type: "member.rename", groupId: G, memberId: "n1", displayName: "Nina" }],
-		});
-		expect(planChange(s, { groupId: G, type: "removePerson", memberId: "n1" }, ctx())).toMatchObject({
-			mutations: [{ type: "member.remove", groupId: G, memberId: "n1" }],
-		});
-		// Someone who already left: nothing to do.
-		expect(planChange(s, { groupId: G, type: "removePerson", memberId: "left" }, ctx())).toMatchObject({
+			plan(state("gus"), { type: "addExpense", draft: draft({ description: " Dinner ", notes: "Ramen" }) })
+		).toEqual({
 			ok: true,
-			mutations: [],
-		});
-	});
-
-	test("people not in the group, and names that don't fit, are HS422", () => {
-		const s = state("owner");
-		expect(
-			planChange(s, { groupId: G, type: "renamePerson", memberId: "nobody", displayName: "X" }, ctx())
-		).toMatchObject({ code: "HS422" });
-		expect(planChange(s, { groupId: G, type: "removePerson", memberId: "nobody" }, ctx())).toMatchObject({
-			code: "HS422",
-		});
-		expect(planChange(s, { groupId: G, type: "addPerson", displayName: "x".repeat(61) }, ctx())).toMatchObject({
-			code: "HS422",
-		});
-	});
-
-	test("addExpense works out the amount and shares from the items", () => {
-		const plan = planChange(
-			state("guest"),
-			{ groupId: G, type: "addExpense", draft: draft({ description: " Dinner " }) },
-			ctx()
-		);
-		const its = items("o", ["o", "mem", "g"]);
-		expect(plan).toEqual({
-			ok: true,
-			createdId: "id1",
+			createdId: "id-1",
 			mutations: [
 				{
-					id: "id2",
-					at: NOW,
+					id: "id-2",
+					at,
 					type: "entry.create",
 					groupId: G,
-					entryId: "id1",
+					entryId: "id-1",
 					description: "Dinner",
-					amountCents: 1000,
-					entryDate: "2026-11-04",
-					notes: null,
-					items: its,
-					shares: computeShares(its),
+					amountCents: 3000,
+					entryDate: "2026-11-07",
+					notes: "Ramen",
+					category: null,
+					items: draft().items,
+					shares: DINNER_SHARES,
 				},
 			],
 		});
 	});
 
-	test("a bad bill is HS422 with the first problem", () => {
-		const s = state("owner");
-		for (const bad of [
-			draft({ description: "" }),
-			draft({ items: [] }),
-			draft({ items: items("o", []) }),
-			draft({ items: items("stranger", ["o"]) }),
-			draft({ entryDate: "2026-02-30" }),
-			draft({ items: items("o", ["o"], 0) }),
-		]) {
-			expect(planChange(s, { groupId: G, type: "addExpense", draft: bad }, ctx())).toMatchObject({
-				ok: false,
-				code: "HS422",
-			});
-		}
+	test("addExpense: a blank note is no note", () => {
+		const result = plan(state("alex"), { type: "addExpense", draft: draft({ notes: "  " }) });
+		expect(result.ok && result.mutations[0]).toMatchObject({ notes: null });
 	});
 
-	test("editExpense starts from the entry's version", () => {
-		expect(
-			planChange(state("member"), { groupId: G, type: "editExpense", entryId: "b-o", draft: draft() }, ctx())
-		).toMatchObject({
+	test("editExpense carries the entry's rowVersion as baseVersion", () => {
+		expect(plan(state("sam"), { type: "editExpense", entryId: "bill-alex", draft: draft() })).toEqual({
 			ok: true,
-			mutations: [{ type: "entry.update", entryId: "b-o", baseVersion: 7, amountCents: 1000 }],
+			createdId: null,
+			mutations: [
+				{
+					id: "id-1",
+					at,
+					type: "entry.update",
+					groupId: G,
+					entryId: "bill-alex",
+					baseVersion: 4,
+					description: "Dinner",
+					amountCents: 3000,
+					entryDate: "2026-11-07",
+					notes: null,
+					category: null,
+					items: draft().items,
+					shares: DINNER_SHARES,
+				},
+			],
+		});
+	});
+
+	test("deleteEntry carries baseVersion; deleted or unknown bills need nothing", () => {
+		expect(plan(state("gus"), { type: "deleteEntry", entryId: "bill-gus" })).toEqual({
+			ok: true,
+			createdId: null,
+			mutations: [{ id: "id-1", at, type: "entry.delete", groupId: G, entryId: "bill-gus", baseVersion: 7 }],
+		});
+		const deleted = state("alex");
+		deleted.entries = deleted.entries.map((e) => (e.id === "bill-alex" ? { ...e, deletedAt: NOW } : e));
+		expect(plan(deleted, { type: "deleteEntry", entryId: "bill-alex" })).toEqual({
+			ok: true,
+			mutations: [],
+			createdId: null,
+		});
+		expect(plan(state("alex"), { type: "deleteEntry", entryId: "nope" })).toEqual({
+			ok: true,
+			mutations: [],
+			createdId: null,
+		});
+		expect(plan(state("alex"), { type: "editExpense", entryId: "nope", draft: draft() })).toEqual({
+			ok: true,
+			mutations: [],
+			createdId: null,
 		});
 	});
 
 	test("payments can't be edited or deleted", () => {
-		const s = state("owner", { entries: [pendingPayment("p", "o", "mem", "o")] });
-		expect(planChange(s, { groupId: G, type: "editExpense", entryId: "p", draft: draft() }, ctx())).toMatchObject({
+		const reason = "A payment can't be edited or deleted; record one the other way instead";
+		expect(plan(state("alex"), { type: "editExpense", entryId: "p-sam-alex", draft: draft() })).toEqual({
+			ok: false,
 			code: "HS422",
+			reason,
 		});
-		expect(planChange(s, { groupId: G, type: "deleteEntry", entryId: "p" }, ctx())).toMatchObject({ code: "HS422" });
+		expect(plan(state("alex"), { type: "deleteEntry", entryId: "p-sam-alex" })).toEqual({
+			ok: false,
+			code: "HS422",
+			reason,
+		});
 	});
 
-	test("deleteEntry, and deleting twice plans nothing", () => {
-		const s = state("owner");
-		expect(planChange(s, { groupId: G, type: "deleteEntry", entryId: "b-mem" }, ctx())).toMatchObject({
-			mutations: [{ type: "entry.delete", entryId: "b-mem", baseVersion: 7 }],
-		});
-		const deleted = state("owner", { entries: [bill("b-o", "o", { deletedAt: NOW })] });
-		expect(planChange(deleted, { groupId: G, type: "deleteEntry", entryId: "b-o" }, ctx())).toMatchObject({
-			ok: true,
-			mutations: [],
-		});
-		expect(planChange(s, { groupId: G, type: "deleteEntry", entryId: "nope" }, ctx())).toMatchObject({ code: "HS422" });
-	});
-
-	test("resolveConflict: the final bill or a delete; a resolved one is HS409 naming the resolver", () => {
-		const s = state("member");
+	test("resolveConflict sends the final bill or deleted", () => {
 		expect(
-			planChange(
-				s,
-				{ groupId: G, type: "resolveConflict", conflictId: "c", resolution: "took_proposed", final: "deleted" },
-				ctx()
-			)
-		).toMatchObject({
+			plan(state("sam"), { type: "resolveConflict", conflictId: "c1", resolution: "merged", final: draft() })
+		).toEqual({
+			ok: true,
+			createdId: null,
 			mutations: [
 				{
+					id: "id-1",
+					at,
 					type: "conflict.resolve",
-					conflictId: "c",
-					entryId: "b-o",
-					resolution: "took_proposed",
-					entry: { deleted: true },
-				},
-			],
-		});
-		expect(
-			planChange(
-				s,
-				{ groupId: G, type: "resolveConflict", conflictId: "c", resolution: "merged", final: draft() },
-				ctx()
-			)
-		).toMatchObject({
-			mutations: [{ entry: { description: "Dinner", amountCents: 1000, shares: computeShares(draft().items) } }],
-		});
-
-		const resolved = state("member", {
-			conflicts: [conflict({ resolvedAt: NOW, resolvedByMemberId: "o", resolution: "kept_current" })],
-		});
-		expect(
-			planChange(
-				resolved,
-				{ groupId: G, type: "resolveConflict", conflictId: "c", resolution: "merged", final: "deleted" },
-				ctx()
-			)
-		).toEqual({ ok: false, code: "HS409", reason: "Olive already resolved this" });
-	});
-
-	test("createInvite: the token, 14 days, and only for someone who hasn't joined", () => {
-		expect(planChange(state("member"), { groupId: G, type: "createInvite", claimMemberId: null }, ctx())).toEqual({
-			ok: true,
-			createdId: "id1",
-			mutations: [
-				{
-					id: "id2",
-					at: NOW,
-					type: "invite.create",
 					groupId: G,
-					inviteId: "id1",
-					token: "T".repeat(43),
-					claimMemberId: null,
-					expiresAt: "2026-11-18T18:00:00.000Z",
+					conflictId: "c1",
+					entryId: "bill-alex",
+					resolution: "merged",
+					entry: {
+						description: "Dinner",
+						amountCents: 3000,
+						entryDate: "2026-11-07",
+						notes: null,
+						category: null,
+						items: draft().items,
+						shares: DINNER_SHARES,
+					},
 				},
 			],
 		});
-		for (const claim of ["mem", "left", "nobody"]) {
-			expect(
-				planChange(state("owner"), { groupId: G, type: "createInvite", claimMemberId: claim }, ctx())
-			).toMatchObject({
-				code: "HS422",
-			});
-		}
+		expect(
+			plan(state("alex"), { type: "resolveConflict", conflictId: "c1", resolution: "took_proposed", final: "deleted" })
+		).toMatchObject({ mutations: [{ type: "conflict.resolve", entry: { deleted: true } }] });
 	});
 
-	test("revokeInvite: a member may revoke their own only; revoking twice plans nothing", () => {
-		expect(planChange(state("member"), { groupId: G, type: "revokeInvite", inviteId: "inv-mem" }, ctx())).toMatchObject(
-			{
-				mutations: [{ type: "invite.revoke", inviteId: "inv-mem" }],
-			}
-		);
-		expect(planChange(state("member"), { groupId: G, type: "revokeInvite", inviteId: "inv-o" }, ctx())).toMatchObject({
-			code: "HS403",
+	test("resolveConflict refusals", () => {
+		const resolved = state("alex", {
+			conflicts: [conflict({ resolvedAt: NOW, resolvedByMemberId: "sam", resolution: "kept_current" })],
 		});
-		const revoked = state("owner", { invites: [invite("inv-o", "u-o", { revokedAt: NOW })] });
-		expect(planChange(revoked, { groupId: G, type: "revokeInvite", inviteId: "inv-o" }, ctx())).toMatchObject({
-			ok: true,
-			mutations: [],
+		expect(
+			plan(resolved, { type: "resolveConflict", conflictId: "c1", resolution: "merged", final: "deleted" })
+		).toEqual({
+			ok: false,
+			code: "HS409",
+			reason: "Sam already resolved this",
 		});
+		expect(
+			plan(state("alex"), { type: "resolveConflict", conflictId: "c9", resolution: "merged", final: "deleted" })
+		).toEqual({
+			ok: false,
+			code: "HS422",
+			reason: "That conflict doesn't exist in this group",
+		});
+		expect(
+			plan(state("alex"), {
+				type: "resolveConflict",
+				conflictId: "c1",
+				resolution: "merged",
+				final: draft({ description: "" }),
+			})
+		).toEqual({ ok: false, code: "HS422", reason: "The description must be 1 to 120 characters" });
 	});
 });
 
-describe("planChange: handshakes", () => {
-	const record = (from: string, to: string, amountCents = 500): Intent => ({
-		groupId: G,
-		type: "recordPayment",
-		from,
-		to,
-		amountCents,
-		entryDate: "2026-11-04",
-		notes: null,
-	});
+describe("planChange: payments", () => {
+	const at = NOW;
+	const record = (from: string, to: string, extra: Partial<Extract<GroupIntent, { type: "recordPayment" }>> = {}) =>
+		({ type: "recordPayment", from, to, amountCents: 1000, entryDate: "2026-11-08", notes: null, ...extra }) as const;
+	const noPending = (as: Actor) => state(as, { entries: state(as).entries.filter((e) => e.kind !== "payment") });
 
-	test("the payer or the receiver can record", () => {
-		expect(planChange(state("member"), record("mem", "o"), ctx())).toEqual({
+	test("recordPayment", () => {
+		expect(plan(noPending("sam"), record("sam", "alex", { notes: "Thanks" }))).toEqual({
 			ok: true,
-			createdId: "id1",
+			createdId: "id-1",
 			mutations: [
 				{
-					id: "id2",
-					at: NOW,
+					id: "id-2",
+					at,
 					type: "payment.record",
 					groupId: G,
-					entryId: "id1",
-					fromMemberId: "mem",
-					toMemberId: "o",
-					amountCents: 500,
-					entryDate: "2026-11-04",
-					notes: null,
+					entryId: "id-1",
+					fromMemberId: "sam",
+					toMemberId: "alex",
+					amountCents: 1000,
+					entryDate: "2026-11-08",
+					notes: "Thanks",
 				},
 			],
 		});
-		expect(planChange(state("member"), record("o", "mem"), ctx())).toMatchObject({ ok: true });
 	});
 
-	test("between two name-only people a member can record and a guest can't", () => {
-		expect(planChange(state("member"), record("n1", "n2"), ctx())).toMatchObject({ ok: true });
-		expect(planChange(state("guest"), record("n1", "n2"), ctx())).toMatchObject({ ok: false, code: "HS403" });
-		// Someone who left can't answer either.
-		expect(planChange(state("member"), record("left", "n2"), ctx())).toMatchObject({ ok: true });
-		// But not for two people who can answer for themselves.
-		expect(planChange(state("owner"), record("mem", "g"), ctx())).toMatchObject({ ok: false, code: "HS422" });
+	test("one pending payment per pair, either way round (HS409)", () => {
+		const reason = "A payment between these two is already waiting for an answer";
+		// p-sam-alex is pending.
+		expect(plan(state("sam"), record("sam", "alex"))).toEqual({ ok: false, code: "HS409", reason });
+		expect(plan(state("alex"), record("alex", "sam"))).toEqual({ ok: false, code: "HS409", reason });
+		// Once it is answered, the pair can record again.
+		const answered = state("alex");
+		answered.entries = answered.entries.map((e) => (e.id === "p-sam-alex" ? { ...e, paymentStatus: "confirmed" } : e));
+		expect(plan(answered, record("alex", "sam"))).toMatchObject({ ok: true });
 	});
 
-	test("bad payments are HS422", () => {
-		const s = state("owner");
-		expect(planChange(s, record("o", "o"), ctx())).toMatchObject({ code: "HS422" });
-		expect(planChange(s, record("o", "nobody"), ctx())).toMatchObject({ code: "HS422" });
-		expect(planChange(s, record("o", "mem", 0), ctx())).toMatchObject({ code: "HS422" });
-		expect(planChange(s, record("o", "mem", 2.5), ctx())).toMatchObject({ code: "HS422" });
-		expect(planChange(s, { ...record("o", "mem"), entryDate: "soon" } as Intent, ctx())).toMatchObject({
+	test("recordPayment refusals, in the server's order", () => {
+		expect(plan(noPending("alex"), record("alex", "nobody"))).toEqual({
+			ok: false,
 			code: "HS422",
+			reason: "Both sides of a payment must be in this group",
+		});
+		expect(plan(noPending("alex"), record("alex", "alex"))).toEqual({
+			ok: false,
+			code: "HS422",
+			reason: "A payment is between two different people",
+		});
+		// A full member records for others only when neither side can answer.
+		expect(plan(noPending("alex"), record("jo", "sam"))).toEqual({
+			ok: false,
+			code: "HS422",
+			reason: "You can only record payments between two people who can't answer them themselves",
+		});
+		expect(plan(noPending("alex"), record("jo", "kim"))).toMatchObject({ ok: true });
+		expect(plan(noPending("alex"), record("alex", "jo", { amountCents: 0 }))).toEqual({
+			ok: false,
+			code: "HS422",
+			reason: "The amount must be a whole number of cents from 1 to 10^12",
+		});
+		expect(plan(noPending("alex"), record("alex", "jo", { amountCents: 10.5 }))).toMatchObject({ code: "HS422" });
+		expect(plan(noPending("alex"), record("alex", "jo", { entryDate: "8 Nov" }))).toEqual({
+			ok: false,
+			code: "HS422",
+			reason: "The date must be YYYY-MM-DD",
+		});
+		expect(plan(noPending("alex"), record("alex", "jo", { entryDate: "2026-02-30" }))).toEqual({
+			ok: false,
+			code: "HS422",
+			reason: "The date must be a real day",
+		});
+		expect(plan(noPending("alex"), record("alex", "jo", { notes: "x".repeat(1001) }))).toEqual({
+			ok: false,
+			code: "HS422",
+			reason: "Notes must be text of at most 1000 characters",
 		});
 	});
 
-	test("one pending payment per pair, either way round", () => {
-		const s = state("owner", { entries: [pendingPayment("p", "mem", "o", "mem")] });
-		expect(planChange(s, record("o", "mem"), ctx())).toMatchObject({ ok: false, code: "HS409" });
-		expect(planChange(s, record("mem", "o"), ctx())).toMatchObject({ ok: false, code: "HS409" });
-		expect(planChange(s, record("o", "n1"), ctx())).toMatchObject({ ok: true });
+	test("counts at once when the other side can't answer", () => {
+		const alex = state("alex");
+		expect(canAnswer(MEMBERS.find((m) => m.id === "sam"))).toBe(true);
+		expect(canAnswer(MEMBERS.find((m) => m.id === "jo"))).toBe(false); // no login
+		expect(canAnswer(MEMBERS.find((m) => m.id === "kim"))).toBe(false); // left
+		expect(paymentCountsAtOnce(alex, "alex", "sam")).toBe(false);
+		expect(paymentCountsAtOnce(alex, "sam", "alex")).toBe(false);
+		expect(paymentCountsAtOnce(alex, "alex", "jo")).toBe(true);
+		expect(paymentCountsAtOnce(alex, "kim", "alex")).toBe(true);
+		expect(paymentCountsAtOnce(alex, "jo", "nina")).toBe(true);
 	});
 
-	test("only the other side can confirm or decline", () => {
-		const s = state("owner", { entries: [pendingPayment("p", "mem", "o", "mem")] });
-		expect(planChange(s, { groupId: G, type: "confirmPayment", entryId: "p" }, ctx())).toMatchObject({
-			mutations: [{ type: "payment.confirm", entryId: "p" }],
-		});
-		expect(
-			planChange(s, { groupId: G, type: "declinePayment", entryId: "p", note: "  Not yet  " }, ctx())
-		).toMatchObject({
-			mutations: [{ type: "payment.decline", entryId: "p", note: "Not yet" }],
-		});
-		expect(planChange(s, { groupId: G, type: "declinePayment", entryId: "p", note: "  " }, ctx())).toMatchObject({
-			mutations: [{ note: null }],
-		});
-		expect(
-			planChange(s, { groupId: G, type: "declinePayment", entryId: "p", note: "x".repeat(201) }, ctx())
-		).toMatchObject({ code: "HS422" });
-
-		const starter = state("member", { entries: [pendingPayment("p", "mem", "o", "mem")] });
-		expect(planChange(starter, { groupId: G, type: "confirmPayment", entryId: "p" }, ctx())).toMatchObject({
-			code: "HS403",
-		});
-		const outsider = state("guest", { entries: [pendingPayment("p", "mem", "o", "mem")] });
-		expect(planChange(outsider, { groupId: G, type: "declinePayment", entryId: "p", note: null }, ctx())).toMatchObject(
-			{ code: "HS403" }
-		);
+	test("pendingPaymentBetween finds it either way round", () => {
+		const entries = state("alex").entries;
+		expect(pendingPaymentBetween(entries, "alex", "sam")?.id).toBe("p-sam-alex");
+		expect(pendingPaymentBetween(entries, "sam", "alex")?.id).toBe("p-sam-alex");
+		expect(pendingPaymentBetween(entries, "jo", "alex")).toBeUndefined();
 	});
 
-	test("only the starter can undo", () => {
-		const s = state("owner", { entries: [pendingPayment("p", "mem", "o", "mem")] });
-		expect(planChange(s, { groupId: G, type: "undoPayment", entryId: "p" }, ctx())).toMatchObject({
+	test("confirm, decline and undo", () => {
+		expect(plan(state("alex"), { type: "confirmPayment", entryId: "p-sam-alex" })).toEqual({
+			ok: true,
+			createdId: null,
+			mutations: [{ id: "id-1", at, type: "payment.confirm", groupId: G, entryId: "p-sam-alex" }],
+		});
+		expect(plan(state("alex"), { type: "declinePayment", entryId: "p-sam-alex", note: "Not yet" })).toEqual({
+			ok: true,
+			createdId: null,
+			mutations: [{ id: "id-1", at, type: "payment.decline", groupId: G, entryId: "p-sam-alex", note: "Not yet" }],
+		});
+		expect(plan(state("sam"), { type: "undoPayment", entryId: "p-sam-alex" })).toEqual({
+			ok: true,
+			createdId: null,
+			mutations: [{ id: "id-1", at, type: "payment.undo", groupId: G, entryId: "p-sam-alex" }],
+		});
+	});
+
+	test("answering is idempotent once the payment isn't pending", () => {
+		for (const status of ["confirmed", "declined", "undone"] as const) {
+			const answered = state("alex");
+			answered.entries = answered.entries.map((e) => (e.paymentStatus ? { ...e, paymentStatus: status } : e));
+			const none = { ok: true as const, mutations: [], createdId: null };
+			expect(plan(answered, { type: "confirmPayment", entryId: "p-sam-alex" })).toEqual(none);
+			expect(plan(answered, { type: "declinePayment", entryId: "p-sam-alex", note: null })).toEqual(none);
+			expect(plan(answered, { type: "undoPayment", entryId: "p-alex-gus" })).toEqual(none);
+		}
+		// A payment this device never got: accepted and nothing to do, as on the server.
+		expect(plan(state("alex"), { type: "confirmPayment", entryId: "nope" })).toEqual({
+			ok: true,
+			mutations: [],
+			createdId: null,
+		});
+	});
+
+	test("answer and undo refusals", () => {
+		// Alex recorded p-alex-gus, so it is Gus's to answer.
+		expect(plan(state("alex"), { type: "confirmPayment", entryId: "p-alex-gus" })).toEqual({
 			ok: false,
 			code: "HS403",
+			reason: "Only the other side of this payment can answer it",
 		});
-		const starter = state("member", { entries: [pendingPayment("p", "mem", "o", "mem")] });
-		expect(planChange(starter, { groupId: G, type: "undoPayment", entryId: "p" }, ctx())).toMatchObject({
-			mutations: [{ type: "payment.undo", entryId: "p" }],
+		// Sam isn't a side of p-alex-gus.
+		expect(plan(state("sam"), { type: "declinePayment", entryId: "p-alex-gus", note: null })).toMatchObject({
+			code: "HS403",
 		});
-	});
-
-	test("answering the same way twice plans nothing (a double tap)", () => {
-		const confirmed = {
-			...pendingPayment("p", "mem", "o", "mem"),
-			paymentStatus: "confirmed" as const,
-			updatedByMemberId: "o",
-		};
-		const declined = {
-			...pendingPayment("q", "mem", "o", "mem"),
-			paymentStatus: "declined" as const,
-			updatedByMemberId: "o",
-		};
-		const undone = {
-			...pendingPayment("r", "o", "mem", "o"),
-			paymentStatus: "undone" as const,
-			updatedByMemberId: "o",
-		};
-		const s = state("owner", { entries: [confirmed, declined, undone] });
-		const none = { ok: true as const, mutations: [], createdId: null };
-		expect(planChange(s, { groupId: G, type: "confirmPayment", entryId: "p" }, ctx())).toEqual(none);
-		expect(planChange(s, { groupId: G, type: "declinePayment", entryId: "q", note: null }, ctx())).toEqual(none);
-		expect(planChange(s, { groupId: G, type: "undoPayment", entryId: "r" }, ctx())).toEqual(none);
-	});
-
-	test("answering a payment someone else already answered is HS409", () => {
-		const undone = { ...pendingPayment("p", "mem", "o", "mem"), paymentStatus: "undone" as const };
-		const s = state("owner", { entries: [undone] });
-		expect(planChange(s, { groupId: G, type: "confirmPayment", entryId: "p" }, ctx())).toEqual({
+		expect(plan(state("alex"), { type: "undoPayment", entryId: "p-sam-alex" })).toEqual({
 			ok: false,
-			code: "HS409",
-			reason: "Max undid this payment",
+			code: "HS403",
+			reason: "Only whoever recorded this payment can undo it",
 		});
-		const confirmed = {
-			...pendingPayment("p", "o", "mem", "o"),
-			paymentStatus: "confirmed" as const,
-			updatedByMemberId: "mem",
-		};
-		expect(
-			planChange(state("owner", { entries: [confirmed] }), { groupId: G, type: "undoPayment", entryId: "p" }, ctx())
-		).toMatchObject({
-			code: "HS409",
-		});
-	});
-
-	test("a bill isn't a payment, and an unknown entry isn't in the group", () => {
-		const s = state("owner");
-		expect(planChange(s, { groupId: G, type: "confirmPayment", entryId: "b-mem" }, ctx())).toMatchObject({
+		expect(plan(state("alex"), { type: "confirmPayment", entryId: "bill-sam" })).toEqual({
+			ok: false,
 			code: "HS422",
+			reason: "That is a bill, not a payment",
 		});
-		expect(planChange(s, { groupId: G, type: "confirmPayment", entryId: "nope" }, ctx())).toMatchObject({
+		expect(plan(state("alex"), { type: "declinePayment", entryId: "p-sam-alex", note: "x".repeat(201) })).toEqual({
+			ok: false,
 			code: "HS422",
+			reason: "A note must be text of at most 200 characters",
 		});
 	});
 });
 
-describe("planChange is pure", () => {
-	test("the same inputs give the same plan", () => {
-		const s = state("owner");
-		const intent: Intent = { groupId: G, type: "addExpense", draft: draft() };
-		const before = structuredClone(s);
-		expect(planChange(s, intent, ctx())).toEqual(planChange(s, intent, ctx()));
-		expect(s).toEqual(before);
+describe("planChange: text and dates as Postgres reads them", () => {
+	const emoji = (n: number) => "\u{1F600}".repeat(n); // 2 UTF-16 units, 1 code point each
+	const noPending = () => state("alex", { entries: state("alex").entries.filter((e) => e.kind !== "payment") });
+	const record = (extra: object) =>
+		({
+			type: "recordPayment",
+			from: "alex",
+			to: "jo",
+			amountCents: 100,
+			entryDate: "2026-11-08",
+			notes: null,
+			...extra,
+		}) as const;
+	const decline = (note: string | null) => plan(state("alex"), { type: "declinePayment", entryId: "p-sam-alex", note });
+
+	test("lengths count code points", () => {
+		expect(plan(noPending(), record({ notes: emoji(1000) }))).toMatchObject({ ok: true });
+		expect(plan(noPending(), record({ notes: emoji(1001) }))).toMatchObject({ code: "HS422" });
+		expect(decline(emoji(200))).toMatchObject({ ok: true });
+		expect(decline(emoji(201))).toMatchObject({ code: "HS422" });
+		expect(
+			plan(state("alex"), { type: "addExpense", draft: draft({ description: emoji(120), notes: emoji(1000) }) })
+		).toMatchObject({
+			ok: true,
+		});
+		expect(plan(state("alex"), { type: "renameGroup", name: emoji(80) })).toMatchObject({ ok: true });
+	});
+
+	test("years 0001 to 0099 are real days; year 0 is not", () => {
+		expect(plan(noPending(), record({ entryDate: "0050-01-01" }))).toMatchObject({ ok: true });
+		expect(plan(noPending(), record({ entryDate: "0000-01-01" }))).toEqual({
+			ok: false,
+			code: "HS422",
+			reason: "The date must be a real day",
+		});
+		expect(plan(state("alex"), { type: "addExpense", draft: draft({ entryDate: "0050-01-01" }) })).toMatchObject({
+			ok: true,
+		});
+	});
+
+	test("a decline note is sent as SQL stores it: spaces trimmed, blank is none", () => {
+		const note = (n: string | null) => {
+			const result = decline(n);
+			return result.ok ? (result.mutations[0] as { note: string | null }).note : "refused";
+		};
+		expect(note("  Not yet  ")).toBe("Not yet");
+		expect(note("   ")).toBeNull();
+		expect(note(null)).toBeNull();
+		// btrim strips spaces only.
+		expect(note("\tcash\n")).toBe("\tcash\n");
+	});
+
+	test("createGroup refuses a blank display name", () => {
+		expect(plan(null, { type: "createGroup", name: "Trip", displayName: "  " })).toEqual({
+			ok: false,
+			code: "HS422",
+			reason: "A name must be 1 to 60 characters",
+		});
+	});
+});
+
+describe("planChange: bill validation", () => {
+	const add = (d: Partial<ExpenseDraft>) => plan(state("alex"), { type: "addExpense", draft: draft(d) });
+
+	test("each problem is HS422 with the server's reason", () => {
+		expect(add({ description: " " })).toEqual({
+			ok: false,
+			code: "HS422",
+			reason: "The description must be 1 to 120 characters",
+		});
+		expect(add({ items: [] })).toMatchObject({ code: "HS422" });
+		expect(add({ items: [{ id: "i1", amountCents: 1000, paidBy: "alex", splitAmong: [] }] })).toEqual({
+			ok: false,
+			code: "HS422",
+			reason: "Each item needs someone to split it",
+		});
+		expect(add({ items: [{ id: "i1", amountCents: 1000, paidBy: "alex", splitAmong: ["sam", "sam"] }] })).toEqual({
+			ok: false,
+			code: "HS422",
+			reason: "Someone appears twice in an item's split",
+		});
+		expect(add({ items: [{ id: "i1", amountCents: 1000, paidBy: "alex", splitAmong: ["stranger"] }] })).toEqual({
+			ok: false,
+			code: "HS422",
+			reason: "Everyone in a bill must be in this group",
+		});
+		expect(add({ entryDate: "2026-13-01" })).toEqual({
+			ok: false,
+			code: "HS422",
+			reason: "The date must be a real day",
+		});
+	});
+
+	test("people who left still count as in the group", () => {
+		expect(add({ items: [{ id: "i1", amountCents: 1000, paidBy: "kim", splitAmong: ["kim", "alex"] }] })).toMatchObject(
+			{
+				ok: true,
+			}
+		);
+	});
+});
+
+describe("planChange: categories and group notes", () => {
+	const emoji = (n: number) => "\u{1F600}".repeat(n);
+
+	test("createGroup carries the note as SQL stores it", () => {
+		const create = (note: string | null | undefined) =>
+			plan(null, { type: "createGroup", name: "Japan", displayName: "Alex", note });
+		expect(create("  Tokyo and Kyoto, April ")).toMatchObject({
+			ok: true,
+			mutations: [{ type: "group.create", note: "Tokyo and Kyoto, April" }],
+		});
+		expect(create("   ")).toMatchObject({ mutations: [{ note: null }] });
+		expect(create(undefined)).toMatchObject({ mutations: [{ note: null }] });
+		expect(create(emoji(120))).toMatchObject({ ok: true });
+		expect(create(` ${emoji(121)} `)).toEqual({
+			ok: false,
+			code: "HS422",
+			reason: "A group note must be at most 120 characters",
+		});
+	});
+
+	test("createGroup checks the note before the names, as the server does", () => {
+		expect(plan(null, { type: "createGroup", name: "", displayName: "Alex", note: "x".repeat(121) })).toMatchObject({
+			reason: "A group note must be at most 120 characters",
+		});
+	});
+
+	test("describeGroup sets or clears the note", () => {
+		expect(plan(state("alex"), { type: "describeGroup", note: " Osaka too " })).toEqual({
+			ok: true,
+			createdId: null,
+			mutations: [{ id: "id-1", at: NOW, type: "group.describe", groupId: G, note: "Osaka too" }],
+		});
+		expect(plan(state("alex"), { type: "describeGroup", note: "  " })).toMatchObject({ mutations: [{ note: null }] });
+		expect(plan(state("alex"), { type: "describeGroup", note: null })).toMatchObject({ mutations: [{ note: null }] });
+		expect(plan(state("alex"), { type: "describeGroup", note: "x".repeat(121) })).toMatchObject({ code: "HS422" });
+	});
+
+	test("describeGroup is the owner's, and not in a completed group", () => {
+		expect(plan(state("sam"), { type: "describeGroup", note: "Mine" })).toEqual({
+			ok: false,
+			code: "HS403",
+			reason: "Only the group's owner can do this",
+		});
+		const completed = state("alex", { group: serverGroup({ id: G, completedAt: NOW, completedByMemberId: "alex" }) });
+		expect(plan(completed, { type: "describeGroup", note: "Done" })).toEqual({
+			ok: false,
+			code: "HS403",
+			reason: "This group is completed",
+		});
+	});
+
+	test("bills carry their category through create, edit and resolve", () => {
+		const food = draft({ category: "food" });
+		expect(plan(state("alex"), { type: "addExpense", draft: food })).toMatchObject({
+			mutations: [{ type: "entry.create", category: "food" }],
+		});
+		expect(plan(state("alex"), { type: "editExpense", entryId: "bill-alex", draft: food })).toMatchObject({
+			mutations: [{ type: "entry.update", category: "food" }],
+		});
+		expect(
+			plan(state("alex"), { type: "resolveConflict", conflictId: "c1", resolution: "merged", final: food })
+		).toMatchObject({ mutations: [{ type: "conflict.resolve", entry: { category: "food" } }] });
+		expect(plan(state("alex"), { type: "addExpense", draft: draft() })).toMatchObject({
+			mutations: [{ category: null }],
+		});
+		const { category: _, ...noCategory } = draft();
+		expect(plan(state("alex"), { type: "addExpense", draft: noCategory as ExpenseDraft })).toMatchObject({
+			mutations: [{ category: null }],
+		});
+	});
+
+	test("an unknown category is HS422, after the bill's own checks", () => {
+		const bad = draft({ category: "bar" as never });
+		expect(plan(state("alex"), { type: "addExpense", draft: bad })).toEqual({
+			ok: false,
+			code: "HS422",
+			reason: "The category must be food, drinks, stay, travel, groceries or fun",
+		});
+		expect(plan(state("alex"), { type: "addExpense", draft: { ...bad, description: " " } })).toMatchObject({
+			reason: "The description must be 1 to 120 characters",
+		});
+	});
+});
+
+describe("nudge", () => {
+	// Alex paid 3000 for Alex, Sam and Jo: Sam and Jo owe Alex 1000 each. Gus paid 900 for Gus, Sam and Kim:
+	// Sam and Kim owe Gus 300 each.
+	const debts: EntryRow[] = [
+		serverBill({
+			id: "dinner",
+			groupId: G,
+			createdByMemberId: "alex",
+			amountCents: 3000,
+			items: [{ id: "i1", amountCents: 3000, paidBy: "alex", splitAmong: ["alex", "sam", "jo"] }],
+			shares: [
+				{ memberId: "alex", paidCents: 3000, owedCents: 1000, owedTo: { alex: 1000 } },
+				{ memberId: "sam", paidCents: 0, owedCents: 1000, owedTo: { alex: 1000 } },
+				{ memberId: "jo", paidCents: 0, owedCents: 1000, owedTo: { alex: 1000 } },
+			],
+		}),
+		serverBill({
+			id: "taxi",
+			groupId: G,
+			createdByMemberId: "gus",
+			amountCents: 900,
+			items: [{ id: "i1", amountCents: 900, paidBy: "gus", splitAmong: ["gus", "sam", "kim"] }],
+			shares: [
+				{ memberId: "gus", paidCents: 900, owedCents: 300, owedTo: { gus: 300 } },
+				{ memberId: "sam", paidCents: 0, owedCents: 300, owedTo: { gus: 300 } },
+				{ memberId: "kim", paidCents: 0, owedCents: 300, owedTo: { gus: 300 } },
+			],
+		}),
+	];
+	const owing = (as: "alex" | "sam" | "gus", overrides: Partial<GroupState> = {}) =>
+		state(as, { entries: [...state(as).entries, ...debts], ...overrides });
+	const sent = (from: string, to: string, createdAt: string): NudgeRow => ({
+		id: `n-${from}-${to}-${createdAt}`,
+		groupId: G,
+		fromMemberId: from,
+		toMemberId: to,
+		amountCents: 1000,
+		createdAt,
+		rowVersion: 2,
+	});
+	const HOURS_AGO = (h: number) => new Date(Date.parse(NOW) - h * 60 * 60 * 1000).toISOString();
+
+	test("the owner nudges someone who owes them, for what they owe now", () => {
+		expect(plan(owing("alex"), { type: "nudge", memberId: "sam" })).toEqual({
+			ok: true,
+			mutations: [
+				{ id: "id-2", at: NOW, type: "nudge.send", groupId: G, nudgeId: "id-1", toMemberId: "sam", amountCents: 1000 },
+			],
+			createdId: "id-1",
+		});
+	});
+
+	test("the amount is net of what they owe each other", () => {
+		const back = serverBill({
+			id: "lunch",
+			groupId: G,
+			createdByMemberId: "sam",
+			amountCents: 800,
+			items: [{ id: "i1", amountCents: 800, paidBy: "sam", splitAmong: ["sam", "alex"] }],
+			shares: [
+				{ memberId: "sam", paidCents: 800, owedCents: 400, owedTo: { sam: 400 } },
+				{ memberId: "alex", paidCents: 0, owedCents: 400, owedTo: { sam: 400 } },
+			],
+		});
+		expect(plan(owing("alex", { entries: [...debts, back] }), { type: "nudge", memberId: "sam" })).toMatchObject({
+			ok: true,
+			mutations: [{ amountCents: 600 }],
+		});
+	});
+
+	test("a member and a guest may nudge too", () => {
+		expect(plan(owing("gus"), { type: "nudge", memberId: "sam" })).toMatchObject({
+			ok: true,
+			mutations: [{ toMemberId: "sam", amountCents: 300 }],
+		});
+		const samOwed = serverBill({
+			id: "hotel",
+			groupId: G,
+			createdByMemberId: "sam",
+			amountCents: 200,
+			items: [{ id: "i1", amountCents: 200, paidBy: "sam", splitAmong: ["gus"] }],
+			shares: [
+				{ memberId: "sam", paidCents: 200, owedCents: 0, owedTo: {} },
+				{ memberId: "gus", paidCents: 0, owedCents: 200, owedTo: { sam: 200 } },
+			],
+		});
+		expect(plan(state("sam", { entries: [samOwed] }), { type: "nudge", memberId: "gus" })).toMatchObject({
+			ok: true,
+			mutations: [{ amountCents: 200 }],
+		});
+	});
+
+	test("refusals, in the server's order", () => {
+		const refusal = (s: GroupState | null, memberId: string) => plan(s, { type: "nudge", memberId });
+		expect(refusal(null, "sam")).toEqual({ ok: false, code: "HS403", reason: "You are not a member of this group" });
+		expect(refusal(owing("alex", { group: serverGroup({ id: G, completedAt: NOW }) }), "sam")).toEqual({
+			ok: false,
+			code: "HS403",
+			reason: "This group is completed",
+		});
+		expect(refusal(owing("alex"), "nobody")).toEqual({
+			ok: false,
+			code: "HS422",
+			reason: "That person is not in this group",
+		});
+		expect(refusal(owing("alex"), "alex")).toEqual({ ok: false, code: "HS422", reason: "You can't nudge yourself" });
+		expect(refusal(owing("gus"), "kim")).toEqual({ ok: false, code: "HS422", reason: "Kim left the group" });
+		expect(refusal(owing("alex"), "jo")).toEqual({ ok: false, code: "HS422", reason: "Jo hasn't joined" });
+		expect(refusal(owing("sam"), "alex")).toEqual({
+			ok: false,
+			code: "HS422",
+			reason: "Alex doesn't owe you anything",
+		});
+		expect(refusal(owing("alex"), "gus")).toEqual({
+			ok: false,
+			code: "HS422",
+			reason: "Gus doesn't owe you anything",
+		});
+	});
+
+	test("pending payments don't count toward the debt; confirmed ones do", () => {
+		const paidBack = payment("paid", "sam", "alex", { amountCents: 1000, paymentStatus: "confirmed" });
+		paidBack.shares = [
+			{ memberId: "alex", paidCents: 0, owedCents: 1000, owedTo: { sam: 1000 } },
+			{ memberId: "sam", paidCents: 1000, owedCents: 0, owedTo: {} },
+		];
+		expect(plan(owing("alex", { entries: [...debts, paidBack] }), { type: "nudge", memberId: "sam" })).toMatchObject({
+			ok: false,
+			reason: "Sam doesn't owe you anything",
+		});
+		const waiting = { ...paidBack, paymentStatus: "pending" as const };
+		expect(plan(owing("alex", { entries: [...debts, waiting] }), { type: "nudge", memberId: "sam" })).toMatchObject({
+			ok: true,
+		});
+	});
+
+	test("once per 24 hours per person: HS409 within a day of this device's last nudge", () => {
+		const nudge = (nudges: NudgeRow[]) => plan(owing("alex", { nudges }), { type: "nudge", memberId: "sam" });
+		expect(nudge([sent("alex", "sam", HOURS_AGO(23))])).toEqual({
+			ok: false,
+			code: "HS409",
+			reason: "You nudged Sam today",
+		});
+		expect(nudge([sent("alex", "sam", HOURS_AGO(25))])).toMatchObject({ ok: true });
+		expect(nudge([sent("gus", "sam", HOURS_AGO(1)), sent("alex", "jo", HOURS_AGO(1))])).toMatchObject({ ok: true });
+		expect(nudge([])).toMatchObject({ ok: true });
+	});
+});
+
+describe("group codes and unique names", () => {
+	test("resetGroupCode queues group.recode for the owner", () => {
+		expect(plan(state("alex"), { type: "resetGroupCode" })).toEqual({
+			ok: true,
+			createdId: null,
+			mutations: [{ id: "id-1", at: NOW, type: "group.recode", groupId: G }],
+		});
+		expect(plan(state("sam"), { type: "resetGroupCode" })).toEqual({
+			ok: false,
+			code: "HS403",
+			reason: "Only the group's owner can do this",
+		});
+	});
+
+	test("isNameTaken compares active people's names ignoring case and outer spaces", () => {
+		expect(isNameTaken(MEMBERS, " jo ")).toBe(true);
+		expect(isNameTaken(MEMBERS, "KIM")).toBe(false);
+		expect(isNameTaken(MEMBERS, "Jo", "jo")).toBe(false);
+		expect(isNameTaken(MEMBERS, "Lee")).toBe(false);
+	});
+
+	test("addPerson refuses a name already in the group (HS409), not one of someone who left", () => {
+		expect(plan(state("alex"), { type: "addPerson", displayName: " NINA " })).toEqual({
+			ok: false,
+			code: "HS409",
+			reason: "NINA is already in this group",
+		});
+		expect(plan(state("alex"), { type: "addPerson", displayName: "kim" })).toMatchObject({ ok: true });
+	});
+
+	test("renamePerson refuses another person's name but allows a change of case", () => {
+		expect(plan(state("alex"), { type: "renamePerson", memberId: "jo", displayName: "sam" })).toEqual({
+			ok: false,
+			code: "HS409",
+			reason: "sam is already in this group",
+		});
+		expect(plan(state("alex"), { type: "renamePerson", memberId: "jo", displayName: "JO" })).toMatchObject({
+			ok: true,
+		});
+	});
+
+	test("an old duplicate may keep its name", () => {
+		const twins = [...MEMBERS, member("jo2", { userId: null, displayName: "Jo", role: "member", joinedAt: null })];
+		expect(
+			plan(state("alex", { members: twins }), { type: "renamePerson", memberId: "jo2", displayName: "jo " })
+		).toMatchObject({ ok: true });
 	});
 });

@@ -1,0 +1,24 @@
+{
+  "hook": {
+    "enabled": true,
+    "limits": {
+      "maxFindings": 5,
+      "maxChars": 8000
+    }
+  },
+  "detector": {
+    "ignoreRules": [],
+    "ignoreFiles": [],
+    "ignoreValues": [
+      {
+        "rule": "bounce-easing",
+        "value": "*",
+        "files": [
+          "src/components/group/entry-list-row.tsx"
+        ],
+        "createdAt": "2026-11-11T05:20:06.895Z",
+        "reason": "Agent: owner asked for organic, non-robotic motion; one soft spring overshoot (~1px on a 12px drop) as a new bill lands"
+      }
+    ]
+  }
+}

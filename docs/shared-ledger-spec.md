@@ -308,37 +308,68 @@ the group. Two account rules sit outside the matrix: guests can't create groups 
 - **Later:** a "Make owner" handover, so an owner who is away can pass the job on (a new mutation, no
   schema change).
 
-### 9. Name-only people, invite links and guests
+### 9. Name-only people, the group code and guests
+
+Decided 2026-11-10 (replaces invite links).
 
 - **Chosen Solution:**
-  - The owner or any member adds name-only people, so bills can include them at once.
-  - An invite link is valid for **14 days**, can be used many times, and can be revoked. It can be tied
-    to a name-only person ("Invite Jo"), so whoever opens it becomes Jo. The owner and members make
-    invites; members revoke the ones they made, and the owner revokes any.
-  - Opening the link shows the group and two choices: **Create an account** (6-digit email code; joins
-    as a member) or **Continue as guest** (joins as a guest, no email).
+  - The owner or any member adds name-only people, so bills can include them at once. Names are unique in
+    a group, ignoring case and outer spaces, among the people still in it; the server checks every new or
+    changed name (adding, renaming, joining as someone new) and refuses with "<name> is already in this
+    group". Names that were duplicated before stay as they are.
+  - **One join code per group** replaces invite links: 6 characters from an alphabet without lookalikes
+    (`ABCDEFGHJKMNPQRSTUVWXYZ23456789`), shown as `HX7-K2P`, with the link `/join/HX7K2P`. Typed codes ignore
+    case and the dash. The server makes it (unique across groups), so a group created offline has none
+    until it syncs. It never expires; the owner can reset it, and the old one stops working at once. Owners
+    and members can see it. While a group is completed its code lets no one join; it works again after
+    reopening.
+  - Opening the link or typing the code shows the group and its owner, then three ways in: pick an
+    unclaimed name (a name-only person: no login, not removed), join as someone new under a name no one in
+    the group has, or **I'm already in this group**. A name someone has joined belongs to them.
+  - Joining asks **Create an account** (6-digit email code; joins as a member) or **Continue as guest**
+    (joins as a guest, no email).
   - Guests use **Supabase anonymous sign-in** (`signInAnonymously()`). An anonymous user is a real
     `auth.users` row with the `authenticated` role and an `is_anonymous` claim in its token, so sync,
     RLS and `push_changes()` work unchanged; the guest role limits what they can do.
+  - **Personal codes.** A guest gets a personal code when they join (as someone new or by claiming a
+    name): 8 characters from the same alphabet, shown in two halves (`7KQM-2DXH`), unique across all
+    groups and never equal to a group code, made by the server (since 013, 2026-11-11; the first 6-character
+    codes were replaced). Only the
+    group's owner and that guest can see it, never other members. There are no resets, lock or rate limit;
+    the length is the protection. Members with an email have none.
+  - **I'm already in this group:** a guest on a new device, or one who lost their session, opens the link
+    or code, picks their name and enters their personal code. Their member row moves to the login they are
+    using now (a guest login, or one with an email), and the old login loses the group on its next pull,
+    where the device says "<name> is now signed in on another device". A name that belongs to a member
+    with an email can't be taken this way: "Sign in with your email to get back in".
+  - **The personal code alone** (decided 2026-11-11) does the same without the group code: typed in the
+    same box as a group code or opened as `/join/<personal code>`, it shows "Welcome back, <name>" and the
+    group, then goes straight in under that name (signed out: **Continue as guest** first). The length tells
+    the two kinds apart (6: group, 8: personal). A code whose guest has left or added an email, or whose
+    group is deleted or completed, "doesn't work".
   - A guest keeps their data by adding an email later ("Keep my data"): `updateUser({ email })`, then
     the 6-digit code. The user id stays the same, so their member rows and history stay theirs. An online
-    function `upgrade_guest()` then turns their `guest` rows into `member`.
+    function `upgrade_guest()` then turns their `guest` rows into `member`, and their personal codes are
+    deleted: email is their way back.
   - Anonymous users can't create groups (`group.create` checks `is_anonymous`).
-  - The token is 32 random bytes in base64url, made on the device. The server stores only its SHA-256
-    (`token_hash`). The creator's device keeps the token so it can share the link again.
-  - Creating a link works offline (it is a mutation). Share is enabled once the invite has synced.
   - Joining needs a connection and uses two functions instead of mutations, because someone who is not
-    yet a member cannot push or pull for the group: `preview_invite(token)` and
-    `join_group(token, claim_member_id, display_name)`. `preview_invite` also works signed out, so the
-    join screen can show the group before the person picks account or guest.
-- **Why multi-use:** a friend group shares one link in its group chat.
+    yet a member cannot push or pull for the group: `preview_group(code)` (works signed out, so the screen
+    can show the group before the person picks account or guest) and
+    `join_with_code(code, claim_member_id, display_name, personal_code)`; for any code, `preview_code(code)`
+    (also signed out: a group, or the guest a personal code belongs to) and `return_with_code(code)`. Resetting the code is a mutation
+    (`group.recode`), so it queues offline; the new code arrives with the next pull.
+- **Why one code:** a friend group shares one link in its group chat, and a short code can be read out or
+  typed from another phone. Nothing to create, expire or revoke per person.
+- **Why personal codes:** an anonymous login lives on one device; without a way back, a guest who changes
+  phones loses their place and their history.
 - **Why anonymous sign-in:** guests get the same offline sync as everyone else, with no second auth
   system, and upgrading keeps the same user.
 - **Setup:** `supabase/config.toml` sets `enable_anonymous_sign_ins = true` and
   `enable_manual_linking = true` (needed to add an email to an anonymous user). Production also needs
   CAPTCHA (Cloudflare Turnstile) on anonymous sign-ins; the default limit is 30 per hour per IP.
-- **Alternatives considered:** guests without any sign-in (a link that acts as a password; would need a
-  second permission path through every function); one link per person (more tapping).
+- **Alternatives considered:** invite links (built in 007: 14-day, revocable links, one per person if
+  wanted; more to manage than a group chat needs, and no way back for a guest); guests without any sign-in
+  (a code that acts as a password; would need a second permission path through every function).
 
 ### 10. Settle up is a progress view
 
@@ -387,12 +418,15 @@ the group. Two account rules sit outside the matrix: guests can't create groups 
   guests on a timer (not what the owner asked for); deleting the guest's shares too (balances would
   stop adding up).
 
-### 12. Join links
+### 12. Join links and codes
 
-- **Chosen Solution:** a `/join/:token` route. Someone signed out picks account or guest first and lands
-  back on the join screen (the URL is kept). The native apps need universal links and App Links, which
-  need a domain and store setup; until then, the Groups page has a "Have an invite link?" box to paste
-  it into.
+Decided 2026-11-10.
+
+- **Chosen Solution:** a `/join/:code` route (`/join/HX7K2P`, or a personal code, `/join/7KQM2DXH`).
+  Someone signed out picks account or guest first and lands back on the join screen (the URL is kept). The
+  native apps need universal links and App Links, which need a domain and store setup; until then, the
+  Groups page and the signed-out Welcome have a "Have a code?" box that takes either kind of code (any case,
+  with or without the dash) or a pasted link (decided 2026-11-11: one box for both kinds).
 
 ### 13. Dollars only
 
@@ -526,7 +560,9 @@ the group. Two account rules sit outside the matrix: guests can't create groups 
 
 ### Server
 
-`groups` gains `completed_at TIMESTAMPTZ NULL` and `completed_by_member_id UUID NULL → group_members`.
+`groups` gains `completed_at TIMESTAMPTZ NULL` and `completed_by_member_id UUID NULL → group_members`, and
+(010) `note TEXT NULL`: the optional second line on the group's cover ("Tokyo and Kyoto, April"), written by
+the owner, trimmed, 1–120 characters; blank is stored as NULL.
 
 `group_members` changes:
 
@@ -535,28 +571,29 @@ the group. Two account rules sit outside the matrix: guests can't create groups 
 
 `ledger_entries`
 
-| Column                  | Type                 | Notes                                                       |
-| ----------------------- | -------------------- | ----------------------------------------------------------- |
-| `id`                    | UUID PK              | Made on the device                                          |
-| `group_id`              | UUID → groups        |                                                             |
-| `kind`                  | TEXT                 | `expense` or `payment`                                      |
-| `description`           | TEXT                 | 1–120 characters; payments default to "Payment"             |
-| `amount_cents`          | BIGINT               | > 0 and ≤ 10¹²; the bill total                              |
-| `items`                 | JSONB NULL           | Expenses only; see below                                    |
-| `entry_date`            | DATE                 | The day it happened, chosen by the person                   |
-| `notes`                 | TEXT NULL            | ≤ 1000 characters                                           |
-| `payment_status`        | TEXT NULL            | Payments only: `pending`, `confirmed`, `declined`, `undone` |
-| `payer_confirmed_at`    | TIMESTAMPTZ NULL     | Payments: when the payer's side agreed                      |
-| `receiver_confirmed_at` | TIMESTAMPTZ NULL     | Payments: when the receiver's side agreed                   |
-| `confirmed_at`          | TIMESTAMPTZ NULL     | Payments: when it started to count                          |
-| `closed_at`             | TIMESTAMPTZ NULL     | Payments: when it was declined or undone                    |
-| `close_note`            | TEXT NULL            | The decline note, ≤ 200 characters                          |
-| `created_by_member_id`  | UUID → group_members | Member ids, so history survives a guest being deleted       |
-| `updated_by_member_id`  | UUID → group_members | Used by the conflict rule (decision 6)                      |
-| `created_at`            | TIMESTAMPTZ          | Server time                                                 |
-| `updated_at`            | TIMESTAMPTZ          | Server time                                                 |
-| `deleted_at`            | TIMESTAMPTZ NULL     |                                                             |
-| `row_version`           | BIGINT               | From `private.next_group_version()`                         |
+| Column                  | Type                 | Notes                                                                                                               |
+| ----------------------- | -------------------- | ------------------------------------------------------------------------------------------------------------------- |
+| `id`                    | UUID PK              | Made on the device                                                                                                  |
+| `group_id`              | UUID → groups        |                                                                                                                     |
+| `kind`                  | TEXT                 | `expense` or `payment`                                                                                              |
+| `description`           | TEXT                 | 1–120 characters; payments default to "Payment"                                                                     |
+| `amount_cents`          | BIGINT               | > 0 and ≤ 10¹²; the bill total                                                                                      |
+| `items`                 | JSONB NULL           | Expenses only; see below                                                                                            |
+| `entry_date`            | DATE                 | The day it happened, chosen by the person                                                                           |
+| `notes`                 | TEXT NULL            | ≤ 1000 characters                                                                                                   |
+| `category`              | TEXT NULL            | Bills only (010): `food`, `drinks`, `stay`, `travel`, `groceries`, `fun`, or NULL for none; always NULL on payments |
+| `payment_status`        | TEXT NULL            | Payments only: `pending`, `confirmed`, `declined`, `undone`                                                         |
+| `payer_confirmed_at`    | TIMESTAMPTZ NULL     | Payments: when the payer's side agreed                                                                              |
+| `receiver_confirmed_at` | TIMESTAMPTZ NULL     | Payments: when the receiver's side agreed                                                                           |
+| `confirmed_at`          | TIMESTAMPTZ NULL     | Payments: when it started to count                                                                                  |
+| `closed_at`             | TIMESTAMPTZ NULL     | Payments: when it was declined or undone                                                                            |
+| `close_note`            | TEXT NULL            | The decline note, ≤ 200 characters                                                                                  |
+| `created_by_member_id`  | UUID → group_members | Member ids, so history survives a guest being deleted                                                               |
+| `updated_by_member_id`  | UUID → group_members | Used by the conflict rule (decision 6)                                                                              |
+| `created_at`            | TIMESTAMPTZ          | Server time                                                                                                         |
+| `updated_at`            | TIMESTAMPTZ          | Server time                                                                                                         |
+| `deleted_at`            | TIMESTAMPTZ NULL     |                                                                                                                     |
+| `row_version`           | BIGINT               | From `private.next_group_version()`                                                                                 |
 
 Each item in `items`: `{ id, description, amountCents, paidBy, splitAmong }`, where `paidBy` is a member
 id and `splitAmong` a list of member ids in the order shown. `description` is optional (up to 60
@@ -648,6 +685,8 @@ shares, `(entry_id) WHERE resolved_at IS NULL` on conflicts.
 - `invites`: `id, groupId`.
 - `inviteTokens`: `inviteId`; local only, never synced.
 - `keepOnlyGroups` also drops the entries, conflicts, invites and tokens of groups that are gone.
+- Version 3 (010) adds no index: it fills `note` (groups) and `category` (entries) with null and clears
+  the cursors, so the next pull brings both.
 
 ## Sync Changes
 
@@ -655,31 +694,40 @@ shares, `(entry_id) WHERE resolved_at IS NULL` on conflicts.
 
 "Who" is the action in decision 8's matrix that the server checks.
 
-| Type               | Fields                                                                                    | Action checked                                    |
-| ------------------ | ----------------------------------------------------------------------------------------- | ------------------------------------------------- |
-| `member.add`       | `memberId, groupId, displayName`                                                          | `member.add`                                      |
-| `member.rename`    | `memberId, groupId, displayName`                                                          | `member.rename.self` or `.others`                 |
-| `member.remove`    | `memberId, groupId`                                                                       | `member.remove.self` (leave) or `.others`         |
-| `group.rename`     | `groupId, name` (exists today)                                                            | `group.rename`                                    |
-| `group.delete`     | `groupId`                                                                                 | `group.delete`                                    |
-| `group.complete`   | `groupId`                                                                                 | `group.complete`                                  |
-| `group.reopen`     | `groupId`                                                                                 | `group.reopen`                                    |
-| `entry.create`     | `entryId, groupId, description, amountCents, entryDate, notes, items, shares[]` (bills)   | `entry.create`                                    |
-| `entry.update`     | Same as `entry.create`, plus `baseVersion` (bills only)                                   | `entry.update`                                    |
-| `entry.delete`     | `entryId, groupId, baseVersion` (bills only)                                              | `entry.delete.own` or `.others`                   |
-| `conflict.resolve` | `conflictId, entryId, groupId, resolution, entry` (the final version, or `deleted: true`) | `conflict.resolve`                                |
-| `invite.create`    | `inviteId, groupId, token, claimMemberId, expiresAt`                                      | `invite.create`                                   |
-| `invite.revoke`    | `inviteId, groupId`                                                                       | `invite.revoke.own` or `.others`                  |
-| `payment.record`   | `entryId, groupId, fromMemberId, toMemberId, amountCents, entryDate, notes`               | `payment.record.own` or `.others` (decision 17)   |
-| `payment.confirm`  | `entryId, groupId`                                                                        | `payment.respond`, as the side that hasn't agreed |
-| `payment.decline`  | `entryId, groupId, note`                                                                  | `payment.respond`, as the side that hasn't agreed |
-| `payment.undo`     | `entryId, groupId`                                                                        | `payment.undo`, as the side that started it       |
+| Type               | Fields                                                                                                        | Action checked                                    |
+| ------------------ | ------------------------------------------------------------------------------------------------------------- | ------------------------------------------------- |
+| `member.add`       | `memberId, groupId, displayName`                                                                              | `member.add`                                      |
+| `member.rename`    | `memberId, groupId, displayName`                                                                              | `member.rename.self` or `.others`                 |
+| `member.remove`    | `memberId, groupId`                                                                                           | `member.remove.self` (leave) or `.others`         |
+| `group.create`     | `groupId, memberId, name, displayName`; `note` optional (010)                                                 | not anonymous (an account rule)                   |
+| `group.rename`     | `groupId, name` (exists today)                                                                                | `group.rename`                                    |
+| `group.describe`   | `groupId, note` (010; null or blank clears it)                                                                | `group.rename`                                    |
+| `group.delete`     | `groupId`                                                                                                     | `group.delete`                                    |
+| `group.complete`   | `groupId`                                                                                                     | `group.complete`                                  |
+| `group.reopen`     | `groupId`                                                                                                     | `group.reopen`                                    |
+| `entry.create`     | `entryId, groupId, description, amountCents, entryDate, notes, items, shares[]`; `category` optional (bills)  | `entry.create`                                    |
+| `entry.update`     | Same as `entry.create`, plus `baseVersion` (bills only)                                                       | `entry.update`                                    |
+| `entry.delete`     | `entryId, groupId, baseVersion` (bills only)                                                                  | `entry.delete.own` or `.others`                   |
+| `conflict.resolve` | `conflictId, entryId, groupId, resolution, entry` (the final version with its `category`, or `deleted: true`) | `conflict.resolve`                                |
+| `invite.create`    | `inviteId, groupId, token, claimMemberId, expiresAt`                                                          | `invite.create`                                   |
+| `invite.revoke`    | `inviteId, groupId`                                                                                           | `invite.revoke.own` or `.others`                  |
+| `payment.record`   | `entryId, groupId, fromMemberId, toMemberId, amountCents, entryDate, notes`                                   | `payment.record.own` or `.others` (decision 17)   |
+| `payment.confirm`  | `entryId, groupId`                                                                                            | `payment.respond`, as the side that hasn't agreed |
+| `payment.decline`  | `entryId, groupId, note`                                                                                      | `payment.respond`, as the side that hasn't agreed |
+| `payment.undo`     | `entryId, groupId`                                                                                            | `payment.undo`, as the side that started it       |
 
 Each share is `{ memberId, paidCents, owedCents, owedTo }`, where `owedTo` maps payer member ids to
 cents. A payment's shares are worked out from `fromMemberId`, `toMemberId` and the amount, so the
 mutation doesn't carry them. Payments have no `recordedVia` (the settle-up tracker no longer records
 payments) and are never in conflict: they are only recorded, answered or undone. `group.create` stops
 sending `baseCurrency`; the server keeps the column default. There is no `member.setRole`.
+
+A bill's `category` (010) is missing or null for none, else one of the six names; anything else is `HS422`,
+and so is a `payment.record` that carries one. It is part of the bill like `notes`: version snapshots and
+conflicts keep it, so the resolver can compare it (a snapshot from before 010 reads as none). A group's
+cover shows its most common category among live bills; a tie goes to the most recent of the tied bills,
+and a group with no categorised bills shows a neutral "new" hand (worked out on the device,
+`groupCategory()` in `src/lib/categories.ts`).
 
 `private.apply_mutation()` dispatches to one private function per type instead of growing one `CASE`.
 
@@ -714,7 +762,7 @@ payment the server never received.
 
 Each group in `changes` gains `entries` (each with its `items`, its `shares` with `owed_to`, and a
 payment's handshake fields), `conflicts` and `invites` (without `token_hash`). Groups gain `completed_at`
-and `completed_by_member_id`; members gain `joined_at`. Deleted entries come through with `deleted_at`
+and `completed_by_member_id` and (010) `note`; entries gain `category`; members gain `joined_at`. Deleted entries come through with `deleted_at`
 set. Pending payments sync to the whole group like any row; screens show them only to their two people.
 A guest removed by completion is no longer a member, so their next pull drops the group from their
 device.
@@ -824,13 +872,15 @@ Built for 375px first and checked at 1440px, using the existing tokens and primi
 people alphabetically.
 
 1. **Groups.** Each group shows your balance in it: "You're owed $60.00" (success colour), "You owe
-   $30.00" (error colour) or "Settled up". Below the create box: "Have an invite link?" with a paste
-   field. Guests can't create groups, so they see only the paste box.
+   $30.00" (error colour) or "Settled up". Below the create box: "Have a code?" (a code or a
+   pasted link). Guests can't create groups, so they see only that box. A "<name> is now signed in on another
+   device" notice shows once for a group this device lost that way.
    Completed groups are listed below, under **Completed**.
 2. **Group.** The name, Rename (owner), and a menu with Leave group, and for the owner **Settle up and
    complete** and Delete group. A completed group shows "Completed on 3 Nov by Alex", has no add or edit
-   buttons, and offers Reopen group to the owner. Two main buttons: **Add expense** and **Record
-   payment**. A segmented control: **Balances | Entries | People**, opening on Entries.
+   buttons, and offers Reopen group to the owner. Two main buttons: **Add expense** and **Settle up**
+   (owner, 2026-11-09, following the design canvas); payments start from a debt's button on Balances or
+   from Settle up. A segmented control: **Entries | Balances | People**, opening on Entries.
    - **Entries:** newest first, grouped by day. A row shows the description, "Alex paid $90.00" (or
      "Alex and Sam paid $100.00"), and what it means for you: "You owe $30.00", "You lent $60.00" or
      "Not involved". Payments read "Sam paid Alex $30.00". Unsynced entries say "Not synced yet";
@@ -840,9 +890,12 @@ people alphabetically.
      **Undo**", or "Jo says they paid you $10.00 · **Confirm** · **Decline**". Then everyone else's debts
      ("Kim owes Alex $5.00"), read-only, and debts with name-only people, where any full member can record
      a payment. Someone who left shows "(left)". Payments show in Entries once they count.
-   - **People:** members (the owner labelled Owner), then guests, then "Not joined yet" name-only people.
-     The owner sees Add person, Remove, and invite links: create, copy, share (Web Share API, or the
-     native share sheet), revoke, and the expiry date.
+   - **People** (decided 2026-11-10): members (the owner labelled Owner), then guests, then "Not joined
+     yet" name-only people. Owners and members see the group code (`HX7-K2P`) with Copy link and Share (Web
+     Share API, or the native share sheet); the owner also has **Reset code** ("The old code stops
+     working"). A group not synced yet shows "Code after syncing". The owner sees each guest's personal
+     code next to their name; a guest sees their own ("Your code to get back in"); other members see none.
+     Add person and Remove as before; a name already in the group is refused.
 3. **Expense editor.** Full screen on phones, a dialog on desktop. Description, date (today), notes.
    One item to start: amount, **Paid by** (you first, then alphabetical), and **Split between** (a
    checkbox per person, everyone ticked). **Add item** turns it into a list of items, each with its own
@@ -859,18 +912,25 @@ people alphabetically.
    shows Alex's version and Sam's side by side (stacked on phones, with a toggle), changed fields
    highlighted, a choice per field, "Use all of Alex's" / "Use all of Sam's", and the resulting split
    before saving.
-7. **Join** (`/join/:token`). The group name, "Alex invited you", "Which one are you?" with the
-   unclaimed name-only people and "I'm not on this list", then **Create an account** or **Continue as
-   guest**. Offline: "Joining needs a connection."
+7. **Join** (`/join/:code`, decided 2026-11-10). The group name and "Alex's group", then "Which one are
+   you?" with the unclaimed name-only people, "I'm new here" (a name, unique in the group) and **I'm already
+   in this group** (the guests with a personal code; pick your name, type your code: "That code doesn't
+   match" when wrong, "Sign in with your email to get back in" for a name with an email). Then **Create an
+   account** or **Continue as guest**. An unknown, reset or completed group's code: "This code doesn't
+   work". Offline: "Joining needs a connection." A personal code (2026-11-11) shows the group name and
+   "Welcome back, Gus" with one button, **Get back in** (signed out: **Continue as guest**), and lands in
+   the group as Gus; one that doesn't open anything: "This code doesn't work".
 8. **Guest banner.** On every screen for guests: "You're a guest. When the group is completed, guests
    lose access. Add your email to keep it", which opens the email and code steps.
 9. **Settings.** **Connected apps:** your tokens (name, created, last used), **Connect an app** (name it,
    then the token is shown once with Copy and "You won't see this again"), and Revoke. Online only.
    **Delete account:** the dialog from decision 19, naming any open debts. Online only.
-10. **Settle up** (owner). "3 of 5 settled" at the top. One row per person with their state (Settled,
-    Owes $20.00, Is owed $40.00, Waiting for confirmation); tapping a row lists their debts. At the
-    bottom: **Complete group**, with the confirmation from decision 11 (who still owes, which guests lose
-    access).
+10. **Settle up** (everyone; completing is the owner's). "3 of 5 settled" at the top. One row per person
+    with their state (Settled, Owes $20.00, Is owed $40.00, Waiting for confirmation); tapping a row lists
+    their debts. Below, a card per payment that involves you, with **Shake on it**. At the bottom, for the
+    owner: **Complete group**, with the confirmation from decision 11 (who still owes, which guests lose
+    access). In a completed group it still lists the remaining debts, read-only, with no buttons (owner,
+    2026-11-09).
 
 Rejection toasts: `HS409` "Alex already resolved this" (or "Sam already answered this payment"); `HS403`
 "You can't do that in this group";
@@ -975,8 +1035,9 @@ TypeScript and the SQL rounding.
 - [ ] Settle up states: in the Dinner example after Sam's pending payment, Alex "Is owed 6000", Sam
       "Waiting for confirmation", Jo "Owes 3000"; once confirmed, Sam "Settled".
 - [ ] `planChange` handshakes: the payer or the receiver can record; only the other side can confirm or
-      decline (`HS403` otherwise); only the starter can undo; answering a payment someone else has
-      already answered or undone plans `HS409`, while repeating your own answer plans nothing; with a name-only counterpart the payment plans as confirmed at once; between two
+      decline (`HS403` otherwise); only the starter can undo; answering a payment that isn't pending
+      plans nothing on the device (the server gives `HS409` if another device answered first); with a
+      name-only counterpart the payment plans as confirmed at once; between two
       name-only people a member can record and a guest can't.
 - [ ] Permission cases (`tests/fixtures/permission-cases.ts`): every action × role matches decision 8,
       and every "allowed in a completed group" mark.

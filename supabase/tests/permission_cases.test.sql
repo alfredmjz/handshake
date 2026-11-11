@@ -6,7 +6,7 @@
 -- ============================================================================
 BEGIN;
 CREATE EXTENSION IF NOT EXISTS pgtap WITH SCHEMA extensions;
-SELECT plan(84);
+SELECT plan(92);
 
 -- group.rename
 SELECT is(private.may('group.rename', 'owner'), true, 'group.rename: owner may');
@@ -31,6 +31,12 @@ SELECT is(private.may('group.reopen', 'owner'), true, 'group.reopen: owner may')
 SELECT is(private.may('group.reopen', 'member'), false, 'group.reopen: member may not');
 SELECT is(private.may('group.reopen', 'guest'), false, 'group.reopen: guest may not');
 SELECT is(private.allowed_when_completed('group.reopen'), true, 'group.reopen: allowed in a completed group');
+
+-- group.recode
+SELECT is(private.may('group.recode', 'owner'), true, 'group.recode: owner may');
+SELECT is(private.may('group.recode', 'member'), false, 'group.recode: member may not');
+SELECT is(private.may('group.recode', 'guest'), false, 'group.recode: guest may not');
+SELECT is(private.allowed_when_completed('group.recode'), false, 'group.recode: refused in a completed group');
 
 -- member.add
 SELECT is(private.may('member.add', 'owner'), true, 'member.add: owner may');
@@ -133,6 +139,12 @@ SELECT is(private.may('payment.undo', 'owner'), true, 'payment.undo: owner may')
 SELECT is(private.may('payment.undo', 'member'), true, 'payment.undo: member may');
 SELECT is(private.may('payment.undo', 'guest'), true, 'payment.undo: guest may');
 SELECT is(private.allowed_when_completed('payment.undo'), false, 'payment.undo: refused in a completed group');
+
+-- nudge.send
+SELECT is(private.may('nudge.send', 'owner'), true, 'nudge.send: owner may');
+SELECT is(private.may('nudge.send', 'member'), true, 'nudge.send: member may');
+SELECT is(private.may('nudge.send', 'guest'), true, 'nudge.send: guest may');
+SELECT is(private.allowed_when_completed('nudge.send'), false, 'nudge.send: refused in a completed group');
 
 SELECT * FROM finish();
 ROLLBACK;

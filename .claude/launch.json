@@ -4,9 +4,59 @@
 		{
 			"name": "handshake",
 			"runtimeExecutable": "bun",
-			"runtimeArgs": ["run", "dev"],
+			"runtimeArgs": [
+				"run",
+				"dev"
+			],
 			"port": 5173,
 			"url": "http://localhost:5173"
+		},
+		{
+			"name": "handshake-main",
+			"runtimeExecutable": "bun",
+			"runtimeArgs": [
+				"run",
+				"--cwd=C:/Development/handshake-main",
+				"dev"
+			],
+			"port": 5173,
+			"url": "http://localhost:5173"
+		},
+		{
+			"name": "handshake-5174",
+			"runtimeExecutable": "bun",
+			"runtimeArgs": [
+				"run",
+				"dev",
+				"--port",
+				"5174"
+			],
+			"port": 5174,
+			"url": "http://localhost:5174"
+		},
+		{
+			"name": "handshake-5175",
+			"runtimeExecutable": "bun",
+			"runtimeArgs": [
+				"run",
+				"dev",
+				"--port",
+				"5175"
+			],
+			"port": 5175,
+			"url": "http://localhost:5175"
+		},
+		{
+			"name": "handshake-5176",
+			"runtimeExecutable": "bun",
+			"runtimeArgs": [
+				"run",
+				"dev",
+				"--port",
+				"5176"
+			],
+			"port": 5176,
+			"url": "http://localhost:5176"
 		}
 	]
 }

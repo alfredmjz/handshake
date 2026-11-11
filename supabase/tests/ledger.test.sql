@@ -317,7 +317,7 @@ SELECT ok(
 SELECT is(
     (SELECT array_agg(k ORDER BY k) FROM jsonb_array_elements(pg_temp.pull('bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb')#>'{changes,0,entries}') e, jsonb_object_keys(e) k
      WHERE e->>'id' = '30000000-0000-0000-0000-000000000001'),
-    ARRAY['amount_cents', 'close_note', 'closed_at', 'confirmed_at', 'created_at', 'created_by_member_id', 'deleted_at', 'description', 'entry_date', 'group_id', 'id', 'items',
+    ARRAY['amount_cents', 'category', 'close_note', 'closed_at', 'confirmed_at', 'created_at', 'created_by_member_id', 'deleted_at', 'description', 'entry_date', 'group_id', 'id', 'items',
           'kind', 'notes', 'payer_confirmed_at', 'payment_status', 'receiver_confirmed_at', 'row_version', 'shares', 'updated_at', 'updated_by_member_id'],
     'a pulled entry has exactly these keys (no recorded_via)'
 );

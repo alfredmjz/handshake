@@ -1,169 +1,190 @@
 import { describe, expect, test } from "bun:test";
 
-import { computeShares } from "@/lib/ledger";
 import { applyMutation, mergePull } from "@/lib/sync/local";
-import type { GroupChanges, Mutation } from "@/lib/sync/types";
-import { createMemoryTables, serverEntry, serverGroup, serverMember } from "../../support/memory-tables";
+import type { BillFields, GroupChanges, Mutation, MutationOf } from "@/lib/sync/types";
+import { createMemoryTables, serverBill, serverGroup, serverMember } from "../../support/memory-tables";
 
-const USER = "user-1";
+const ME = "user-1";
 const AT = "2026-11-02T09:30:00.000Z";
 
-const change = (groupId: string, version: number, rows: Partial<GroupChanges> = {}): GroupChanges => ({
-	groupId,
-	version,
-	groups: [],
-	members: [],
-	entries: [],
-	conflicts: [],
-	invites: [],
-	...rows,
-});
+let seq = 0;
+function change<T extends Mutation["type"]>(type: T, fields: Omit<MutationOf<T>, "id" | "at" | "type">) {
+	return { id: `m${++seq}`, at: AT, type, ...fields } as MutationOf<T>;
+}
 
-const create = (groupId: string): Mutation => ({
-	id: `m-create-${groupId}`,
-	at: AT,
-	type: "group.create",
-	groupId,
-	memberId: `member-${groupId}`,
-	name: "Japan 2027",
-	displayName: "Alex",
-});
+function changes(groupId: string, version: number, rows: Partial<Omit<GroupChanges, "groupId" | "version">> = {}) {
+	return {
+		groupId,
+		version,
+		groups: [],
+		members: [],
+		entries: [],
+		conflicts: [],
+		invites: [],
+		nudges: [],
+		guestCodes: [],
+		...rows,
+	};
+}
 
-const rename = (groupId: string, name: string): Mutation => ({
-	id: `m-rename-${name}`,
-	at: AT,
-	type: "group.rename",
-	groupId,
-	name,
-});
+const alex = serverMember({ id: "alex", groupId: "g1", userId: ME, role: "owner" });
+const sam = serverMember({ id: "sam", groupId: "g1", userId: "user-2", role: "member", displayName: "Sam" });
+
+const edit: BillFields = {
+	description: "Edited offline",
+	amountCents: 1000,
+	entryDate: "2026-11-02",
+	notes: null,
+	category: "stay",
+	items: [{ id: "i1", amountCents: 1000, paidBy: "alex", splitAmong: ["alex"] }],
+	shares: [{ memberId: "alex", paidCents: 1000, owedCents: 1000, owedTo: { alex: 1000 } }],
+};
 
 describe("mergePull", () => {
-	test("stores server rows and moves the cursor", async () => {
-		const { tables, groups, members, entries, cursors } = createMemoryTables();
+	test("server notes and categories land; an unsent note and category edit are replayed on top", async () => {
+		const { tables, groups, entries } = createMemoryTables();
+		const pending = [
+			change("group.describe", { groupId: "g1", note: "Offline note" }),
+			change("entry.update", { groupId: "g1", entryId: "e1", baseVersion: 2, ...edit }),
+		];
 		await mergePull(
 			tables,
 			{
 				groupIds: ["g1"],
 				changes: [
-					change("g1", 4, {
-						groups: [serverGroup({ id: "g1", rowVersion: 4 })],
-						members: [serverMember({ id: "m1", groupId: "g1" })],
-						entries: [serverEntry({ id: "e1", groupId: "g1" })],
+					changes("g1", 2, {
+						groups: [serverGroup({ id: "g1", note: "Server note", rowVersion: 2 })],
+						members: [alex],
+						entries: [
+							serverBill({ id: "e1", groupId: "g1", createdByMemberId: "alex", category: "food", rowVersion: 2 }),
+						],
+					}),
+				],
+			},
+			pending,
+			ME
+		);
+		expect(groups.map.get("g1")?.note).toBe("Offline note");
+		expect(entries.map.get("e1")?.category).toBe("stay");
+
+		await mergePull(
+			tables,
+			{
+				groupIds: ["g1"],
+				changes: [
+					changes("g1", 3, {
+						groups: [serverGroup({ id: "g1", note: "Server note", rowVersion: 3 })],
+						entries: [
+							serverBill({ id: "e1", groupId: "g1", createdByMemberId: "alex", category: "food", rowVersion: 3 }),
+						],
 					}),
 				],
 			},
 			[],
-			USER
+			ME
 		);
-
-		expect(groups.get("g1")?.rowVersion).toBe(4);
-		expect(members.has("m1")).toBe(true);
-		expect(entries.has("e1")).toBe(true);
-		expect(cursors.get("g1")).toEqual({ groupId: "g1", version: 4 });
+		expect(groups.map.get("g1")?.note).toBe("Server note");
+		expect(entries.map.get("e1")?.category).toBe("food");
 	});
 
-	test("an entry's shares are replaced, not merged", async () => {
-		const { tables, entries } = createMemoryTables();
-		await tables.entries.put([
-			serverEntry({
-				id: "e1",
-				groupId: "g1",
-				shares: computeShares([{ id: "i", amountCents: 900, paidBy: "a", splitAmong: ["a", "b", "c"] }]),
-			}),
-		]);
-		const newShares = computeShares([{ id: "i", amountCents: 900, paidBy: "a", splitAmong: ["a", "b"] }]);
+	test("stores server rows of every kind and moves the cursor", async () => {
+		const { tables, groups, members, entries, conflicts, invites, cursors } = createMemoryTables();
 		await mergePull(
 			tables,
 			{
 				groupIds: ["g1"],
 				changes: [
-					change("g1", 2, {
-						groups: [serverGroup({ id: "g1" })],
-						entries: [serverEntry({ id: "e1", groupId: "g1", shares: newShares, rowVersion: 2 })],
+					changes("g1", 4, {
+						groups: [serverGroup({ id: "g1", rowVersion: 4 })],
+						members: [alex],
+						entries: [serverBill({ id: "e1", groupId: "g1", createdByMemberId: "alex" })],
+						conflicts: [
+							{
+								id: "c1",
+								groupId: "g1",
+								entryId: "e1",
+								baseVersion: 1,
+								base: null,
+								proposed: null,
+								proposedByMemberId: "alex",
+								createdAt: AT,
+								resolvedAt: null,
+								resolvedByMemberId: null,
+								resolution: null,
+								rowVersion: 3,
+							},
+						],
+						invites: [
+							{
+								id: "inv1",
+								groupId: "g1",
+								claimMemberId: null,
+								createdBy: ME,
+								createdAt: AT,
+								expiresAt: AT,
+								revokedAt: null,
+								rowVersion: 2,
+							},
+						],
 					}),
 				],
 			},
 			[],
-			USER
+			ME
 		);
-		expect(entries.get("e1")?.shares).toEqual(newShares);
+
+		expect(groups.map.get("g1")?.rowVersion).toBe(4);
+		expect(members.map.has("alex")).toBe(true);
+		expect(entries.map.has("e1")).toBe(true);
+		expect(conflicts.map.has("c1")).toBe(true);
+		expect(invites.map.has("inv1")).toBe(true);
+		expect(cursors.map.get("g1")).toEqual({ groupId: "g1", version: 4 });
+	});
+
+	test("an entry's shares and items are replaced, not merged", async () => {
+		const { tables, entries } = createMemoryTables();
+		await tables.entries.put([
+			serverBill({
+				id: "e1",
+				groupId: "g1",
+				createdByMemberId: "alex",
+				amountCents: 2000,
+				items: [
+					{ id: "i1", amountCents: 1000, paidBy: "alex", splitAmong: ["alex", "sam"] },
+					{ id: "i2", amountCents: 1000, paidBy: "sam", splitAmong: ["sam"] },
+				],
+				shares: [
+					{ memberId: "alex", paidCents: 1000, owedCents: 500, owedTo: { alex: 500 } },
+					{ memberId: "sam", paidCents: 1000, owedCents: 1500, owedTo: { alex: 500, sam: 1000 } },
+				],
+			}),
+		]);
+		const fromServer = serverBill({ id: "e1", groupId: "g1", createdByMemberId: "alex", rowVersion: 2 });
+		await mergePull(tables, { groupIds: ["g1"], changes: [changes("g1", 2, { entries: [fromServer] })] }, [], ME);
+
+		expect(entries.map.get("e1")).toEqual(fromServer);
 	});
 
 	test("an unsent rename stays on top of an older server name", async () => {
 		const { tables, groups } = createMemoryTables();
 		await mergePull(
 			tables,
-			{ groupIds: ["g1"], changes: [change("g1", 2, { groups: [serverGroup({ id: "g1", name: "Old" })] })] },
-			[rename("g1", "Renamed offline")],
-			USER
+			{ groupIds: ["g1"], changes: [changes("g1", 2, { groups: [serverGroup({ id: "g1", name: "Old" })] })] },
+			[change("group.rename", { groupId: "g1", name: "Renamed offline" })],
+			ME
 		);
-		expect(groups.get("g1")?.name).toBe("Renamed offline");
+		expect(groups.map.get("g1")?.name).toBe("Renamed offline");
 	});
 
-	test("an unsent stale edit by someone else is not replayed; your own newer change is", async () => {
-		const items = [{ id: "i", amountCents: 500, paidBy: "me", splitAmong: ["me"] }];
-		const edit = (entryId: string, description: string): Mutation => ({
-			id: `m-edit-${entryId}`,
-			at: AT,
-			type: "entry.update",
-			groupId: "g1",
-			entryId,
-			baseVersion: 1,
-			description,
-			amountCents: 500,
-			entryDate: "2026-11-02",
-			notes: null,
-			items,
-			shares: computeShares(items),
-		});
-		const { tables, entries } = createMemoryTables();
-		await mergePull(
-			tables,
-			{
-				groupIds: ["g1"],
-				changes: [
-					change("g1", 5, {
-						groups: [serverGroup({ id: "g1" })],
-						members: [
-							serverMember({ id: "me", groupId: "g1", userId: USER }),
-							serverMember({ id: "jo", groupId: "g1", userId: "u-jo", role: "member" }),
-						],
-						entries: [
-							serverEntry({
-								id: "theirs",
-								groupId: "g1",
-								description: "Jo's edit",
-								updatedByMemberId: "jo",
-								rowVersion: 4,
-							}),
-							serverEntry({
-								id: "mine",
-								groupId: "g1",
-								description: "My other device",
-								updatedByMemberId: "me",
-								rowVersion: 5,
-							}),
-						],
-					}),
-				],
-			},
-			[edit("theirs", "Stale"), edit("mine", "This device")],
-			USER
-		);
-		expect(entries.get("theirs")?.description).toBe("Jo's edit");
-		expect(entries.get("mine")?.description).toBe("This device");
-	});
-
-	test("a dropped group takes its entries, conflicts, invites and tokens with it", async () => {
-		const local = createMemoryTables();
-		const { tables } = local;
-		await tables.groups.put([serverGroup({ id: "left" }), serverGroup({ id: "stays" })]);
-		await tables.members.put([
+	test("a dropped group takes its members, entries, conflicts, invites, tokens and cursor with it", async () => {
+		const t = createMemoryTables();
+		await t.tables.groups.put([serverGroup({ id: "left" }), serverGroup({ id: "stays" })]);
+		await t.tables.members.put([
 			serverMember({ id: "m-left", groupId: "left" }),
 			serverMember({ id: "m-stays", groupId: "stays" }),
 		]);
-		await tables.entries.put([serverEntry({ id: "e-left", groupId: "left" })]);
-		await tables.conflicts.put([
+		await t.tables.entries.put([serverBill({ id: "e-left", groupId: "left", createdByMemberId: "m-left" })]);
+		await t.tables.conflicts.put([
 			{
 				id: "c-left",
 				groupId: "left",
@@ -179,74 +200,332 @@ describe("mergePull", () => {
 				rowVersion: 2,
 			},
 		]);
-		await tables.invites.put([
+		await t.tables.invites.put([
 			{
 				id: "i-left",
 				groupId: "left",
 				claimMemberId: null,
-				createdBy: USER,
+				createdBy: ME,
 				createdAt: AT,
 				expiresAt: AT,
 				revokedAt: null,
-				rowVersion: 1,
+				rowVersion: 2,
 			},
 		]);
-		await tables.inviteTokens.put([{ inviteId: "i-left", groupId: "left", token: "t" }]);
-		await tables.cursors.put([{ groupId: "left", version: 7 }]);
-		const pending = [create("new-here")];
-		await applyMutation(tables, pending[0], USER);
+		await t.tables.inviteTokens.put([{ inviteId: "i-left", groupId: "left", token: "secret" }]);
+		await t.tables.cursors.put([
+			{ groupId: "left", version: 7 },
+			{ groupId: "stays", version: 3 },
+		]);
 
-		await mergePull(tables, { groupIds: ["stays"], changes: [] }, pending, USER);
+		await mergePull(t.tables, { groupIds: ["stays"], changes: [] }, [], ME);
 
-		expect([...local.groups.keys()].sort()).toEqual(["new-here", "stays"]);
-		expect([...local.members.keys()].sort()).toEqual(["m-stays", "member-new-here"]);
-		expect(local.entries.size).toBe(0);
-		expect(local.conflicts.size).toBe(0);
-		expect(local.invites.size).toBe(0);
-		expect(local.inviteTokens.size).toBe(0);
-		expect(local.cursors.size).toBe(0);
+		expect([...t.groups.map.keys()]).toEqual(["stays"]);
+		expect([...t.members.map.keys()]).toEqual(["m-stays"]);
+		expect(t.entries.map.size).toBe(0);
+		expect(t.conflicts.map.size).toBe(0);
+		expect(t.invites.map.size).toBe(0);
+		expect(t.inviteTokens.map.size).toBe(0);
+		expect([...t.cursors.map.keys()]).toEqual(["stays"]);
 	});
 
-	test("an invite's token survives the server's copy of the invite arriving", async () => {
-		const { tables, inviteTokens, invites } = createMemoryTables();
+	test("keeps groups created here and not yet sent", async () => {
+		const { tables, groups, members } = createMemoryTables();
+		const create = change("group.create", {
+			groupId: "new-here",
+			memberId: "me-new",
+			name: "New",
+			displayName: "Alex",
+		});
+		await applyMutation(tables, create, ME);
+
+		await mergePull(tables, { groupIds: [], changes: [] }, [create], ME);
+
+		expect([...groups.map.keys()]).toEqual(["new-here"]);
+		expect(members.map.has("me-new")).toBe(true);
+	});
+
+	test("replays unsent changes in order on top of the server rows", async () => {
+		const { tables, members, entries } = createMemoryTables();
 		const pending: Mutation[] = [
-			{
-				id: "m-inv",
-				at: AT,
-				type: "invite.create",
+			change("member.add", { groupId: "g1", memberId: "jo", displayName: "Jo" }),
+			change("payment.record", {
 				groupId: "g1",
-				inviteId: "inv",
-				token: "t".repeat(43),
-				claimMemberId: null,
-				expiresAt: AT,
-			},
+				entryId: "p1",
+				fromMemberId: "alex",
+				toMemberId: "jo",
+				amountCents: 500,
+				entryDate: "2026-11-02",
+				notes: null,
+			}),
 		];
+		await mergePull(
+			tables,
+			{ groupIds: ["g1"], changes: [changes("g1", 3, { groups: [serverGroup({ id: "g1" })], members: [alex] })] },
+			pending,
+			ME
+		);
+
+		expect(members.map.get("jo")?.rowVersion).toBe(0);
+		// Jo is name-only, so the replayed payment counts at once.
+		expect(entries.map.get("p1")?.paymentStatus).toBe("confirmed");
+	});
+
+	describe("stale changes (architecture §4.2)", () => {
+		async function samEditedIt() {
+			const t = createMemoryTables();
+			const bill = serverBill({
+				id: "e1",
+				groupId: "g1",
+				createdByMemberId: "alex",
+				rowVersion: 5,
+				updatedByMemberId: "sam",
+			});
+			await mergePull(
+				t.tables,
+				{
+					groupIds: ["g1"],
+					changes: [changes("g1", 5, { groups: [serverGroup({ id: "g1" })], members: [alex, sam], entries: [bill] })],
+				},
+				[],
+				ME
+			);
+			return { ...t, bill };
+		}
+
+		test("an unsent edit started from an older version that someone else changed is not replayed", async () => {
+			const { tables, entries, bill } = await samEditedIt();
+			const pending = [change("entry.update", { groupId: "g1", entryId: "e1", baseVersion: 2, ...edit })];
+			await mergePull(tables, { groupIds: ["g1"], changes: [changes("g1", 5, { entries: [bill] })] }, pending, ME);
+			expect(entries.map.get("e1")).toEqual(bill);
+		});
+
+		test("an unsent delete against someone else's newer edit is not replayed", async () => {
+			const { tables, entries, bill } = await samEditedIt();
+			const pending = [change("entry.delete", { groupId: "g1", entryId: "e1", baseVersion: 2 })];
+			await mergePull(tables, { groupIds: ["g1"], changes: [] }, pending, ME);
+			expect(entries.map.get("e1")).toEqual(bill);
+		});
+
+		test("an edit started from the current version is replayed", async () => {
+			const { tables, entries } = await samEditedIt();
+			const pending = [change("entry.update", { groupId: "g1", entryId: "e1", baseVersion: 5, ...edit })];
+			await mergePull(tables, { groupIds: ["g1"], changes: [] }, pending, ME);
+			expect(entries.map.get("e1")?.description).toBe("Edited offline");
+		});
+
+		test("your own newer change (another device) doesn't make yours stale", async () => {
+			const t = createMemoryTables();
+			const bill = serverBill({
+				id: "e1",
+				groupId: "g1",
+				createdByMemberId: "alex",
+				rowVersion: 5,
+				updatedByMemberId: "alex",
+			});
+			const pending = [
+				change("entry.update", { groupId: "g1", entryId: "e1", baseVersion: 2, ...edit }),
+				change("entry.delete", { groupId: "g1", entryId: "e1", baseVersion: 2 }),
+			];
+			await mergePull(
+				t.tables,
+				{
+					groupIds: ["g1"],
+					changes: [changes("g1", 5, { groups: [serverGroup({ id: "g1" })], members: [alex, sam], entries: [bill] })],
+				},
+				pending,
+				ME
+			);
+			expect(t.entries.map.get("e1")).toMatchObject({ description: "Edited offline", deletedAt: AT });
+		});
+
+		test("other unsent changes still replay around a skipped one", async () => {
+			const { tables, entries, groups, bill } = await samEditedIt();
+			const pending: Mutation[] = [
+				change("entry.update", { groupId: "g1", entryId: "e1", baseVersion: 1, ...edit }),
+				change("group.rename", { groupId: "g1", name: "Still renamed" }),
+			];
+			await mergePull(tables, { groupIds: ["g1"], changes: [] }, pending, ME);
+			expect(entries.map.get("e1")).toEqual(bill);
+			expect(groups.map.get("g1")?.name).toBe("Still renamed");
+		});
+	});
+});
+
+describe("full pulls after rejected changes", () => {
+	// The device as a rejected push leaves it: synced once at version 3, then a local-only bill and rename.
+	async function afterRejection() {
+		const t = createMemoryTables();
+		await mergePull(
+			t.tables,
+			{ groupIds: ["g1"], changes: [changes("g1", 3, { groups: [serverGroup({ id: "g1" })], members: [alex, sam] })] },
+			[],
+			ME
+		);
+		await applyMutation(t.tables, change("entry.create", { groupId: "g1", entryId: "rejected-bill", ...edit }), ME);
+		await applyMutation(
+			t.tables,
+			change("member.rename", { groupId: "g1", memberId: "alex", displayName: "Renamed offline" }),
+			ME
+		);
+		await t.tables.inviteTokens.put([{ inviteId: "rejected-invite", groupId: "g1", token: "t" }]);
+		return t;
+	}
+	const fullPull = (rows: Partial<Omit<GroupChanges, "groupId" | "version">> = {}) => ({
+		groupIds: ["g1"],
+		changes: [changes("g1", 3, { groups: [serverGroup({ id: "g1" })], members: [alex, sam], ...rows })],
+	});
+
+	test("a full pull removes a local-only entry that no pending change recreates", async () => {
+		const t = await afterRejection();
+		await t.tables.cursors.delete(["g1"]);
+		await mergePull(t.tables, fullPull(), [], ME);
+		expect(t.entries.map.has("rejected-bill")).toBe(false);
+		expect(t.inviteTokens.map.size).toBe(0);
+	});
+
+	test("a full pull restores the server's value over a local rename whose change is gone", async () => {
+		const t = await afterRejection();
+		await t.tables.cursors.put([{ groupId: "g1", version: 0 }]);
+		await mergePull(t.tables, fullPull(), [], ME);
+		expect(t.members.map.get("alex")?.displayName).toBe("Alex");
+	});
+
+	test("a full pull keeps rows that pending changes recreate, and drops server rows no longer sent", async () => {
+		const t = await afterRejection();
+		await t.tables.entries.put([serverBill({ id: "gone", groupId: "g1", createdByMemberId: "alex" })]);
+		const bill = serverBill({ id: "kept", groupId: "g1", createdByMemberId: "sam" });
+		const pending: Mutation[] = [
+			change("entry.create", { groupId: "g1", entryId: "unsent-bill", ...edit }),
+			change("invite.create", {
+				groupId: "g1",
+				inviteId: "unsent-invite",
+				token: "u",
+				claimMemberId: null,
+				expiresAt: null,
+			}),
+		];
+		await t.tables.cursors.delete(["g1"]);
+		await mergePull(t.tables, fullPull({ entries: [bill] }), pending, ME);
+
+		expect([...t.entries.map.keys()].sort()).toEqual(["kept", "unsent-bill"]);
+		expect([...t.inviteTokens.map.keys()]).toEqual(["unsent-invite"]);
+	});
+
+	test("an incremental pull leaves rows it doesn't mention alone", async () => {
+		const t = await afterRejection();
+		await mergePull(t.tables, { groupIds: ["g1"], changes: [changes("g1", 4, { members: [sam] })] }, [], ME);
+		expect(t.entries.map.has("rejected-bill")).toBe(true);
+		expect(t.members.map.get("alex")?.displayName).toBe("Renamed offline");
+	});
+
+	test("a group created here and not yet sent survives a full pull of other groups", async () => {
+		const t = await afterRejection();
+		const create = change("group.create", {
+			groupId: "new-here",
+			memberId: "me-new",
+			name: "New",
+			displayName: "Alex",
+		});
+		await applyMutation(t.tables, create, ME);
+		await t.tables.cursors.delete(["g1"]);
+		await mergePull(t.tables, fullPull(), [create], ME);
+		expect(t.groups.map.has("new-here")).toBe(true);
+		expect(t.members.map.has("me-new")).toBe(true);
+	});
+});
+
+describe("nudges", () => {
+	const serverNudge = (id: string, groupId = "g1") => ({
+		id,
+		groupId,
+		fromMemberId: "alex",
+		toMemberId: "sam",
+		amountCents: 1000,
+		createdAt: AT,
+		rowVersion: 3,
+	});
+
+	test("pulled nudges land; an unsent one is replayed on top", async () => {
+		const { tables, nudges } = createMemoryTables();
+		const pending = [change("nudge.send", { groupId: "g1", nudgeId: "n2", toMemberId: "sam", amountCents: 500 })];
+		await mergePull(
+			tables,
+			{ groupIds: ["g1"], changes: [changes("g1", 3, { members: [alex, sam], nudges: [serverNudge("n1")] })] },
+			pending,
+			ME
+		);
+		expect([...nudges.map.keys()].sort()).toEqual(["n1", "n2"]);
+		expect(nudges.map.get("n2")?.rowVersion).toBe(0);
+	});
+
+	test("a full pull drops a local nudge the server never stored; a dropped group takes its nudges", async () => {
+		const { tables, nudges } = createMemoryTables();
+		await tables.nudges.put([{ ...serverNudge("local"), rowVersion: 0 }, serverNudge("other", "g2")]);
+		await tables.groups.put([serverGroup({ id: "g2" })]);
+		await mergePull(
+			tables,
+			{ groupIds: ["g1"], changes: [changes("g1", 3, { members: [alex, sam], nudges: [serverNudge("n1")] })] },
+			[],
+			ME
+		);
+		expect([...nudges.map.keys()]).toEqual(["n1"]);
+	});
+});
+
+describe("guest codes and moved-away notices", () => {
+	const code = (memberId: string, groupId = "g1", deletedAt: string | null = null) => ({
+		memberId,
+		groupId,
+		code: "K2PHX7",
+		createdAt: AT,
+		deletedAt,
+		rowVersion: 3,
+	});
+	const kim = serverMember({ id: "kim", groupId: "g1", userId: ME, role: "guest", displayName: "Kim" });
+
+	test("stores pulled guest codes, a deletion included; a full pull drops codes the server didn't send", async () => {
+		const { tables, guestCodes } = createMemoryTables();
+		await tables.guestCodes.put([code("stale")]);
 		await mergePull(
 			tables,
 			{
 				groupIds: ["g1"],
-				changes: [
-					change("g1", 3, {
-						groups: [serverGroup({ id: "g1" })],
-						invites: [
-							{
-								id: "inv",
-								groupId: "g1",
-								claimMemberId: null,
-								createdBy: USER,
-								createdAt: AT,
-								expiresAt: AT,
-								revokedAt: null,
-								rowVersion: 3,
-							},
-						],
-					}),
-				],
+				changes: [changes("g1", 3, { members: [alex], guestCodes: [code("kim"), code("bo", "g1", AT)] })],
 			},
-			pending,
-			USER
+			[],
+			ME
 		);
-		expect(invites.get("inv")?.rowVersion).toBe(3);
-		expect(inviteTokens.get("inv")?.token).toBe("t".repeat(43));
+		expect([...guestCodes.map.keys()].sort()).toEqual(["bo", "kim"]);
+		expect(guestCodes.map.get("bo")?.deletedAt).toBe(AT);
+	});
+
+	test("a dropped group takes its guest codes", async () => {
+		const { tables, guestCodes } = createMemoryTables();
+		await tables.groups.put([serverGroup({ id: "g2" })]);
+		await tables.guestCodes.put([code("x", "g2")]);
+		await mergePull(tables, { groupIds: [], changes: [] }, [], ME);
+		expect(guestCodes.map.size).toBe(0);
+	});
+
+	test("a group this guest lost to another device gives a notice; one lost otherwise doesn't", async () => {
+		const { tables, groups } = createMemoryTables();
+		await tables.groups.put([serverGroup({ id: "g1", name: "Banff" }), serverGroup({ id: "g2", name: "Jasper" })]);
+		await tables.members.put([kim, { ...kim, id: "kim2", groupId: "g2" }]);
+		const notices = await mergePull(tables, { groupIds: [], changes: [], movedAway: ["g1"] }, [], ME);
+		expect(notices).toEqual([{ groupId: "g1", groupName: "Banff", displayName: "Kim" }]);
+		expect(groups.map.size).toBe(0);
+	});
+
+	test("no notice for someone who wasn't a guest there, or a server before 012", async () => {
+		const { tables } = createMemoryTables();
+		await tables.groups.put([serverGroup({ id: "g1" }), serverGroup({ id: "g2" })]);
+		await tables.members.put([alex, { ...kim, groupId: "g2" }]);
+		expect(await mergePull(tables, { groupIds: [], changes: [], movedAway: ["g1"] }, [], ME)).toEqual([]);
+
+		const old = createMemoryTables();
+		await old.tables.groups.put([serverGroup({ id: "g1" })]);
+		await old.tables.members.put([kim]);
+		expect(await mergePull(old.tables, { groupIds: [], changes: [] }, [], ME)).toEqual([]);
 	});
 });

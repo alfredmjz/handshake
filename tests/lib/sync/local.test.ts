@@ -1,69 +1,88 @@
 import { describe, expect, test } from "bun:test";
 
-import { computeShares } from "@/lib/ledger";
 import { applyMutation } from "@/lib/sync/local";
-import type { BillFields, Mutation } from "@/lib/sync/types";
-import { createMemoryTables, serverEntry, serverGroup, serverMember } from "../../support/memory-tables";
+import type { BillFields, ConflictRow, EntryRow, Mutation, MutationOf } from "@/lib/sync/types";
+import { createMemoryTables, serverBill, serverGroup, serverMember } from "../../support/memory-tables";
 
-const USER = "user-1";
+const ME = "user-1";
+const SAM_USER = "user-2";
 const AT = "2026-11-02T09:30:00.000Z";
+const LATER = "2026-11-02T10:00:00.000Z";
 
-type Body = Mutation extends infer M ? (M extends Mutation ? Omit<M, "id" | "at"> : never) : never;
 let seq = 0;
-const m = (body: Body): Mutation => ({ id: `m${++seq}`, at: AT, ...body }) as Mutation;
-
-const items = [{ id: "i1", amountCents: 1000, paidBy: "me", splitAmong: ["me", "jo", "sam"] }];
-const bill: BillFields = {
-	description: " Dinner ",
-	amountCents: 1000,
-	entryDate: "2026-11-02",
-	notes: null,
-	items,
-	shares: computeShares(items),
-};
-
-// A synced group "g" where this user is "me" (owner), with Jo (logged in) and Sam (name-only).
-async function seeded() {
-	const local = createMemoryTables();
-	await local.tables.groups.put([serverGroup({ id: "g" })]);
-	await local.tables.members.put([
-		serverMember({ id: "me", groupId: "g", userId: USER, role: "owner", joinedAt: "2026-11-01T00:00:00.000Z" }),
-		serverMember({
-			id: "jo",
-			groupId: "g",
-			userId: "user-jo",
-			role: "member",
-			displayName: "Jo",
-			joinedAt: "2026-11-01T01:00:00.000Z",
-		}),
-		serverMember({ id: "sam", groupId: "g", userId: null, role: "member", displayName: "Sam", joinedAt: null }),
-	]);
-	return local;
+function change<T extends Mutation["type"]>(type: T, fields: Omit<MutationOf<T>, "id" | "at" | "type">, at = AT) {
+	return { id: `m${++seq}`, at, type, ...fields } as MutationOf<T>;
 }
 
-describe("applyMutation: groups", () => {
+// g1: Alex (me, owner), Sam (member with a login), Jo (name-only).
+async function seeded() {
+	const t = createMemoryTables();
+	await t.tables.groups.put([serverGroup({ id: "g1" })]);
+	await t.tables.members.put([
+		serverMember({ id: "alex", groupId: "g1", userId: ME, role: "owner" }),
+		serverMember({ id: "sam", groupId: "g1", userId: SAM_USER, role: "member", displayName: "Sam" }),
+		serverMember({ id: "jo", groupId: "g1", userId: null, role: "member", displayName: "Jo", joinedAt: null }),
+	]);
+	return t;
+}
+
+const dinner: BillFields = {
+	description: "  Dinner ",
+	amountCents: 3000,
+	entryDate: "2026-11-02",
+	notes: null,
+	category: "food",
+	items: [{ id: "i1", amountCents: 3000, paidBy: "alex", splitAmong: ["alex", "sam", "jo"] }],
+	shares: [
+		{ memberId: "alex", paidCents: 3000, owedCents: 1000, owedTo: { alex: 1000 } },
+		{ memberId: "sam", paidCents: 0, owedCents: 1000, owedTo: { alex: 1000 } },
+		{ memberId: "jo", paidCents: 0, owedCents: 1000, owedTo: { alex: 1000 } },
+	],
+};
+
+function payment(overrides: Partial<EntryRow> & Pick<EntryRow, "id">): EntryRow {
+	return serverBill({
+		groupId: "g1",
+		createdByMemberId: "alex",
+		kind: "payment",
+		description: "Payment",
+		amountCents: 500,
+		items: null,
+		paymentStatus: "pending",
+		payerConfirmedAt: AT,
+		shares: [
+			{ memberId: "sam", paidCents: 0, owedCents: 500, owedTo: { alex: 500 } },
+			{ memberId: "alex", paidCents: 500, owedCents: 0, owedTo: {} },
+		],
+		...overrides,
+	});
+}
+
+describe("groups", () => {
 	test("creating a group adds it with you as owner, not yet synced", async () => {
 		const { tables, groups, members } = createMemoryTables();
 		await applyMutation(
 			tables,
-			m({ type: "group.create", groupId: "g1", memberId: "me", name: "  Japan 2027 ", displayName: "Alex" }),
-			USER
+			change("group.create", { groupId: "g1", memberId: "me-1", name: "  Japan 2027 ", displayName: " Alex " }),
+			ME
 		);
 
-		expect(groups.get("g1")).toEqual({
+		expect(groups.map.get("g1")).toEqual({
 			id: "g1",
 			name: "Japan 2027",
-			createdBy: USER,
+			note: null,
+			createdBy: ME,
 			createdAt: AT,
 			deletedAt: null,
 			completedAt: null,
 			completedByMemberId: null,
+			joinCode: null,
 			rowVersion: 0,
 		});
-		expect(members.get("me")).toEqual({
-			id: "me",
+		expect(members.map.get("me-1")).toEqual({
+			id: "me-1",
 			groupId: "g1",
-			userId: USER,
+			userId: ME,
 			displayName: "Alex",
 			role: "owner",
 			joinedAt: AT,
@@ -73,44 +92,75 @@ describe("applyMutation: groups", () => {
 	});
 
 	test("a create never overwrites the server's copy", async () => {
-		const { tables, groups } = createMemoryTables();
+		const { tables, groups, members } = createMemoryTables();
 		await tables.groups.put([serverGroup({ id: "g1", name: "From server", rowVersion: 3 })]);
 		await applyMutation(
 			tables,
-			m({ type: "group.create", groupId: "g1", memberId: "me", name: "Mine", displayName: "A" }),
-			USER
+			change("group.create", { groupId: "g1", memberId: "x", name: "Mine", displayName: "A" }),
+			ME
 		);
-		expect(groups.get("g1")).toMatchObject({ name: "From server", rowVersion: 3 });
+
+		expect(groups.map.get("g1")).toMatchObject({ name: "From server", rowVersion: 3 });
+		expect(members.map.size).toBe(0);
 	});
 
 	test("rename, delete, complete and reopen", async () => {
 		const { tables, groups } = await seeded();
-		await applyMutation(tables, m({ type: "group.rename", groupId: "g", name: " Banff " }), USER);
-		expect(groups.get("g")?.name).toBe("Banff");
+		await applyMutation(tables, change("group.rename", { groupId: "g1", name: " Banff " }), ME);
+		expect(groups.map.get("g1")?.name).toBe("Banff");
 
-		await applyMutation(tables, m({ type: "group.complete", groupId: "g" }), USER);
-		expect(groups.get("g")).toMatchObject({ completedAt: AT, completedByMemberId: "me" });
-		await applyMutation(tables, m({ type: "group.reopen", groupId: "g" }), USER);
-		expect(groups.get("g")).toMatchObject({ completedAt: null, completedByMemberId: null });
+		await applyMutation(tables, change("group.complete", { groupId: "g1" }), ME);
+		expect(groups.map.get("g1")).toMatchObject({ completedAt: AT, completedByMemberId: "alex" });
 
-		await applyMutation(tables, m({ type: "group.delete", groupId: "g" }), USER);
-		expect(groups.get("g")?.deletedAt).toBe(AT);
+		await applyMutation(tables, change("group.reopen", { groupId: "g1" }, LATER), ME);
+		expect(groups.map.get("g1")).toMatchObject({ completedAt: null, completedByMemberId: null });
+
+		await applyMutation(tables, change("group.delete", { groupId: "g1" }, LATER), ME);
+		expect(groups.map.get("g1")?.deletedAt).toBe(LATER);
 	});
 
-	test("changing a group this device doesn't have does nothing", async () => {
+	test("resetting the group code leaves the old one until the pull brings the server's", async () => {
+		const { tables, groups } = await seeded();
+		const before = groups.map.get("g1");
+		await applyMutation(tables, change("group.recode", { groupId: "g1" }), ME);
+		expect(groups.map.get("g1")).toEqual(before!);
+		expect(before?.joinCode).toBe("HX7K2P");
+	});
+
+	test("changes to a group this device doesn't have do nothing", async () => {
 		const { tables, groups } = createMemoryTables();
-		await applyMutation(tables, m({ type: "group.rename", groupId: "missing", name: "New" }), USER);
-		expect(groups.size).toBe(0);
+		await applyMutation(tables, change("group.rename", { groupId: "missing", name: "New" }), ME);
+		await applyMutation(tables, change("group.delete", { groupId: "missing" }), ME);
+		await applyMutation(tables, change("group.describe", { groupId: "missing", note: "x" }), ME);
+		expect(groups.map.size).toBe(0);
+	});
+
+	test("a group's note: set at create, changed and cleared by group.describe", async () => {
+		const { tables, groups } = createMemoryTables();
+		await applyMutation(
+			tables,
+			change("group.create", { groupId: "g1", memberId: "me-1", name: "Japan", displayName: "Alex", note: "Tokyo" }),
+			ME
+		);
+		expect(groups.map.get("g1")?.note).toBe("Tokyo");
+		await applyMutation(tables, change("group.describe", { groupId: "g1", note: " Osaka too " }), ME);
+		expect(groups.map.get("g1")?.note).toBe("Osaka too");
+		await applyMutation(tables, change("group.describe", { groupId: "g1", note: "  " }), ME);
+		expect(groups.map.get("g1")?.note).toBeNull();
+		await applyMutation(tables, change("group.describe", { groupId: "g1", note: "\tKyoto" }), ME);
+		expect(groups.map.get("g1")?.note).toBe("\tKyoto");
+		await applyMutation(tables, change("group.describe", { groupId: "g1", note: null }), ME);
+		expect(groups.map.get("g1")?.note).toBeNull();
 	});
 });
 
-describe("applyMutation: people", () => {
-	test("adding someone by name makes a name-only person", async () => {
+describe("people", () => {
+	test("adding someone by name makes a name-only member", async () => {
 		const { tables, members } = await seeded();
-		await applyMutation(tables, m({ type: "member.add", groupId: "g", memberId: "kim", displayName: " Kim " }), USER);
-		expect(members.get("kim")).toEqual({
+		await applyMutation(tables, change("member.add", { groupId: "g1", memberId: "kim", displayName: " Kim " }), ME);
+		expect(members.map.get("kim")).toEqual({
 			id: "kim",
-			groupId: "g",
+			groupId: "g1",
 			userId: null,
 			displayName: "Kim",
 			role: "member",
@@ -122,212 +172,463 @@ describe("applyMutation: people", () => {
 
 	test("renaming someone", async () => {
 		const { tables, members } = await seeded();
-		await applyMutation(
-			tables,
-			m({ type: "member.rename", groupId: "g", memberId: "sam", displayName: "Samantha" }),
-			USER
-		);
-		expect(members.get("sam")?.displayName).toBe("Samantha");
+		await applyMutation(tables, change("member.rename", { groupId: "g1", memberId: "jo", displayName: " Joanna" }), ME);
+		expect(members.map.get("jo")?.displayName).toBe("Joanna");
 	});
 
-	test("removing someone keeps the row and undoes their pending payments", async () => {
+	test("removing someone keeps their row, soft-deleted, and undoes their pending payments", async () => {
 		const { tables, members, entries } = await seeded();
-		await tables.entries.put([
-			serverEntry({
-				id: "p",
-				groupId: "g",
-				kind: "payment",
-				items: null,
-				paymentStatus: "pending",
-				shares: computeShares([{ id: "p", amountCents: 500, paidBy: "jo", splitAmong: ["me"] }]),
-			}),
-		]);
-		await applyMutation(tables, m({ type: "member.remove", groupId: "g", memberId: "jo" }), USER);
-		expect(members.get("jo")?.deletedAt).toBe(AT);
-		expect(entries.get("p")).toMatchObject({ paymentStatus: "undone", closedAt: AT });
+		await tables.entries.put([payment({ id: "p1" }), payment({ id: "p2", paymentStatus: "confirmed" })]);
+		await applyMutation(tables, change("member.remove", { groupId: "g1", memberId: "sam" }), ME);
+
+		expect(members.map.get("sam")).toMatchObject({ deletedAt: AT, role: "member" });
+		expect(entries.map.get("p1")).toMatchObject({ paymentStatus: "undone", closedAt: AT, updatedByMemberId: "sam" });
+		expect(entries.map.get("p2")?.paymentStatus).toBe("confirmed");
 	});
 
-	test("an owner who leaves hands the group to the full member who joined first", async () => {
-		const { tables, members, groups } = await seeded();
-		await applyMutation(tables, m({ type: "member.remove", groupId: "g", memberId: "me" }), USER);
-		expect(members.get("me")).toMatchObject({ deletedAt: AT, role: "member" });
-		expect(members.get("jo")?.role).toBe("owner");
-		expect(groups.get("g")?.deletedAt).toBeNull();
+	test("the owner leaving hands the group to the full member who joined first", async () => {
+		const { tables, members } = await seeded();
+		await tables.members.put([
+			serverMember({ id: "kim", groupId: "g1", userId: "user-3", role: "member", joinedAt: "2026-10-01T00:00:00Z" }),
+		]);
+		await applyMutation(tables, change("member.remove", { groupId: "g1", memberId: "alex" }), ME);
+
+		expect(members.map.get("alex")).toMatchObject({ role: "member", deletedAt: AT });
+		expect(members.map.get("kim")?.role).toBe("owner");
+		expect(members.map.get("sam")?.role).toBe("member");
 	});
 
 	test("the last full member leaving deletes the group", async () => {
 		const { tables, groups } = await seeded();
-		await applyMutation(tables, m({ type: "member.remove", groupId: "g", memberId: "jo" }), USER);
-		await applyMutation(tables, m({ type: "member.remove", groupId: "g", memberId: "me" }), USER);
-		expect(groups.get("g")?.deletedAt).toBe(AT);
+		await tables.members.put([serverMember({ id: "sam", groupId: "g1", userId: SAM_USER, role: "guest" })]);
+		await applyMutation(tables, change("member.remove", { groupId: "g1", memberId: "alex" }), ME);
+		expect(groups.map.get("g1")?.deletedAt).toBe(AT);
 	});
 });
 
-describe("applyMutation: bills", () => {
-	test("creating a bill stores it with its items and shares, added by you", async () => {
+describe("bills", () => {
+	test("adding a bill stores it with its items and shares, added by your member row", async () => {
 		const { tables, entries } = await seeded();
-		await applyMutation(tables, m({ type: "entry.create", groupId: "g", entryId: "e", ...bill }), USER);
-		expect(entries.get("e")).toMatchObject({
+		await applyMutation(tables, change("entry.create", { groupId: "g1", entryId: "e1", ...dinner }), ME);
+
+		expect(entries.map.get("e1")).toEqual({
+			id: "e1",
+			groupId: "g1",
 			kind: "expense",
 			description: "Dinner",
-			amountCents: 1000,
-			items,
-			shares: computeShares(items),
+			amountCents: 3000,
+			items: dinner.items,
+			entryDate: "2026-11-02",
+			notes: null,
+			category: "food",
 			paymentStatus: null,
-			createdByMemberId: "me",
-			updatedByMemberId: "me",
+			payerConfirmedAt: null,
+			receiverConfirmedAt: null,
+			confirmedAt: null,
+			closedAt: null,
+			closeNote: null,
+			createdByMemberId: "alex",
+			updatedByMemberId: "alex",
+			createdAt: AT,
+			updatedAt: AT,
+			deletedAt: null,
 			rowVersion: 0,
+			shares: dinner.shares,
 		});
 	});
 
-	test("updating replaces the bill whole, and restores a deleted one", async () => {
+	test("a bill create never overwrites the server's copy", async () => {
+		const { tables, entries } = await seeded();
+		await tables.entries.put([serverBill({ id: "e1", groupId: "g1", createdByMemberId: "sam", rowVersion: 5 })]);
+		await applyMutation(tables, change("entry.create", { groupId: "g1", entryId: "e1", ...dinner }), ME);
+		expect(entries.map.get("e1")).toMatchObject({ description: "Dinner", amountCents: 1000, rowVersion: 5 });
+	});
+
+	test("editing replaces the fields and shares, keeps the version, and restores a deleted bill", async () => {
 		const { tables, entries } = await seeded();
 		await tables.entries.put([
-			serverEntry({ id: "e", groupId: "g", updatedByMemberId: "jo", deletedAt: "2026-11-01T00:00:00Z" }),
-		]);
-		await applyMutation(tables, m({ type: "entry.update", groupId: "g", entryId: "e", baseVersion: 1, ...bill }), USER);
-		expect(entries.get("e")).toMatchObject({
-			description: "Dinner",
-			shares: computeShares(items),
-			updatedByMemberId: "me",
-			deletedAt: null,
-		});
-	});
-
-	test("deleting is soft", async () => {
-		const { tables, entries } = await seeded();
-		await tables.entries.put([serverEntry({ id: "e", groupId: "g" })]);
-		await applyMutation(tables, m({ type: "entry.delete", groupId: "g", entryId: "e", baseVersion: 1 }), USER);
-		expect(entries.get("e")).toMatchObject({ deletedAt: AT, updatedByMemberId: "me" });
-	});
-
-	test("resolving a conflict applies the final version and closes it", async () => {
-		const { tables, entries, conflicts } = await seeded();
-		await tables.entries.put([serverEntry({ id: "e", groupId: "g" })]);
-		await tables.conflicts.put([
-			{
-				id: "c",
-				groupId: "g",
-				entryId: "e",
-				baseVersion: 1,
-				base: null,
-				proposed: null,
-				proposedByMemberId: "jo",
-				createdAt: AT,
-				resolvedAt: null,
-				resolvedByMemberId: null,
-				resolution: null,
-				rowVersion: 2,
-			},
+			serverBill({ id: "e1", groupId: "g1", createdByMemberId: "sam", rowVersion: 4, deletedAt: AT }),
 		]);
 		await applyMutation(
 			tables,
-			m({
-				type: "conflict.resolve",
-				groupId: "g",
-				conflictId: "c",
-				entryId: "e",
+			change("entry.update", { groupId: "g1", entryId: "e1", baseVersion: 4, ...dinner }, LATER),
+			ME
+		);
+
+		expect(entries.map.get("e1")).toMatchObject({
+			description: "Dinner",
+			amountCents: 3000,
+			shares: dinner.shares,
+			createdByMemberId: "sam",
+			updatedByMemberId: "alex",
+			updatedAt: LATER,
+			deletedAt: null,
+			rowVersion: 4,
+		});
+	});
+
+	test("an edit carries the category; a bill without one has none", async () => {
+		const { tables, entries } = await seeded();
+		await tables.entries.put([serverBill({ id: "e1", groupId: "g1", createdByMemberId: "alex", category: "stay" })]);
+		await applyMutation(
+			tables,
+			change("entry.update", { groupId: "g1", entryId: "e1", baseVersion: 1, ...dinner }),
+			ME
+		);
+		expect(entries.map.get("e1")?.category).toBe("food");
+		await applyMutation(
+			tables,
+			change("entry.update", { groupId: "g1", entryId: "e1", baseVersion: 1, ...dinner, category: null }),
+			ME
+		);
+		expect(entries.map.get("e1")?.category).toBeNull();
+	});
+
+	test("deleting soft-deletes; payments can't be edited or deleted as bills", async () => {
+		const { tables, entries } = await seeded();
+		await tables.entries.put([
+			serverBill({ id: "e1", groupId: "g1", createdByMemberId: "sam" }),
+			payment({ id: "p1" }),
+		]);
+		await applyMutation(tables, change("entry.delete", { groupId: "g1", entryId: "e1", baseVersion: 1 }), ME);
+		await applyMutation(tables, change("entry.delete", { groupId: "g1", entryId: "p1", baseVersion: 1 }), ME);
+		await applyMutation(
+			tables,
+			change("entry.update", { groupId: "g1", entryId: "p1", baseVersion: 1, ...dinner }),
+			ME
+		);
+
+		expect(entries.map.get("e1")).toMatchObject({ deletedAt: AT, updatedByMemberId: "alex" });
+		expect(entries.map.get("p1")).toEqual(payment({ id: "p1" }));
+	});
+
+	test("changing a bill this device doesn't have does nothing", async () => {
+		const { tables, entries } = await seeded();
+		await applyMutation(
+			tables,
+			change("entry.update", { groupId: "g1", entryId: "nope", baseVersion: 0, ...dinner }),
+			ME
+		);
+		await applyMutation(tables, change("entry.delete", { groupId: "g1", entryId: "nope", baseVersion: 0 }), ME);
+		expect(entries.map.size).toBe(0);
+	});
+});
+
+describe("conflicts", () => {
+	const conflict: ConflictRow = {
+		id: "c1",
+		groupId: "g1",
+		entryId: "e1",
+		baseVersion: 1,
+		base: null,
+		proposed: null,
+		proposedByMemberId: "sam",
+		createdAt: AT,
+		resolvedAt: null,
+		resolvedByMemberId: null,
+		resolution: null,
+		rowVersion: 3,
+	};
+
+	test("resolving with a final version saves it and closes the conflict", async () => {
+		const { tables, entries, conflicts } = await seeded();
+		await tables.entries.put([serverBill({ id: "e1", groupId: "g1", createdByMemberId: "sam", rowVersion: 2 })]);
+		await tables.conflicts.put([conflict]);
+		await applyMutation(
+			tables,
+			change("conflict.resolve", {
+				groupId: "g1",
+				conflictId: "c1",
+				entryId: "e1",
+				resolution: "merged",
+				entry: dinner,
+			}),
+			ME
+		);
+
+		expect(entries.map.get("e1")).toMatchObject({ amountCents: 3000, updatedByMemberId: "alex", deletedAt: null });
+		expect(conflicts.map.get("c1")).toMatchObject({ resolvedAt: AT, resolvedByMemberId: "alex", resolution: "merged" });
+	});
+
+	test("resolving as deleted deletes the bill", async () => {
+		const { tables, entries } = await seeded();
+		await tables.entries.put([serverBill({ id: "e1", groupId: "g1", createdByMemberId: "sam" })]);
+		await tables.conflicts.put([conflict]);
+		await applyMutation(
+			tables,
+			change("conflict.resolve", {
+				groupId: "g1",
+				conflictId: "c1",
+				entryId: "e1",
 				resolution: "took_proposed",
 				entry: { deleted: true },
 			}),
-			USER
+			ME
 		);
-		expect(conflicts.get("c")).toMatchObject({ resolvedAt: AT, resolvedByMemberId: "me", resolution: "took_proposed" });
-		expect(entries.get("e")?.deletedAt).toBe(AT);
+		expect(entries.map.get("e1")?.deletedAt).toBe(AT);
 	});
-});
 
-describe("applyMutation: invites", () => {
-	test("creating an invite keeps its token on this device", async () => {
-		const { tables, invites, inviteTokens } = await seeded();
-		const token = "a".repeat(43);
+	test("a conflict already resolved is left alone", async () => {
+		const { tables, entries, conflicts } = await seeded();
+		const bill = serverBill({ id: "e1", groupId: "g1", createdByMemberId: "sam" });
+		const resolved = { ...conflict, resolvedAt: AT, resolvedByMemberId: "sam", resolution: "kept_current" as const };
+		await tables.entries.put([bill]);
+		await tables.conflicts.put([resolved]);
 		await applyMutation(
 			tables,
-			m({
-				type: "invite.create",
-				groupId: "g",
-				inviteId: "inv",
-				token,
-				claimMemberId: "sam",
-				expiresAt: "2026-11-16T09:30:00.000Z",
+			change("conflict.resolve", {
+				groupId: "g1",
+				conflictId: "c1",
+				entryId: "e1",
+				resolution: "merged",
+				entry: dinner,
 			}),
-			USER
+			ME
 		);
-		expect(invites.get("inv")).toMatchObject({ claimMemberId: "sam", createdBy: USER, revokedAt: null, rowVersion: 0 });
-		expect(inviteTokens.get("inv")).toEqual({ inviteId: "inv", groupId: "g", token });
-
-		await applyMutation(tables, m({ type: "invite.revoke", groupId: "g", inviteId: "inv" }), USER);
-		expect(invites.get("inv")?.revokedAt).toBe(AT);
+		expect(entries.map.get("e1")).toEqual(bill);
+		expect(conflicts.map.get("c1")).toEqual(resolved);
 	});
 });
 
-describe("applyMutation: payments", () => {
-	const record = (from: string, to: string) =>
-		m({
-			type: "payment.record",
-			groupId: "g",
-			entryId: "p",
-			fromMemberId: from,
-			toMemberId: to,
-			amountCents: 333,
+describe("invites", () => {
+	test("creating a link stores the invite and keeps its token on this device", async () => {
+		const { tables, invites, inviteTokens } = await seeded();
+		await applyMutation(
+			tables,
+			change("invite.create", {
+				groupId: "g1",
+				inviteId: "inv1",
+				token: "t".repeat(43),
+				claimMemberId: "jo",
+				expiresAt: null,
+			}),
+			ME
+		);
+
+		expect(invites.map.get("inv1")).toEqual({
+			id: "inv1",
+			groupId: "g1",
+			claimMemberId: "jo",
+			createdBy: ME,
+			createdAt: AT,
+			expiresAt: "2026-11-16T09:30:00.000Z",
+			revokedAt: null,
+			rowVersion: 0,
+		});
+		expect(inviteTokens.map.get("inv1")).toEqual({ inviteId: "inv1", groupId: "g1", token: "t".repeat(43) });
+	});
+
+	test("a link lasts at most 14 days, whatever expiresAt asks", async () => {
+		const { tables, invites } = await seeded();
+		const base = { groupId: "g1", token: "t".repeat(43), claimMemberId: null };
+		await applyMutation(
+			tables,
+			change("invite.create", { ...base, inviteId: "a", expiresAt: "2027-01-01T00:00:00Z" }),
+			ME
+		);
+		await applyMutation(
+			tables,
+			change("invite.create", { ...base, inviteId: "b", expiresAt: "2026-11-05T00:00:00Z" }),
+			ME
+		);
+		expect(invites.map.get("a")?.expiresAt).toBe("2026-11-16T09:30:00.000Z");
+		expect(invites.map.get("b")?.expiresAt).toBe("2026-11-05T00:00:00.000Z");
+	});
+
+	test("revoking a link", async () => {
+		const { tables, invites } = await seeded();
+		await applyMutation(
+			tables,
+			change("invite.create", {
+				groupId: "g1",
+				inviteId: "inv1",
+				token: "t".repeat(43),
+				claimMemberId: null,
+				expiresAt: null,
+			}),
+			ME
+		);
+		await applyMutation(tables, change("invite.revoke", { groupId: "g1", inviteId: "inv1" }, LATER), ME);
+		expect(invites.map.get("inv1")?.revokedAt).toBe(LATER);
+	});
+});
+
+describe("payments", () => {
+	const record = (fromMemberId: string, toMemberId: string, extra: Partial<MutationOf<"payment.record">> = {}) =>
+		change("payment.record", {
+			groupId: "g1",
+			entryId: "p1",
+			fromMemberId,
+			toMemberId,
+			amountCents: 500,
 			entryDate: "2026-11-02",
 			notes: null,
+			...extra,
 		});
 
-	test("a payment to someone who can answer waits for them", async () => {
+	test("paying someone with a login waits for them, with your side agreed", async () => {
 		const { tables, entries } = await seeded();
-		await applyMutation(tables, record("me", "jo"), USER);
-		expect(entries.get("p")).toMatchObject({
+		await applyMutation(tables, record("alex", "sam", { description: "  Train " }), ME);
+
+		expect(entries.map.get("p1")).toEqual({
+			id: "p1",
+			groupId: "g1",
 			kind: "payment",
-			description: "Payment",
+			description: "Train",
+			amountCents: 500,
 			items: null,
+			entryDate: "2026-11-02",
+			notes: null,
+			category: null,
 			paymentStatus: "pending",
 			payerConfirmedAt: AT,
 			receiverConfirmedAt: null,
 			confirmedAt: null,
-			createdByMemberId: "me",
-			shares: computeShares([{ id: "p", amountCents: 333, paidBy: "me", splitAmong: ["jo"] }]),
+			closedAt: null,
+			closeNote: null,
+			createdByMemberId: "alex",
+			updatedByMemberId: "alex",
+			createdAt: AT,
+			updatedAt: AT,
+			deletedAt: null,
+			rowVersion: 0,
+			shares: [
+				{ memberId: "sam", paidCents: 0, owedCents: 500, owedTo: { alex: 500 } },
+				{ memberId: "alex", paidCents: 500, owedCents: 0, owedTo: {} },
+			],
 		});
 	});
 
-	test("a payment from a name-only person counts at once", async () => {
+	test("recording one you received sets the receiver's side; no description means Payment", async () => {
 		const { tables, entries } = await seeded();
-		await applyMutation(tables, record("sam", "me"), USER);
-		expect(entries.get("p")).toMatchObject({ paymentStatus: "confirmed", receiverConfirmedAt: AT, confirmedAt: AT });
-	});
-
-	test("confirming, declining and undoing", async () => {
-		const { tables, entries } = await seeded();
-		const pending = serverEntry({
-			id: "p",
-			groupId: "g",
-			kind: "payment",
-			items: null,
+		await applyMutation(tables, record("sam", "alex", { description: " " }), ME);
+		expect(entries.map.get("p1")).toMatchObject({
+			description: "Payment",
 			paymentStatus: "pending",
-			payerConfirmedAt: "2026-11-01T00:00:00Z",
-			createdByMemberId: "jo",
-			shares: computeShares([{ id: "p", amountCents: 333, paidBy: "jo", splitAmong: ["me"] }]),
+			payerConfirmedAt: null,
+			receiverConfirmedAt: AT,
 		});
-
-		await tables.entries.put([pending]);
-		await applyMutation(tables, m({ type: "payment.confirm", groupId: "g", entryId: "p" }), USER);
-		expect(entries.get("p")).toMatchObject({ paymentStatus: "confirmed", receiverConfirmedAt: AT, confirmedAt: AT });
-
-		await tables.entries.put([pending]);
-		await applyMutation(tables, m({ type: "payment.decline", groupId: "g", entryId: "p", note: "  Not yet " }), USER);
-		expect(entries.get("p")).toMatchObject({ paymentStatus: "declined", closedAt: AT, closeNote: "Not yet" });
-
-		await tables.entries.put([pending]);
-		await applyMutation(tables, m({ type: "payment.undo", groupId: "g", entryId: "p" }), USER);
-		expect(entries.get("p")).toMatchObject({ paymentStatus: "undone", closedAt: AT });
 	});
 
-	test("answering a payment that isn't pending any more does nothing", async () => {
+	test("with someone who can't answer, it counts at once", async () => {
+		const { tables, entries, members } = await seeded();
+		await applyMutation(tables, record("alex", "jo"), ME);
+		expect(entries.map.get("p1")).toMatchObject({ paymentStatus: "confirmed", payerConfirmedAt: AT, confirmedAt: AT });
+
+		// Someone who left can't answer either.
+		await tables.members.put([{ ...members.map.get("sam")!, deletedAt: AT }]);
+		await applyMutation(tables, { ...record("sam", "alex"), entryId: "p2" }, ME);
+		expect(entries.map.get("p2")).toMatchObject({
+			paymentStatus: "confirmed",
+			receiverConfirmedAt: AT,
+			confirmedAt: AT,
+		});
+	});
+
+	test("between two name-only people, only confirmedAt is set", async () => {
 		const { tables, entries } = await seeded();
-		await tables.entries.put([
-			serverEntry({ id: "p", groupId: "g", kind: "payment", items: null, paymentStatus: "declined" }),
-		]);
-		await applyMutation(tables, m({ type: "payment.confirm", groupId: "g", entryId: "p" }), USER);
-		expect(entries.get("p")?.paymentStatus).toBe("declined");
+		await tables.members.put([serverMember({ id: "kim", groupId: "g1", userId: null, role: "member" })]);
+		await applyMutation(tables, record("jo", "kim"), ME);
+		expect(entries.map.get("p1")).toMatchObject({
+			paymentStatus: "confirmed",
+			payerConfirmedAt: null,
+			receiverConfirmedAt: null,
+			confirmedAt: AT,
+			createdByMemberId: "alex",
+		});
+	});
+
+	test("the other side confirms", async () => {
+		const { tables, entries } = await seeded();
+		await tables.entries.put([payment({ id: "p1" })]);
+		await applyMutation(tables, change("payment.confirm", { groupId: "g1", entryId: "p1" }, LATER), SAM_USER);
+		expect(entries.map.get("p1")).toMatchObject({
+			paymentStatus: "confirmed",
+			payerConfirmedAt: AT,
+			receiverConfirmedAt: LATER,
+			confirmedAt: LATER,
+			updatedByMemberId: "sam",
+		});
+	});
+
+	test("your own side can't confirm", async () => {
+		const { tables, entries } = await seeded();
+		await tables.entries.put([payment({ id: "p1" })]);
+		await applyMutation(tables, change("payment.confirm", { groupId: "g1", entryId: "p1" }), ME);
+		expect(entries.map.get("p1")).toEqual(payment({ id: "p1" }));
+	});
+
+	test("the other side declines with a note", async () => {
+		const { tables, entries } = await seeded();
+		await tables.entries.put([payment({ id: "p1" })]);
+		await applyMutation(
+			tables,
+			change("payment.decline", { groupId: "g1", entryId: "p1", note: "Not yet" }, LATER),
+			SAM_USER
+		);
+		expect(entries.map.get("p1")).toMatchObject({ paymentStatus: "declined", closedAt: LATER, closeNote: "Not yet" });
+	});
+
+	test("the decline note is stored as it arrives (the planner already stored it as SQL does)", async () => {
+		const { tables, entries } = await seeded();
+		await tables.entries.put([payment({ id: "p1" }), payment({ id: "p2" })]);
+		await applyMutation(tables, change("payment.decline", { groupId: "g1", entryId: "p1", note: "\tcash" }), SAM_USER);
+		await applyMutation(tables, change("payment.decline", { groupId: "g1", entryId: "p2", note: null }), SAM_USER);
+		expect(entries.map.get("p1")?.closeNote).toBe("\tcash");
+		expect(entries.map.get("p2")?.closeNote).toBeNull();
+	});
+
+	test("only whoever recorded it can undo it, while it waits", async () => {
+		const { tables, entries } = await seeded();
+		await tables.entries.put([payment({ id: "p1" })]);
+		await applyMutation(tables, change("payment.undo", { groupId: "g1", entryId: "p1" }), SAM_USER);
+		expect(entries.map.get("p1")?.paymentStatus).toBe("pending");
+
+		await applyMutation(tables, change("payment.undo", { groupId: "g1", entryId: "p1" }, LATER), ME);
+		expect(entries.map.get("p1")).toMatchObject({ paymentStatus: "undone", closedAt: LATER });
+	});
+
+	test("answering a payment that isn't pending does nothing", async () => {
+		const { tables, entries } = await seeded();
+		const confirmed = payment({ id: "p1", paymentStatus: "confirmed", confirmedAt: AT });
+		await tables.entries.put([confirmed]);
+		await applyMutation(tables, change("payment.decline", { groupId: "g1", entryId: "p1", note: null }), SAM_USER);
+		expect(entries.map.get("p1")).toEqual(confirmed);
+	});
+});
+
+describe("nudges", () => {
+	const nudge = (fields: Partial<MutationOf<"nudge.send">> = {}, at = AT) =>
+		change("nudge.send", { groupId: "g1", nudgeId: "n1", toMemberId: "sam", amountCents: 1000, ...fields }, at);
+
+	test("sending stores the nudge from me, at the device time, not yet synced", async () => {
+		const t = await seeded();
+		await applyMutation(t.tables, nudge(), ME);
+		expect(t.nudges.map.get("n1")).toEqual({
+			id: "n1",
+			groupId: "g1",
+			fromMemberId: "alex",
+			toMemberId: "sam",
+			amountCents: 1000,
+			createdAt: AT,
+			rowVersion: 0,
+		});
+	});
+
+	test("a nudge already here (the server's copy) wins", async () => {
+		const t = await seeded();
+		await applyMutation(t.tables, nudge(), ME);
+		await applyMutation(t.tables, nudge({ amountCents: 5 }, LATER), ME);
+		expect(t.nudges.map.get("n1")?.amountCents).toBe(1000);
+		expect(t.nudges.map.get("n1")?.createdAt).toBe(AT);
+	});
+
+	test("one the server would refuse does nothing here", async () => {
+		const t = await seeded();
+		await applyMutation(t.tables, nudge({ toMemberId: "alex" }), ME);
+		await applyMutation(t.tables, nudge({ toMemberId: "nobody" }), ME);
+		await applyMutation(t.tables, nudge({ amountCents: 0 }), ME);
+		await applyMutation(t.tables, nudge(), "someone-else");
+		expect(t.nudges.map.size).toBe(0);
 	});
 });

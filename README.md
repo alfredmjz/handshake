@@ -1,26 +1,38 @@
 # Handshake
 
-Track who owes who in your friend group, and plan trips together. No real money moves; Handshake
+Track who owes who in your friend group. No real money moves; Handshake
 only keeps the record. It works offline and syncs when you're back online.
 
 ## Quick start
 
 Needs [Bun](https://bun.sh) and Docker Desktop.
 
+Create `.env.local` (git-ignored) with these, taking the URL and publishable key from `bunx supabase status`:
+
+```
+VITE_SUPABASE_URL=http://127.0.0.1:55321
+VITE_SUPABASE_PUBLISHABLE_KEY=<publishable key>
+# Server only (the API function and `bun run test:api-db`); never prefix it with VITE_.
+HANDSHAKE_API_DATABASE_URL=postgresql://handshake_api:handshake_api_local@127.0.0.1:55322/postgres
+# Local auth emails go out through Resend (supabase/config.toml reads it).
+RESEND_API_KEY=re_…
+```
+
+Then:
+
 ```bash
 bun install
 bun run db:start
-cp .env.example .env.local
 ```
 
-Fill `.env.local` with the API URL and publishable key printed by `bunx supabase status`, then:
+Start Supabase through `bun run` (`db:start`, `db:reset`), which loads `.env.local` for it. Then:
 
 ```bash
 bun run dev
 ```
 
-Open http://localhost:5173, enter any email, and read the 6-digit code at http://127.0.0.1:55324
-(local emails never leave your machine).
+Open http://localhost:5173 and sign in with the 6-digit code emailed to you. Until a sending domain is
+verified in Resend, codes only reach the Resend account's own address.
 
 ## Checks
 

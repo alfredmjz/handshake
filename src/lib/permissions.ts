@@ -1,7 +1,3 @@
-// Who may do what: spec decision 8's matrix, the twin of private.may() and
-// private.allowed_when_completed() in SQL. tests/fixtures/permission-cases.ts holds the two in step.
-// Working out which action an intent is (your own entry or someone else's) is the caller's job.
-
 export type Role = "owner" | "member" | "guest";
 
 export type Action =
@@ -9,6 +5,7 @@ export type Action =
 	| "group.delete"
 	| "group.complete"
 	| "group.reopen"
+	| "group.recode"
 	| "member.add"
 	| "member.rename.self"
 	| "member.rename.others"
@@ -25,40 +22,46 @@ export type Action =
 	| "payment.record.own"
 	| "payment.record.others"
 	| "payment.respond"
-	| "payment.undo";
+	| "payment.undo"
+	| "nudge.send";
 
-const OWNER: Role[] = ["owner"];
-const FULL: Role[] = ["owner", "member"];
-const EVERYONE: Role[] = ["owner", "member", "guest"];
-
-const MATRIX: Record<Action, { roles: Role[]; whenCompleted: boolean }> = {
-	"group.rename": { roles: OWNER, whenCompleted: false },
-	"group.delete": { roles: OWNER, whenCompleted: true },
-	"group.complete": { roles: OWNER, whenCompleted: false },
-	"group.reopen": { roles: OWNER, whenCompleted: true },
-	"member.add": { roles: FULL, whenCompleted: false },
-	"member.rename.self": { roles: EVERYONE, whenCompleted: false },
-	"member.rename.others": { roles: OWNER, whenCompleted: false },
-	"member.remove.self": { roles: EVERYONE, whenCompleted: true },
-	"member.remove.others": { roles: OWNER, whenCompleted: false },
-	"entry.create": { roles: EVERYONE, whenCompleted: false },
-	"entry.update": { roles: FULL, whenCompleted: false },
-	"entry.delete.own": { roles: EVERYONE, whenCompleted: false },
-	"entry.delete.others": { roles: FULL, whenCompleted: false },
-	"conflict.resolve": { roles: FULL, whenCompleted: false },
-	"invite.create": { roles: FULL, whenCompleted: false },
-	"invite.revoke.own": { roles: FULL, whenCompleted: false },
-	"invite.revoke.others": { roles: OWNER, whenCompleted: false },
-	"payment.record.own": { roles: EVERYONE, whenCompleted: false },
-	"payment.record.others": { roles: FULL, whenCompleted: false },
-	"payment.respond": { roles: EVERYONE, whenCompleted: true },
-	"payment.undo": { roles: EVERYONE, whenCompleted: false },
+const ALLOWED: Record<Action, readonly Role[]> = {
+	"group.rename": ["owner"],
+	"group.delete": ["owner"],
+	"group.complete": ["owner"],
+	"group.reopen": ["owner"],
+	"group.recode": ["owner"],
+	"member.add": ["owner", "member"],
+	"member.rename.self": ["owner", "member", "guest"],
+	"member.rename.others": ["owner"],
+	"member.remove.self": ["owner", "member", "guest"],
+	"member.remove.others": ["owner"],
+	"entry.create": ["owner", "member", "guest"],
+	"entry.update": ["owner", "member"],
+	"entry.delete.own": ["owner", "member", "guest"],
+	"entry.delete.others": ["owner", "member"],
+	"conflict.resolve": ["owner", "member"],
+	"invite.create": ["owner", "member"],
+	"invite.revoke.own": ["owner", "member"],
+	"invite.revoke.others": ["owner"],
+	"payment.record.own": ["owner", "member", "guest"],
+	"payment.record.others": ["owner", "member"],
+	"payment.respond": ["owner", "member", "guest"],
+	"payment.undo": ["owner", "member", "guest"],
+	"nudge.send": ["owner", "member", "guest"],
 };
 
+const WHEN_COMPLETED: ReadonlySet<Action> = new Set<Action>([
+	"group.delete",
+	"group.reopen",
+	"member.remove.self",
+	"payment.respond",
+]);
+
 export function may(action: Action, role: Role): boolean {
-	return MATRIX[action]?.roles.includes(role) ?? false;
+	return ALLOWED[action]?.includes(role) ?? false;
 }
 
 export function allowedWhenCompleted(action: Action): boolean {
-	return MATRIX[action]?.whenCompleted ?? false;
+	return WHEN_COMPLETED.has(action);
 }

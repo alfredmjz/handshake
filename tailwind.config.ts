@@ -1,167 +1,138 @@
 import type { Config } from "tailwindcss";
 import animate from "tailwindcss-animate";
 
-// Same token names as Pholio (src/styles/globals.css there), so restyling is a matter of changing values.
+// shadcn/ui token names; the values live in src/styles/globals.css. Colours take Tailwind's alpha
+// modifier (`border-ink/10`), so translucent lines and washes come from the same tokens.
+const token = (name: string) => `hsl(var(--${name}) / <alpha-value>)`;
+
 const config: Config = {
-	darkMode: ["class"],
 	content: ["./index.html", "./src/**/*.{ts,tsx}"],
 	theme: {
 		extend: {
 			colors: {
-				background: "hsl(var(--background))",
-				border: {
-					DEFAULT: "hsl(var(--border))",
-					strong: "hsl(var(--border-strong))",
-				},
-				ring: "hsl(var(--ring))",
-				overlay: "hsl(var(--overlay))",
-				field: {
-					DEFAULT: "hsl(var(--field-bg))",
-					border: "hsl(var(--field-border))",
-					placeholder: "hsl(var(--field-placeholder))",
-					focus: "hsl(var(--field-focus))",
-				},
-				text: {
-					DEFAULT: "hsl(var(--text-primary))",
-					muted: "hsl(var(--text-muted))",
-					secondary: "hsl(var(--text-secondary))",
-				},
-				card: {
-					DEFAULT: "hsl(var(--card))",
-					foreground: "hsl(var(--card-foreground))",
-					muted: "hsl(var(--card-muted))",
-				},
-				primary: {
-					DEFAULT: "hsl(var(--primary))",
-					foreground: "hsl(var(--primary-foreground))",
-					hover: "hsl(var(--primary-hover))",
-					border: "hsl(var(--primary-border))",
-				},
-				secondary: {
-					DEFAULT: "hsl(var(--secondary))",
-					foreground: "hsl(var(--secondary-foreground))",
-					hover: "hsl(var(--secondary-hover))",
-					muted: "hsl(var(--secondary-muted))",
-					border: "hsl(var(--secondary-border))",
-				},
-				accent: {
-					DEFAULT: "hsl(var(--accent))",
-					foreground: "hsl(var(--accent-foreground))",
-					muted: "hsl(var(--accent-muted))",
-					playful: "hsl(var(--accent-playful))",
-				},
-				hover: {
-					DEFAULT: "hsl(var(--hover))",
-				},
-				muted: {
-					DEFAULT: "hsl(var(--card-muted))",
-					foreground: "hsl(var(--text-muted))",
-				},
-				popover: {
-					DEFAULT: "hsl(var(--popover))",
-					foreground: "hsl(var(--popover-foreground))",
-					muted: "hsl(var(--popover-muted))",
-				},
-				success: {
-					DEFAULT: "hsl(var(--success))",
-					foreground: "hsl(var(--success-foreground))",
-					muted: "hsl(var(--success-muted))",
-				},
-				warning: {
-					DEFAULT: "hsl(var(--warning))",
-					foreground: "hsl(var(--warning-foreground))",
-					muted: "hsl(var(--warning-muted))",
-				},
-				error: {
-					DEFAULT: "hsl(var(--error))",
-					foreground: "hsl(var(--error-foreground))",
-					muted: "hsl(var(--error-muted))",
-				},
-				info: {
-					DEFAULT: "hsl(var(--info))",
-					foreground: "hsl(var(--info-foreground))",
-					muted: "hsl(var(--info-muted))",
+				background: token("background"),
+				foreground: token("foreground"),
+				card: { DEFAULT: token("card"), foreground: token("card-foreground") },
+				popover: { DEFAULT: token("popover"), foreground: token("popover-foreground") },
+				primary: { DEFAULT: token("primary"), foreground: token("primary-foreground"), hover: token("primary-hover") },
+				secondary: { DEFAULT: token("secondary"), foreground: token("secondary-foreground") },
+				muted: { DEFAULT: token("muted"), foreground: token("muted-foreground") },
+				accent: { DEFAULT: token("accent"), foreground: token("accent-foreground") },
+				destructive: { DEFAULT: token("destructive"), foreground: token("destructive-foreground") },
+				border: { DEFAULT: "hsl(var(--ink) / 0.12)", strong: "hsl(var(--ink) / 0.22)" },
+				input: "hsl(var(--ink) / 0.22)",
+				ring: token("ring"),
+
+				// The page itself: paper, the ink drawn on it, a raised sheet and a sunken well.
+				paper: token("paper"),
+				ink: token("ink"),
+				raised: token("raised"),
+				sunken: token("sunken"),
+
+				// Money: owed to you is cobalt, you owe is tomato; settled and waiting for a handshake.
+				owed: token("owed"),
+				owe: { DEFAULT: token("owe"), mark: token("owe-mark") },
+				settled: token("settled"),
+				waiting: token("waiting"),
+
+				// One colour per category, used for covers, hand discs and chips.
+				category: {
+					food: token("category-food"),
+					drinks: token("category-drinks"),
+					stay: token("category-stay"),
+					travel: token("category-travel"),
+					groceries: token("category-groceries"),
+					fun: token("category-fun"),
+					none: token("category-none"),
 				},
 			},
 			borderRadius: {
 				lg: "var(--radius)",
-				md: "calc(var(--radius) - 2px)",
-				sm: "calc(var(--radius) - 4px)",
+				md: "calc(var(--radius) - 4px)",
+				sm: "calc(var(--radius) - 8px)",
+				xl: "calc(var(--radius) + 4px)",
+				sheet: "var(--radius-sheet)",
+				// A notebook: square at the spine, round at the fore-edge.
+				book: "var(--radius-book-spine) var(--radius-book-edge) var(--radius-book-edge) var(--radius-book-spine)",
 			},
 			fontFamily: {
-				sans: ["Instrument Sans Variable", "Instrument Sans", "ui-sans-serif", "system-ui", "sans-serif"],
+				sans: ["var(--font-sans)"],
+				display: ["var(--font-display)"],
 			},
-			fontSize: {
-				display: [
-					"var(--type-display-size)",
-					{
-						lineHeight: "var(--type-display-leading)",
-						letterSpacing: "var(--type-display-tracking)",
-						fontWeight: "var(--type-display-weight)",
-					},
-				],
-				h1: [
-					"var(--type-h1-size)",
-					{
-						lineHeight: "var(--type-h1-leading)",
-						letterSpacing: "var(--type-h1-tracking)",
-						fontWeight: "var(--type-h1-weight)",
-					},
-				],
-				h2: [
-					"var(--type-h2-size)",
-					{
-						lineHeight: "var(--type-h2-leading)",
-						letterSpacing: "var(--type-h2-tracking)",
-						fontWeight: "var(--type-h2-weight)",
-					},
-				],
-				h3: [
-					"var(--type-h3-size)",
-					{
-						lineHeight: "var(--type-h3-leading)",
-						letterSpacing: "var(--type-h3-tracking)",
-						fontWeight: "var(--type-h3-weight)",
-					},
-				],
-				h4: [
-					"var(--type-h4-size)",
-					{
-						lineHeight: "var(--type-h4-leading)",
-						letterSpacing: "var(--type-h4-tracking)",
-						fontWeight: "var(--type-h4-weight)",
-					},
-				],
-				"body-lg": ["var(--type-body-lg-size)", { lineHeight: "var(--type-body-lg-leading)" }],
-				body: ["var(--type-body-size)", { lineHeight: "var(--type-body-leading)" }],
-				"body-sm": ["var(--type-body-sm-size)", { lineHeight: "var(--type-body-sm-leading)" }],
-				"body-xs": ["var(--type-body-xs-size)", { lineHeight: "var(--type-body-xs-leading)" }],
-				label: [
-					"var(--type-label-size)",
-					{
-						lineHeight: "var(--type-label-leading)",
-						letterSpacing: "var(--type-label-tracking)",
-						fontWeight: "var(--type-label-weight)",
-					},
-				],
-				caption: ["var(--type-caption-size)", { lineHeight: "var(--type-caption-leading)" }],
-				control: [
-					"var(--type-control-size)",
-					{ lineHeight: "var(--type-control-leading)", fontWeight: "var(--type-control-weight)" },
-				],
-				value: ["var(--type-value-size)", { lineHeight: "var(--type-control-leading)" }],
-				stat: [
-					"var(--type-stat-size)",
-					{
-						lineHeight: "var(--type-stat-leading)",
-						letterSpacing: "var(--type-stat-tracking)",
-						fontWeight: "var(--type-stat-weight)",
-					},
-				],
+			spacing: {
+				control: "var(--space-control)",
+				stack: "var(--space-stack)",
+				section: "var(--space-section)",
+				panel: "var(--space-panel)",
+				row: "var(--space-row)",
+				page: "var(--space-page)",
+				spread: "var(--space-spread)",
+				tap: "var(--size-tap)",
+			},
+			height: {
+				control: "var(--size-control)",
+				"control-lg": "var(--size-control-lg)",
+				chip: "var(--size-chip)",
 			},
 			boxShadow: {
-				card: "var(--shadow-card)",
 				raised: "var(--shadow-raised)",
+				pop: "var(--shadow-pop)",
+				selected: "var(--shadow-selected)",
+			},
+			transitionTimingFunction: {
+				out: "var(--ease-out)",
+				"in-out": "var(--ease-in-out)",
+				spring: "var(--ease-spring)",
+				bounce: "var(--ease-bounce)",
+			},
+			transitionDuration: {
+				press: "var(--duration-press)",
+				quick: "var(--duration-quick)",
+				settle: "var(--duration-settle)",
+				moment: "var(--duration-moment)",
+			},
+			keyframes: {
+				// A new bill or payment is put down on the page: it drops in, tilted, and settles flat.
+				land: {
+					from: { opacity: "0", transform: "translateY(-0.75rem) rotate(-1.2deg) scale(0.98)" },
+					to: { opacity: "1", transform: "none" },
+				},
+				// What just changed keeps a cobalt wash until you've had a moment to see it.
+				"just-changed": {
+					"0%, 55%": { backgroundColor: "hsl(var(--primary) / 0.08)" },
+					"100%": { backgroundColor: "hsl(var(--primary) / 0)" },
+				},
+				"cover-open": { from: { transform: "rotateY(0deg)" }, to: { transform: "rotateY(-112deg)" } },
+				"cover-face-hide": { "0%, 30%": { opacity: "1" }, "42%, 100%": { opacity: "0" } },
+				"hand-in-left": {
+					"0%": { transform: "translateX(-46px)", opacity: "0" },
+					"40%, 100%": { transform: "translateX(0)", opacity: "1" },
+				},
+				"hand-in-right": {
+					"0%": { transform: "translateX(46px)", opacity: "0" },
+					"40%, 100%": { transform: "translateX(0)", opacity: "1" },
+				},
+				shake: {
+					"0%, 42%": { transform: "translateY(0)" },
+					"52%": { transform: "translateY(-3.5px)" },
+					"62%": { transform: "translateY(3px)" },
+					"72%": { transform: "translateY(-2.5px)" },
+					"82%": { transform: "translateY(2px)" },
+					"92%, 100%": { transform: "translateY(0)" },
+				},
+				"sign-off": { from: { clipPath: "inset(0 100% 0 0)" }, to: { clipPath: "inset(0 0 0 0)" } },
+				rise: { from: { opacity: "0", transform: "translateY(10px)" }, to: { opacity: "1", transform: "none" } },
+			},
+			animation: {
+				land: "land var(--duration-settle) var(--ease-bounce) both",
+				"just-changed": "just-changed 2.4s var(--ease-out) both",
+				"cover-open": "cover-open var(--duration-moment) var(--ease-in-out) .32s both",
+				"cover-face-hide": "cover-face-hide var(--duration-moment) linear .32s both",
+				"hand-in-left": "hand-in-left 1.9s cubic-bezier(.3,.7,.2,1) both",
+				"hand-in-right": "hand-in-right 1.9s cubic-bezier(.3,.7,.2,1) both",
+				shake: "shake 1.9s ease-in-out both",
+				"sign-off": "sign-off 1s ease-out 1.6s both",
+				rise: "rise .5s ease-out 1.1s both",
 			},
 		},
 	},
