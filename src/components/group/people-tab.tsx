@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Copy, Link2, MoreHorizontal, Plus, Share2, X } from "lucide-react";
+import { Copy, Link2, MoreHorizontal, Plus, X } from "lucide-react";
 import { toast } from "sonner";
 
 import { Face } from "@/components/art/face";
@@ -35,18 +35,6 @@ async function copyLink(url: string) {
 	} catch {
 		toast.error("Couldn't copy the link");
 	}
-}
-
-async function shareLink(url: string, groupName: string) {
-	if (typeof navigator.share === "function") {
-		try {
-			await navigator.share({ title: groupName, text: `Join ${groupName} on Handshake`, url });
-			return;
-		} catch (error) {
-			if (error instanceof DOMException && error.name === "AbortError") return;
-		}
-	}
-	await copyLink(url);
 }
 
 type Dialog =
@@ -268,16 +256,6 @@ function InviteListRow({ invite, data, onRevoke }: { invite: InviteRow; data: Gr
 						onClick={() => url && void copyLink(url)}
 					>
 						<Copy />
-					</Button>
-					<Button
-						size="icon-sm"
-						variant="ghost"
-						aria-label="Share link"
-						title="Share link"
-						disabled={!ready}
-						onClick={() => url && void shareLink(url, data.group?.name ?? "Handshake")}
-					>
-						<Share2 />
 					</Button>
 					{mayRevoke && (
 						<Button size="icon-sm" variant="ghost" aria-label="Revoke link" title="Revoke link" onClick={onRevoke}>

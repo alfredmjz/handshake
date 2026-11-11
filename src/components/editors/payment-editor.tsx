@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 
 import { EditorDialog } from "@/components/editor-dialog";
@@ -8,12 +8,13 @@ import { showRefusal } from "@/components/signed-in-layout";
 import { Field } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
 import { Stack } from "@/components/ui/stack";
+import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { useCurrentUser } from "@/lib/auth";
 import { paymentCountsAtOnce, pendingPaymentBetween, useCommit, type GroupState } from "@/lib/changes";
 import { useEntries, useGroupSummary } from "@/lib/entries";
 import { useGroup } from "@/lib/groups";
 import { useMembers, useMyMember } from "@/lib/members";
-import { parseAmount } from "@/lib/money";
+import { formatAmount, parseAmount } from "@/lib/money";
 import { allowedWhenCompleted, may } from "@/lib/permissions";
 
 export type PaymentEditorProps = {
@@ -52,6 +53,7 @@ export function PaymentEditor({ groupId, from, to, amountCents, open, onOpenChan
 	const [entryDate, setEntryDate] = useState(today);
 	const [notes, setNotes] = useState("");
 	const [saving, setSaving] = useState(false);
+	const amountRef = useRef<HTMLInputElement>(null);
 
 	const debt = summary?.debts.find((d) => d.fromMemberId === from && d.toMemberId === to)?.amountCents;
 	const defaultCents = amountCents ?? debt;
@@ -110,6 +112,14 @@ export function PaymentEditor({ groupId, from, to, amountCents, open, onOpenChan
 
 	const cents = parseAmount(amount);
 	const valid = cents !== null && cents >= 1 && /^\d{4}-\d{2}-\d{2}$/.test(entryDate) && !!payer && !!receiver;
+	// Paying back part of a debt is fine; the rest stays owed.
+	const part = !!debt && cents !== debt;
+	const left = debt && cents !== null && cents >= 1 && cents < debt ? debt - cents : null;
+	const chooseAll = () => debt && setAmount(amountText(debt));
+	const choosePart = () => {
+		setAmount("");
+		amountRef.current?.focus();
+	};
 
 	const save = async () => {
 		if (cents === null) return;
@@ -164,11 +174,12 @@ export function PaymentEditor({ groupId, from, to, amountCents, open, onOpenChan
 					label="Amount"
 					htmlFor="payment-amount"
 					hint={
-						countsAtOnce
+						(left ? `${formatAmount(left)} stays owed. ` : "") +
+						(countsAtOnce
 							? own
 								? `${name(other)} can't confirm, so it counts at once.`
 								: "Neither can confirm, so it counts at once."
-							: `Counts once ${name(other)} confirms.`
+							: `Counts once ${name(other)} confirms.`)
 					}
 				>
 					<div className="flex items-baseline gap-0.5">
@@ -176,6 +187,7 @@ export function PaymentEditor({ groupId, from, to, amountCents, open, onOpenChan
 							$
 						</span>
 						<Input
+							ref={amountRef}
 							id="payment-amount"
 							variant="amount"
 							inputMode="decimal"
@@ -187,6 +199,21 @@ export function PaymentEditor({ groupId, from, to, amountCents, open, onOpenChan
 						/>
 					</div>
 				</Field>
+				{!!debt && (
+					<ToggleGroup
+						type="single"
+						aria-label="How much"
+						value={part ? "part" : "all"}
+						onValueChange={(next) => (next === "all" ? chooseAll() : next === "part" ? choosePart() : undefined)}
+					>
+						<ToggleGroupItem value="all" className="px-4">
+							All {formatAmount(debt)}
+						</ToggleGroupItem>
+						<ToggleGroupItem value="part" className="px-4">
+							Part of it
+						</ToggleGroupItem>
+					</ToggleGroup>
+				)}
 			</Stack>
 			<div className="grid gap-section sm:grid-cols-[minmax(0,12rem)_minmax(0,1fr)]">
 				<Field label="Date" htmlFor="payment-date">
