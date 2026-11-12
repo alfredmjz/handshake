@@ -28,6 +28,8 @@ describe("permissions match the shared case table", () => {
 			"group.complete": true,
 			"group.reopen": true,
 			"group.recode": true,
+			"group.recolor": true,
+			"group.sticker": true,
 			"member.add": true,
 			"member.rename.self": true,
 			"member.rename.others": true,

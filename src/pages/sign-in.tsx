@@ -3,6 +3,7 @@ import { toast } from "sonner";
 
 import { HandshakeMark, ReceiptDoodle } from "@/components/art/doodles";
 import { Hand, type HandKind } from "@/components/art/hand";
+import { Underlined } from "@/components/art/marks";
 import { JoinCodeForm } from "@/components/join-code-form";
 import { Notice } from "@/components/notices";
 import { Button } from "@/components/ui/button";
@@ -186,7 +187,12 @@ export function SignInPage() {
 				{view === "welcome" ? (
 					<>
 						{ended && <Notice className="text-ink">{ended}</Notice>}
-						<h1 className="type-display text-balance">Who owes who, sorted.</h1>
+						<h1 className="type-display text-balance">
+							Who owes who,{" "}
+							<Underlined delay={0.6} tone="waiting">
+								sorted.
+							</Underlined>
+						</h1>
 						<p className="type-body-lg max-w-[19rem] text-primary-foreground/85">
 							Split costs with friends, see where everyone stands, and settle up in a tap.
 						</p>

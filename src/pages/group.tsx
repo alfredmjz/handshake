@@ -90,6 +90,7 @@ export function GroupPage() {
 				name={group.name}
 				note={group.note}
 				kind={kind}
+				sticker={group.coverSticker}
 				{...receiptOf(data)}
 				entriesHref={`/groups/${group.id}?tab=entries`}
 				printing={fromShelf}

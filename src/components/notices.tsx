@@ -12,7 +12,9 @@ export function EmptyState({
 	className,
 }: {
 	kind?: HandKind;
-	// In place of the hand: a hairline figure for a space that is waiting to fill.
+	// In place of the hand: a hairline figure for a space that is waiting to fill. Every figure gets the same frame,
+	// as wide as the tab and one height, so an empty tab looks the same whichever it is; a figure fills its height
+	// (h-full), or the whole frame if it can draw at any width.
 	art?: ReactNode;
 	title: ReactNode;
 	action?: ReactNode;
@@ -20,8 +22,8 @@ export function EmptyState({
 }) {
 	return (
 		<div className={cn("flex flex-col items-center gap-stack py-section text-center", className)}>
-			{art ?? <Hand kind={kind} size={112} />}
-			<p className="type-body max-w-xs text-muted-foreground">{title}</p>
+			{art ? <div className="flex h-56 w-full justify-center">{art}</div> : <Hand kind={kind} size={112} />}
+			<p className="type-hand-lg max-w-xs text-balance">{title}</p>
 			{action}
 		</div>
 	);

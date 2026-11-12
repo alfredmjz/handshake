@@ -20,7 +20,7 @@ export function EntriesTab({ data }: { data: GroupData }) {
 	if (visible.length === 0) {
 		return (
 			<EmptyState
-				art={<Plot play intensity={0.6} aria-label="" aria-hidden className="w-48" />}
+				art={<Plot intensity={0.75} aria-label="" aria-hidden className="h-full" />}
 				title="No expenses yet."
 			/>
 		);

@@ -8,6 +8,7 @@
         "@capacitor/core": "^8",
         "@fontsource-variable/funnel-display": "^5.3.0",
         "@fontsource-variable/funnel-sans": "^5.3.0",
+        "@fontsource-variable/shantell-sans": "^5.3.0",
         "@lucasmarkes/hairline": "^0.5.1",
         "@radix-ui/react-alert-dialog": "^1.2.1",
         "@radix-ui/react-checkbox": "^1.4.1",
@@ -24,6 +25,7 @@
         "@supabase/supabase-js": "^2",
         "class-variance-authority": "^0.7.1",
         "clsx": "^2.1.1",
+        "country-flag-emoji-polyfill": "^0.1.10",
         "dexie": "^4",
         "dexie-react-hooks": "^4.4.0",
         "lucide-react": "^1.66.0",
@@ -314,6 +316,8 @@
     "@fontsource-variable/funnel-display": ["@fontsource-variable/funnel-display@5.3.0", "", {}, "sha512-o/12lyrfflx5QAQFa+hAl0uBeWoBUAm5w71j+KssBseo++XJT3tnveDSg5IAnAdiclQHfFuEZiL5Wn2BjuFxtw=="],
 
     "@fontsource-variable/funnel-sans": ["@fontsource-variable/funnel-sans@5.3.0", "", {}, "sha512-NOgHy3KWMAJdl33XSESit33nI8vlFZh8/0E3tLD7z5jJA5gQoLeUkFcZtxehVVkyYpAZ747tF8O/kAHXXa96ZA=="],
+
+    "@fontsource-variable/shantell-sans": ["@fontsource-variable/shantell-sans@5.3.0", "", {}, "sha512-FPdHvSi6cngE/DMVCm7Xlls70U0b4/NMJLlcAPvVoq6eot1X8tNOZMRc22Rh9KoAfmmBz7yjsSXvpsYmkhXXVQ=="],
 
     "@ionic/cli-framework-output": ["@ionic/cli-framework-output@2.2.8", "", { "dependencies": { "@ionic/utils-terminal": "2.3.5", "debug": "^4.0.0", "tslib": "^2.0.1" } }, "sha512-TshtaFQsovB4NWRBydbNFawql6yul7d5bMiW1WYYf17hd99V6xdDdk3vtF51bw6sLkxON3bDQpWsnUc9/hVo3g=="],
 
@@ -660,6 +664,8 @@
     "cookie": ["cookie@1.1.1", "", {}, "sha512-ei8Aos7ja0weRpFzJnEA9UHJ/7XQmqglbRwnf2ATjcB9Wq874VKH9kfjjirM6UhU2/E5fFYadylyhFldcqSidQ=="],
 
     "core-js-compat": ["core-js-compat@3.51.0", "", { "dependencies": { "browserslist": "^4.29.3" } }, "sha512-52r6fkXgxv4GLMjmFcMWRx7X9bw071xTTdrDcdyPGRqU2oE+9pCG0bAOMifSBdLw0JRBZKEF0q3B55qPlLuE8g=="],
+
+    "country-flag-emoji-polyfill": ["country-flag-emoji-polyfill@0.1.10", "", {}, "sha512-5O50p2mq/d8+4AfHz3monRQaBA4TIQ0XcKqJUhCYR6SMsLqlO4m8f87og6R1D68Z1sNXGkjLkcEccuzC6T9i5g=="],
 
     "cross-spawn": ["cross-spawn@7.0.6", "", { "dependencies": { "path-key": "^3.1.0", "shebang-command": "^2.0.0", "which": "^2.0.1" } }, "sha512-uV2QOWP2nWzsy2aMp8aRibhi9dlzF5Hgh5SHaB9OiTGEyDTiJJyx0uy51QXdyWbtAHNua4XJzUKca3OzKUd3vA=="],
 

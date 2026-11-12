@@ -275,6 +275,8 @@ by someone else is not replayed on top; the server turns it into a conflict when
 | `group.delete`                                            | ✓     |        |       | ✓                            |
 | `group.complete`                                          | ✓     |        |       |                              |
 | `group.reopen`                                            | ✓     |        |       | ✓ (only then)                |
+| `group.recolor` (the cover's colour)                      | ✓     | ✓      | ✓     |                              |
+| `group.sticker` (the cover's sticker)                     | ✓     | ✓      | ✓     |                              |
 | `member.add` (by name)                                    | ✓     | ✓      |       |                              |
 | `member.rename.self`                                      | ✓     | ✓      | ✓     |                              |
 | `member.rename.others`                                    | ✓     |        |       |                              |
@@ -459,14 +461,18 @@ Decided 2026-11-10.
 ### 15. Pholio is authorised with a connection token
 
 - **Chosen Solution:**
-  - In Handshake, **Settings → Connected apps → Connect an app**, the person names the token ("Pholio")
-    and gets it **once**: `hsk_` + 32 random bytes in base64url (43 characters). They paste it into Pholio.
+  - A token is `hsk_` + 32 random bytes in base64url (43 characters), named ("Pholio") and shown **once**.
+  - **Pholio makes it** (owner, 2026-11-12). Pholio connects to Handshake, not the other way round, so
+    Handshake's Settings has no Connected apps. Pholio signs the person in to Handshake's auth (the same 6-digit
+    email code, with Handshake's public URL and anon key), calls `create_api_token`, keeps the token on its
+    server and signs that session out. The steps are in `docs/api-v1.md` (Authentication).
   - The server stores only its SHA-256 (`api_tokens.token_hash`), plus the name, the scope (`read`),
     `last_used_at` and `revoked_at`. Tokens don't expire on their own; the person revokes them. At most
     10 live tokens per person.
   - Pholio sends `Authorization: Bearer hsk_…`. A token sees exactly what its owner sees, read-only.
   - Creating, listing and revoking tokens are online-only functions (`create_api_token`,
-    `list_api_tokens`, `revoke_api_token`) called through `supabase-transport.ts`, like joining.
+    `list_api_tokens`, `revoke_api_token`), called by Pholio while signed in to Handshake. The Handshake app
+    doesn't call them.
   - Guests can't create tokens.
 - **Why:** simple, revocable, nothing secret stored, and no Pholio-specific code in Handshake.
 - **Later:** OAuth 2.1 with PKCE ("Sign in with Handshake" from Pholio), so nobody copies a token. The
@@ -489,6 +495,9 @@ Decided 2026-11-10.
     `confirmed` once both agree, or `declined` / `undone` if it never happened.
   - Either side can start (`payment.record`): the payer ("I paid Y") or the receiver ("X paid me"), for
     any positive amount, defaulting to the whole debt. Starting counts as that side's confirmation.
+  - **The receiver settles alone** (owner, 2026-11-11, migration 014): a payment the receiver records is
+    `confirmed` at once, with only `receiver_confirmed_at` set. The person who is owed saying they were paid
+    is enough; the payer is not asked. A payment the payer records still waits for the receiver.
   - The other side answers with `payment.confirm` or `payment.decline` (with an optional note up to 200
     characters). The starter can `payment.undo` while it is pending. Whichever answer reaches the server
     first wins; a later one gets `HS409`.
@@ -562,7 +571,16 @@ Decided 2026-11-10.
 
 `groups` gains `completed_at TIMESTAMPTZ NULL` and `completed_by_member_id UUID NULL → group_members`, and
 (010) `note TEXT NULL`: the optional second line on the group's cover ("Tokyo and Kyoto, April"), written by
-the owner, trimmed, 1–120 characters; blank is stored as NULL.
+the owner, trimmed, 1–120 characters; blank is stored as NULL. (015) `cover_color TEXT NULL`: the cover's colour, a
+key on the colour board (`h0s0` to `h17s4`: hue column, shade row), shared with everyone in the group and set by
+`group.recolor`, which anyone in the group may send (owner, member or guest), not in a completed group. NULL is the
+default the devices work out from the group's id, so no two books on a shelf share a colour unless someone chose it.
+(016) `cover_sticker TEXT NULL`: what sits on the cover above the name, shared and set the same way by
+`group.sticker`. One of the hand drawings (`hand:travel`), one emoji (`emoji:🇯🇵`), or a picture someone
+uploaded, shrunk on their device to at most 256px and kept inline as a PNG, JPEG or WebP data URL
+(`data:image/webp;base64,…`) so it syncs and works offline like the rest of the row; at most 120,000
+characters, and never SVG. NULL shows the hand of what the group is mostly for. The server checks the three
+shapes; only the device can tell that an emoji is one emoji (`src/lib/cover-stickers.ts`).
 
 `group_members` changes:
 
@@ -705,6 +723,8 @@ shares, `(entry_id) WHERE resolved_at IS NULL` on conflicts.
 | `group.delete`     | `groupId`                                                                                                     | `group.delete`                                    |
 | `group.complete`   | `groupId`                                                                                                     | `group.complete`                                  |
 | `group.reopen`     | `groupId`                                                                                                     | `group.reopen`                                    |
+| `group.recolor`    | `groupId, color` (015; a key on the colour board, or null for the default)                                    | `group.recolor`                                   |
+| `group.sticker`    | `groupId, sticker` (016; a hand, an emoji or a small picture, or null for the default)                        | `group.sticker`                                   |
 | `entry.create`     | `entryId, groupId, description, amountCents, entryDate, notes, items, shares[]`; `category` optional (bills)  | `entry.create`                                    |
 | `entry.update`     | Same as `entry.create`, plus `baseVersion` (bills only)                                                       | `entry.update`                                    |
 | `entry.delete`     | `entryId, groupId, baseVersion` (bills only)                                                                  | `entry.delete.own` or `.others`                   |
@@ -922,9 +942,12 @@ people alphabetically.
    the group as Gus; one that doesn't open anything: "This code doesn't work".
 8. **Guest banner.** On every screen for guests: "You're a guest. When the group is completed, guests
    lose access. Add your email to keep it", which opens the email and code steps.
-9. **Settings.** **Connected apps:** your tokens (name, created, last used), **Connect an app** (name it,
-   then the token is shown once with Copy and "You won't see this again"), and Revoke. Online only.
-   **Delete account:** the dialog from decision 19, naming any open debts. Online only.
+9. **Settings.** **Name:** what you go by, kept on the account (`display_name` in its metadata) for groups you
+   start or join from then on, and changed in each open group you're in (one `member.rename` each; a group where
+   someone already has that name keeps the old one, and says so). **Email** (not for guests): the new address, then
+   the 6-digit code sent to each address (`double_confirm_changes`). **Delete account:** the dialog from
+   decision 19, naming any open debts. All online only. A guest also sees their code. Sign out is in the account
+   menu.
 10. **Settle up** (everyone; completing is the owner's). "3 of 5 settled" at the top. One row per person
     with their state (Settled, Owes $20.00, Is owed $40.00, Waiting for confirmation); tapping a row lists
     their debts. Below, a card per payment that involves you, with **Shake on it**. At the bottom, for the
@@ -992,7 +1015,6 @@ Slice 8, the group chat and nudges, follows the MVP (`docs/chat-spec.md`).
      functions, `api.v1_*` functions.
    - `api/v1/[...path].ts`, `src/server/api-v1/*`, `vercel.json` and service-worker changes, against the
      contract in `docs/api-v1.md` and `docs/api-v1.openapi.yaml`.
-   - Settings → Connected apps.
    - Tests: `supabase/tests/api.test.sql`, `tests/api/v1.handler.test.ts` (handler against the memory store),
      `tests/api/v1.contract.test.ts` (responses against the OpenAPI document), `tests/api/postgres-store.test.ts`
      (opt-in, against the local database).
@@ -1109,7 +1131,7 @@ By hand, at 375px and 1440px:
       Completed, read-only, with the guest's name still on their bills.
 - [ ] Delete an account that owes money: the dialog names the debt; the others then see that person as
       name-only and can record a payment with them alone.
-- [ ] Create a token in Connected apps, call `GET /api/v1/payments` with it, revoke it, and get 401.
+- [ ] Create a token (`create_api_token`), call `GET /api/v1/payments` with it, revoke it, and get 401.
 
 `bun run typecheck`, `bun test`, `bun run test:db` and `bun run build` all exit 0 for each slice.
 

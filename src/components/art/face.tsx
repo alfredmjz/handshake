@@ -27,12 +27,6 @@ function useLook(seed: string) {
 	return { look: LOOKS[slot % LOOKS.length], tint: TINTS[Math.floor(slot / LOOKS.length) % TINTS.length] };
 }
 
-// The disc colour a seed hashes to, for things that should match a person's face outside a group.
-export function faceTint(seed: string) {
-	const slot = slotOf(seed);
-	return `hsl(var(--category-${TINTS[Math.floor(slot / LOOKS.length) % TINTS.length]}))`;
-}
-
 // The disc colour of a person's face as drawn here: their slot inside a group's FaceSlots, else the seed's.
 export function useFaceTint(seed: string) {
 	return `hsl(var(--category-${useLook(seed).tint}))`;

@@ -29,7 +29,9 @@ const ListRow = React.forwardRef<HTMLElement, ListRowProps>(
 			<>
 				{leading && <span className="flex shrink-0 items-center">{leading}</span>}
 				<span className="flex min-w-0 flex-1 flex-col gap-0.5">
-					<span className="type-body truncate font-semibold">{title}</span>
+					<span className="type-body truncate font-semibold">
+						<span className="marker marker-hover">{title}</span>
+					</span>
 					{subtitle && <span className="type-label truncate text-muted-foreground">{subtitle}</span>}
 				</span>
 				{trailing && <span className="flex shrink-0 flex-col items-end gap-0.5 text-right">{trailing}</span>}
@@ -57,7 +59,7 @@ ListRow.displayName = "ListRow";
 
 // A small heading over a run of rows: a day, "Everyone else", "Completed".
 function ListHeading({ className, ...props }: React.HTMLAttributes<HTMLHeadingElement>) {
-	return <h2 className={cn("type-label pb-1 pt-stack font-medium text-muted-foreground", className)} {...props} />;
+	return <h2 className={cn("type-hand pb-1 pt-stack text-ink", className)} {...props} />;
 }
 
 export { List, ListRow, ListHeading };

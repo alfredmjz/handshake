@@ -1,44 +1,27 @@
-import { useCallback, useEffect, useState } from "react";
-import { Copy, Trash2 } from "lucide-react";
+import { useState } from "react";
+import { Trash2 } from "lucide-react";
 import { toast } from "sonner";
 
 import { ConfirmDialog } from "@/components/confirm-dialog";
 import { EditorDialog } from "@/components/editor-dialog";
+import { NameDialog } from "@/components/group/name-dialog";
 import { MyGuestCodes } from "@/components/guest-code";
 import { useOpenDebts } from "@/components/my-balances";
 import { Notice } from "@/components/notices";
 import { Screen, ScreenHeader, Section } from "@/components/screen";
 import { Button } from "@/components/ui/button";
-import {
-	Dialog,
-	DialogContent,
-	DialogDescription,
-	DialogFooter,
-	DialogHeader,
-	DialogTitle,
-} from "@/components/ui/dialog";
 import { Field } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
 import { List, ListRow } from "@/components/ui/list";
-import { deleteMyAccount, signOut, useCurrentUser } from "@/lib/auth";
+import { changeName, deleteMyAccount, finishEmailChange, startEmailChange, useCurrentUser } from "@/lib/auth";
+import { useCommit } from "@/lib/changes";
+import { myOpenMemberships } from "@/lib/members";
 import { formatAmount } from "@/lib/money";
 import { useOnline } from "@/lib/online";
 import { describeDebt } from "@/lib/shell-view";
-import {
-	createApiToken,
-	listApiTokens,
-	revokeApiToken,
-	TransportError,
-	type ApiToken,
-	type NewApiToken,
-} from "@/lib/sync/supabase-transport";
-import { byText } from "@/lib/utils";
+import { TransportError } from "@/lib/sync/supabase-transport";
 
 const NEEDS_CONNECTION = "Needs a connection";
-
-function shortDate(iso: string) {
-	return new Date(iso).toLocaleDateString(undefined, { day: "numeric", month: "short", year: "numeric" });
-}
 
 function problem(error: unknown) {
 	return error instanceof TransportError && error.code === "network"
@@ -48,160 +31,164 @@ function problem(error: unknown) {
 			: undefined;
 }
 
-function ConnectedApps() {
+function listOf(names: string[]) {
+	return names.length < 2 ? names.join("") : `${names.slice(0, -1).join(", ")} and ${names[names.length - 1]}`;
+}
+
+// Your name, kept on the account for groups from now on, and changed in each open group you're in.
+function NameRow() {
+	const user = useCurrentUser();
 	const online = useOnline();
-	const [tokens, setTokens] = useState<ApiToken[] | null>(null);
-	const [failed, setFailed] = useState(false);
-	const [naming, setNaming] = useState(false);
-	const [name, setName] = useState("");
-	const [created, setCreated] = useState<NewApiToken | null>(null);
-	const [revoking, setRevoking] = useState<ApiToken | null>(null);
+	const commit = useCommit();
+	const [open, setOpen] = useState(false);
 
-	const load = useCallback(async () => {
+	async function save(name: string) {
 		try {
-			setTokens(await listApiTokens());
-			setFailed(false);
-		} catch {
-			setFailed(true);
-		}
-	}, []);
-
-	useEffect(() => {
-		if (online) void load();
-	}, [online, load]);
-
-	async function create() {
-		try {
-			const made = await createApiToken(name.trim());
-			setNaming(false);
-			setName("");
-			setCreated(made);
-			void load();
+			await changeName(name);
 		} catch (error) {
-			toast.error("Couldn't connect the app", { description: problem(error) });
+			toast.error("Couldn't change your name", { description: problem(error) });
+			return false;
 		}
-	}
-
-	async function revoke(token: ApiToken) {
-		try {
-			await revokeApiToken(token.id);
-			setRevoking(null);
-			void load();
-		} catch (error) {
-			toast.error("Couldn't revoke it", { description: problem(error) });
+		const kept: string[] = [];
+		for (const m of await myOpenMemberships(user.id)) {
+			if (m.displayName === name) continue;
+			const plan = await commit({ type: "renamePerson", groupId: m.groupId, memberId: m.memberId, displayName: name });
+			if (!plan.ok) kept.push(m.groupName);
 		}
+		if (kept.length > 0)
+			toast.success("Name changed", {
+				description: `${listOf(kept)} kept your old name: someone there already goes by ${name}.`,
+			});
+		else toast.success("Name changed");
+		return true;
 	}
-
-	async function copy(text: string) {
-		let copied = false;
-		try {
-			await navigator.clipboard.writeText(text);
-			copied = true;
-		} catch {
-			// Falls back to selecting the text, for browsers that refuse the clipboard API.
-			const field = document.createElement("textarea");
-			field.value = text;
-			field.style.position = "fixed";
-			field.style.opacity = "0";
-			document.body.appendChild(field);
-			field.select();
-			copied = document.execCommand("copy");
-			field.remove();
-		}
-		if (copied) toast.success("Copied");
-		else toast.error("Couldn't copy. Select the token and copy it by hand.");
-	}
-
-	const sorted = [...(tokens ?? [])].sort(byText((t) => t.name));
 
 	return (
-		<Section
-			title="Connected apps"
-			action={
-				<Button size="sm" disabled={!online} onClick={() => setNaming(true)}>
-					Connect an app
-				</Button>
-			}
-		>
-			{!online ? (
-				<Notice tone="waiting">{NEEDS_CONNECTION}</Notice>
-			) : failed ? (
-				<Notice
-					tone="waiting"
-					action={
-						<Button size="sm" variant="outline" onClick={() => void load()}>
-							Try again
-						</Button>
-					}
-				>
-					Couldn't load your apps.
-				</Notice>
-			) : tokens && sorted.length === 0 ? (
-				<p className="type-body text-muted-foreground">No apps connected. Connect one to let it read your balances.</p>
-			) : (
-				<List>
-					{sorted.map((t) => (
-						<ListRow
-							key={t.id}
-							title={t.name}
-							subtitle={`Created ${shortDate(t.createdAt)} · ${t.lastUsedAt ? `Last used ${shortDate(t.lastUsedAt)}` : "Never used"}`}
-							trailing={
-								<Button size="sm" variant="outline" onClick={() => setRevoking(t)}>
-									Revoke
-								</Button>
-							}
-						/>
-					))}
-				</List>
-			)}
-
-			<EditorDialog
-				open={naming}
-				onOpenChange={setNaming}
-				title="Connect an app"
-				description="Name it so you know which app it is. It can read, never change."
-				submitLabel="Create token"
-				canSubmit={name.trim().length > 0 && online}
-				onSubmit={create}
-			>
-				<Field label="Name" htmlFor="token-name" error={online ? undefined : NEEDS_CONNECTION}>
-					<Input
-						id="token-name"
-						placeholder="Pholio"
-						maxLength={60}
-						autoFocus
-						value={name}
-						onChange={(e) => setName(e.target.value)}
-					/>
-				</Field>
-			</EditorDialog>
-
-			<Dialog open={!!created} onOpenChange={(open) => !open && setCreated(null)}>
-				<DialogContent>
-					<DialogHeader>
-						<DialogTitle>{created?.name} is connected</DialogTitle>
-						<DialogDescription>Paste this token into the app. You won't see this again.</DialogDescription>
-					</DialogHeader>
-					<code className="type-body-sm break-all rounded-lg bg-sunken p-panel select-all">{created?.token}</code>
-					<DialogFooter>
-						<Button variant="outline" onClick={() => created && void copy(created.token)}>
-							<Copy aria-hidden /> Copy
-						</Button>
-						<Button onClick={() => setCreated(null)}>Done</Button>
-					</DialogFooter>
-				</DialogContent>
-			</Dialog>
-
-			<ConfirmDialog
-				open={!!revoking}
-				onOpenChange={(open) => !open && setRevoking(null)}
-				title={`Revoke ${revoking?.name ?? "this app"}?`}
-				description="It stops working at once. You can connect it again later."
-				confirmLabel="Revoke"
-				tone="destructive"
-				onConfirm={() => (revoking ? revoke(revoking) : undefined)}
+		<>
+			<ListRow
+				title={user.name}
+				subtitle="Name"
+				trailing={
+					<Button size="sm" variant="secondary" disabled={!online} onClick={() => setOpen(true)}>
+						Change
+					</Button>
+				}
 			/>
-		</Section>
+			<NameDialog
+				open={open}
+				onOpenChange={setOpen}
+				title="Your name"
+				submitLabel="Save name"
+				initial={user.name}
+				onSave={save}
+			/>
+		</>
+	);
+}
+
+// Moving the account to another email: a code to the new address, and one to the current address so both agree.
+function EmailRow() {
+	const user = useCurrentUser();
+	const online = useOnline();
+	const [open, setOpen] = useState(false);
+	const [step, setStep] = useState<"email" | "codes">("email");
+	const [email, setEmail] = useState("");
+	const [currentCode, setCurrentCode] = useState("");
+	const [newCode, setNewCode] = useState("");
+	const [busy, setBusy] = useState(false);
+
+	const reset = (next: boolean) => {
+		setOpen(next);
+		if (next) return;
+		setStep("email");
+		setEmail("");
+		setCurrentCode("");
+		setNewCode("");
+	};
+	const valid = /^\S+@\S+\.\S+$/.test(email.trim()) && email.trim().toLowerCase() !== user.email.toLowerCase();
+	const codesIn = /^\d{6}$/.test(currentCode.trim()) && /^\d{6}$/.test(newCode.trim());
+
+	async function submit() {
+		setBusy(true);
+		try {
+			if (step === "email") {
+				if ((await startEmailChange(email)) === "code-sent") setStep("codes");
+				else {
+					toast.success("Email changed");
+					reset(false);
+				}
+			} else {
+				await finishEmailChange({ currentEmail: user.email, currentCode, newEmail: email, newCode });
+				toast.success("Email changed", { description: `Sign in with ${email.trim()} from now on.` });
+				reset(false);
+			}
+		} catch (error) {
+			toast.error(step === "email" ? "Couldn't send the codes" : "That didn't work", { description: problem(error) });
+		} finally {
+			setBusy(false);
+		}
+	}
+
+	return (
+		<>
+			<ListRow
+				title={user.email}
+				subtitle="Email"
+				trailing={
+					<Button size="sm" variant="secondary" disabled={!online} onClick={() => setOpen(true)}>
+						Change
+					</Button>
+				}
+			/>
+			<EditorDialog
+				open={open}
+				onOpenChange={reset}
+				title="Your email"
+				description={
+					step === "email" ? "You'll sign in with the new one." : "Each address got a 6-digit code. Enter both."
+				}
+				submitLabel={busy ? "Working…" : step === "email" ? "Send codes" : "Change email"}
+				canSubmit={online && !busy && (step === "email" ? valid : codesIn)}
+				onSubmit={submit}
+			>
+				{step === "email" ? (
+					<Field label="New email" htmlFor="new-email" error={online ? undefined : NEEDS_CONNECTION}>
+						<Input
+							id="new-email"
+							type="email"
+							autoComplete="email"
+							autoFocus
+							value={email}
+							onChange={(e) => setEmail(e.target.value)}
+						/>
+					</Field>
+				) : (
+					<>
+						<Field label={`Code sent to ${user.email}`} htmlFor="current-code">
+							<Input
+								id="current-code"
+								inputMode="numeric"
+								autoComplete="one-time-code"
+								maxLength={6}
+								autoFocus
+								value={currentCode}
+								onChange={(e) => setCurrentCode(e.target.value)}
+							/>
+						</Field>
+						<Field label={`Code sent to ${email.trim()}`} htmlFor="new-code">
+							<Input
+								id="new-code"
+								inputMode="numeric"
+								autoComplete="one-time-code"
+								maxLength={6}
+								value={newCode}
+								onChange={(e) => setNewCode(e.target.value)}
+							/>
+						</Field>
+					</>
+				)}
+			</EditorDialog>
+		</>
 	);
 }
 
@@ -254,28 +241,26 @@ function DeleteAccount() {
 	);
 }
 
+// Your name, your email, and deleting the account. A guest has no email yet; their code is how they get back in.
 export function SettingsPage() {
 	const user = useCurrentUser();
+	const online = useOnline();
 
 	return (
 		<Screen>
-			<ScreenHeader
-				back={{ to: "/", label: "Groups" }}
-				title="Settings"
-				lead={user.isAnonymous ? "Guest" : user.email}
-			/>
-			{user.isAnonymous ? (
+			<ScreenHeader back={{ to: "/", label: "Groups" }} title="Settings" />
+			{!online && <Notice tone="waiting">{NEEDS_CONNECTION} to change these</Notice>}
+			<Section title="You">
+				<List>
+					<NameRow />
+					{!user.isAnonymous && <EmailRow />}
+				</List>
+			</Section>
+			{user.isAnonymous && (
 				<Section title="Your code">
 					<MyGuestCodes className="type-body flex flex-col" />
 					<p className="type-body-sm text-muted-foreground">Save it to get back in on another device.</p>
 				</Section>
-			) : (
-				<>
-					<ConnectedApps />
-					<Button variant="outline" className="self-start" onClick={() => void signOut()}>
-						Sign out
-					</Button>
-				</>
 			)}
 			<DeleteAccount />
 		</Screen>

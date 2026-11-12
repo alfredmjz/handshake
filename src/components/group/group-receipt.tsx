@@ -2,6 +2,8 @@ import { useEffect, useRef } from "react";
 import { Link } from "react-router";
 
 import { HandDisc, type HandKind } from "@/components/art/hand";
+import { CoverSticker } from "@/components/cover-sticker";
+import { Circled } from "@/components/art/marks";
 import { Amount, RollingAmount } from "@/components/money";
 import { formatAmount } from "@/lib/money";
 import { cn } from "@/lib/utils";
@@ -19,6 +21,8 @@ type GroupReceiptProps = {
 	name: string;
 	note: string | null;
 	kind: HandKind;
+	// The group's sticker, in the corner in place of the hand.
+	sticker?: string | null;
 	// Every bill, oldest first, so the newest prints at the bottom like a till roll.
 	bills: ReceiptBill[];
 	totalCents: number;
@@ -42,6 +46,7 @@ export function GroupReceipt({
 	name,
 	note,
 	kind,
+	sticker,
 	bills,
 	totalCents,
 	myShareCents,
@@ -80,7 +85,11 @@ export function GroupReceipt({
 						<h1 className="type-h3 line-clamp-2 break-words uppercase tracking-[0.02em]">{name}</h1>
 						{note && <p className="type-body-sm line-clamp-1 break-words text-muted-foreground">{note}</p>}
 					</div>
-					<HandDisc kind={kind} size={44} />
+					{sticker ? (
+						<CoverSticker sticker={sticker} fallback={kind} size="2.75rem" />
+					) : (
+						<HandDisc kind={kind} size={44} />
+					)}
 				</div>
 
 				<hr className="my-stack border-t-[1.5px] border-dashed border-ink/25" />
@@ -130,10 +139,12 @@ export function GroupReceipt({
 
 				<div className="flex items-end justify-between gap-stack">
 					<span className="type-label font-semibold uppercase tracking-[0.08em]">Total</span>
-					<RollingAmount cents={totalCents} size="lg" />
+					<Circled delay={0.9} className="mr-4">
+						<RollingAmount cents={totalCents} size="lg" />
+					</Circled>
 				</div>
 				<div className="mt-1 flex items-center justify-between gap-stack text-muted-foreground">
-					<span className="type-label">Your share</span>
+					<span className="type-hand">your share</span>
 					<RollingAmount cents={myShareCents} tone="inherit" className="type-label font-sans font-semibold" />
 				</div>
 			</div>

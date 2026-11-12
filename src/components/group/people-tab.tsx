@@ -2,12 +2,15 @@ import { useState } from "react";
 import { MoreHorizontal, Plus } from "lucide-react";
 
 import { Face } from "@/components/art/face";
+import { HairlineFigure } from "@/components/art/figures/figure";
+import { queue } from "@/components/art/figures/queue";
 import { ConfirmDialog } from "@/components/confirm-dialog";
 import { CopyButton } from "@/components/copy-button";
 import { GroupCode } from "@/components/group/group-code";
 import type { GroupData } from "@/components/group/group-data";
 import { NameDialog } from "@/components/group/name-dialog";
 import { useRun } from "@/components/group/use-run";
+import { EmptyState } from "@/components/notices";
 import { Section } from "@/components/screen";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -40,6 +43,8 @@ export function PeopleTab({ data }: { data: GroupData }) {
 	const guests = data.active.filter((m) => m.userId !== null && m.role === "guest");
 	const nameOnly = data.active.filter((m) => m.userId === null);
 
+	// Only you so far: the tab opens as the other empty tabs do.
+	const alone = data.active.length <= 1;
 	const close = () => setDialog(null);
 
 	const row = (member: MemberRow) => {
@@ -105,6 +110,13 @@ export function PeopleTab({ data }: { data: GroupData }) {
 
 	return (
 		<Stack gap="section">
+			{alone && (
+				<EmptyState
+					// People waiting at a locked door, backs to us; each turns round when pointed at.
+					art={<HairlineFigure mount={queue} value={1} className="h-full" />}
+					title="No one has joined yet."
+				/>
+			)}
 			<Section
 				title="Members"
 				action={
@@ -128,7 +140,7 @@ export function PeopleTab({ data }: { data: GroupData }) {
 				</Section>
 			)}
 
-			{data.me && data.me.role !== "guest" && <GroupCode data={data} />}
+			{data.me && data.me.role !== "guest" && <GroupCode data={data} alone={alone} />}
 
 			<NameDialog
 				open={dialog?.kind === "add"}

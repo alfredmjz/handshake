@@ -13,7 +13,7 @@ import { Field, FieldSet } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
 import { List, ListRow } from "@/components/ui/list";
 import { Stack } from "@/components/ui/stack";
-import { defaultDisplayName, signInAsGuest, useCurrentUser } from "@/lib/auth";
+import { signInAsGuest, useCurrentUser } from "@/lib/auth";
 import { codeKind, normaliseCode } from "@/lib/code-format";
 import { useOnline } from "@/lib/online";
 import { requestSync } from "@/lib/sync/controller";
@@ -198,7 +198,7 @@ type ChoiceProps = { code: string; preview: GroupPreview; onGone: () => void };
 // An account's own name fills "I'm new here".
 function SignedInJoinChoice(props: ChoiceProps) {
 	const user = useCurrentUser();
-	return <JoinChoice {...props} signedIn defaultName={user.isAnonymous ? "" : defaultDisplayName(user.email)} />;
+	return <JoinChoice {...props} signedIn defaultName={user.isAnonymous ? "" : user.name} />;
 }
 
 function JoinChoice({

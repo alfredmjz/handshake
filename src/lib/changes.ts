@@ -5,6 +5,8 @@ import { computeShares, validateEntry, type Item, type LedgerMember } from "@/li
 import type { LocalDb } from "@/lib/local-db";
 import { currentDebt, lastNudge, nudgedRecently } from "@/lib/nudge-view";
 import { allowedWhenCompleted, may, type Action } from "@/lib/permissions";
+import { isCoverKey } from "@/lib/cover-colors";
+import { isSticker } from "@/lib/cover-stickers";
 import { dexieTables, writeTables } from "@/lib/sync/dexie-store";
 import { applyMutation } from "@/lib/sync/local";
 import type {
@@ -43,6 +45,10 @@ export type GroupIntent =
 	| { type: "renameGroup"; name: string }
 	// null or blank clears the note.
 	| { type: "describeGroup"; note: string | null }
+	// A key on the colour board, or null for the default.
+	| { type: "recolorGroup"; color: string | null }
+	// A sticker (src/lib/cover-stickers.ts), or null for the default.
+	| { type: "stickGroup"; sticker: string | null }
 	| { type: "deleteGroup" }
 	| { type: "addPerson"; displayName: string }
 	| { type: "renamePerson"; memberId: string; displayName: string }
@@ -115,7 +121,7 @@ export function pendingPaymentBetween(entries: EntryRow[], a: string, b: string)
 export function paymentCountsAtOnce(state: GroupState, from: string, to: string): boolean {
 	const member = (id: string) => state.members.find((m) => m.id === id);
 	if (state.me.memberId === from) return !canAnswer(member(to));
-	if (state.me.memberId === to) return !canAnswer(member(from));
+	// The receiver saying they were paid is enough on its own (migration 014).
 	return true;
 }
 
@@ -245,7 +251,7 @@ export function planChange(state: GroupState | null, intent: Intent, ctx: PlanCo
 		const problem = groupNameProblem(intent.name);
 		if (problem) return problem;
 		// The server would fall back to the profile name for a blank one, but this device would show "" until
-		// the pull; refusing it is the smaller surprise (callers pass defaultDisplayName).
+		// the pull; refusing it is the smaller surprise (callers pass the account's name).
 		const nameProblem = displayNameProblem(intent.displayName);
 		if (nameProblem) return nameProblem;
 		const groupId = ctx.newId();
@@ -280,6 +286,17 @@ export function planChange(state: GroupState | null, intent: Intent, ctx: PlanCo
 				check(state, "group.rename") ??
 				groupNoteProblem(intent.note) ??
 				one({ type: "group.describe", groupId, note: storedNote(intent.note) })
+			);
+		case "recolorGroup":
+			if (intent.color !== null && !isCoverKey(intent.color))
+				return refuse("HS422", "That isn't a colour on the board");
+			return check(state, "group.recolor") ?? one({ type: "group.recolor", groupId, color: intent.color });
+		case "stickGroup":
+			return (
+				check(state, "group.sticker") ??
+				(intent.sticker !== null && !isSticker(intent.sticker)
+					? refuse("HS422", "That isn't a sticker")
+					: one({ type: "group.sticker", groupId, sticker: intent.sticker }))
 			);
 		case "deleteGroup":
 			return check(state, "group.delete") ?? one({ type: "group.delete", groupId });

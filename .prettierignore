@@ -2,3 +2,4 @@ dist/
 dev-dist/
 bun.lock
 supabase/
+src/vendor/

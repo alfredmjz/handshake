@@ -52,12 +52,6 @@ export function RollingAmount({ cents, ...props }: AmountProps) {
 	return <Amount cents={shown} {...props} className={cn("tabular-nums", props.className)} />;
 }
 
-export type Standing = "owed" | "owe" | "settled";
-
-export function standingOf(balanceCents: number): Standing {
-	return balanceCents > 0 ? "owed" : balanceCents < 0 ? "owe" : "settled";
-}
-
 // A small label over an amount, right-aligned at the end of a row: "you lent / $40.00".
 export function RowAmount({
 	label,

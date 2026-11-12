@@ -30,6 +30,8 @@ function rowIds(m: Mutation): string[] {
 			return [m.groupId, m.memberId];
 		case "group.rename":
 		case "group.describe":
+		case "group.recolor":
+		case "group.sticker":
 		case "group.delete":
 		case "group.complete":
 		case "group.reopen":

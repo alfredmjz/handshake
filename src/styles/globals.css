@@ -14,6 +14,9 @@
 
 		--font-display: "Funnel Display Variable", "Funnel Display", ui-sans-serif, system-ui, sans-serif;
 		--font-sans: "Funnel Sans Variable", "Funnel Sans", ui-sans-serif, system-ui, sans-serif;
+		/* Handwriting: notes in the margin, never money or controls. */
+		--font-hand:
+			"Shantell Sans Variable", "Shantell Sans", "Funnel Sans Variable", ui-sans-serif, system-ui, sans-serif;
 
 		/* Paper and ink */
 		--paper: 45 22% 96%;
@@ -172,6 +175,10 @@
 		@apply min-h-dvh bg-background font-sans text-foreground antialiased;
 		font-size: 1rem;
 		line-height: 1.45;
+		/* The page is a dotted sketchbook sheet. */
+		background-image: radial-gradient(circle, hsl(var(--ink) / 0.14) 1px, transparent 1.5px);
+		background-size: 1.375rem 1.375rem;
+		background-position: 0.6875rem 0.6875rem;
 	}
 
 	::selection {
@@ -224,11 +231,12 @@
 		line-height: 1.2;
 		letter-spacing: -0.005em;
 	}
+	/* A book's title: its size, or smaller on a narrow cover so one long word still fits (the cover is the container). */
 	.type-cover {
 		font-family: var(--font-display);
-		font-size: 1.1875rem;
+		font-size: min(1.75rem, 13cqi);
 		font-weight: 600;
-		line-height: 1.15;
+		line-height: 1.08;
 		letter-spacing: -0.01em;
 	}
 	.type-wordmark {
@@ -261,6 +269,26 @@
 	.type-micro {
 		font-size: 0.6875rem;
 		line-height: 1.2;
+	}
+	.type-hand {
+		font-family: var(--font-hand);
+		font-size: 1.0625rem;
+		font-weight: 500;
+		line-height: 1.25;
+		font-variation-settings:
+			"BNCE" 25,
+			"INFM" 55,
+			"SPAC" 0;
+	}
+	.type-hand-lg {
+		font-family: var(--font-hand);
+		font-size: 1.375rem;
+		font-weight: 500;
+		line-height: 1.2;
+		font-variation-settings:
+			"BNCE" 30,
+			"INFM" 60,
+			"SPAC" 0;
 	}
 	.type-control {
 		font-size: 1rem;
@@ -315,6 +343,61 @@
 		stroke-linejoin: round;
 	}
 
+	/* A pen mark that draws itself once. */
+	.mark-draw path {
+		/* Screen pixels, because the stroke does not scale with its box; longer than any mark is. */
+		stroke-dasharray: var(--mark-length, 640);
+		stroke-dashoffset: var(--mark-length, 640);
+		animation: draw var(--duration-moment) var(--ease-out) var(--mark-delay, 0.25s) forwards;
+	}
+
+	/* A name signed on a dotted line: looser and slanted, written left to right. */
+	.signature {
+		font-family: var(--font-hand);
+		font-size: 1.5rem;
+		font-weight: 500;
+		line-height: 1.1;
+		font-variation-settings:
+			"BNCE" 70,
+			"INFM" 100,
+			"SPAC" -20;
+		transform: rotate(-4deg) skewX(-8deg);
+		transform-origin: 0 100%;
+	}
+	.signature-write {
+		animation: write 0.65s var(--ease-in-out) var(--mark-delay, 0s) both;
+	}
+
+	/* A highlighter swipe behind a list row's title, in a category colour, only while the row is pointed at. */
+	.marker {
+		background: linear-gradient(hsl(var(--marker, var(--category-drinks)) / 0.6) 0 0) no-repeat 0 82% / 100% 58%;
+		border-radius: 0.2em 0.35em 0.3em 0.15em;
+		padding-inline: 0.15em;
+		margin-inline: -0.15em;
+	}
+	.marker-hover {
+		background-size: 0% 58%;
+		transition: background-size var(--duration-quick) var(--ease-out);
+	}
+	:is(a, button):is(:hover, :focus-visible) .marker-hover {
+		background-size: 100% 58%;
+	}
+
+	/* A sticker on a cover: die-cut with a paper edge, a soft shadow under it, stuck on a little crooked. */
+	.sticker {
+		filter: drop-shadow(1.5px 0 0 hsl(var(--paper))) drop-shadow(-1.5px 0 0 hsl(var(--paper)))
+			drop-shadow(0 1.5px 0 hsl(var(--paper))) drop-shadow(0 -1.5px 0 hsl(var(--paper)))
+			drop-shadow(0 2px 3px hsl(var(--ink) / 0.25));
+		rotate: -5deg;
+	}
+	/* An emoji sticker fills most of its box (--sticker-size, set by CoverSticker). */
+	.sticker-emoji {
+		/* The flag font is there only where the system has no flags (see main.tsx); it draws nothing else. */
+		font-family: "Twemoji Country Flags", var(--font-sans);
+		font-size: calc(var(--sticker-size) * 0.7);
+		line-height: 1;
+	}
+
 	/* A group's receipt: torn along the bottom in small teeth, lifted off the page by a soft shadow. */
 	.receipt-torn {
 		--tooth: 0.5rem;
@@ -324,6 +407,43 @@
 	}
 	.receipt-shadow {
 		filter: drop-shadow(0 1px 0 hsl(var(--ink) / 0.08)) drop-shadow(0 10px 18px hsl(var(--ink) / 0.12));
+	}
+}
+
+/* Keyframes used from plain CSS above, so Tailwind does not drop them. */
+@keyframes draw {
+	to {
+		stroke-dashoffset: 0;
+	}
+}
+@keyframes write {
+	from {
+		clip-path: inset(-20% 100% -20% 0);
+	}
+	to {
+		clip-path: inset(-20% -5% -20% 0);
+	}
+}
+@keyframes just-changed {
+	0%,
+	60% {
+		background-color: hsl(var(--primary) / 0.14);
+	}
+	100% {
+		background-color: hsl(var(--primary) / 0);
+	}
+}
+@keyframes land {
+	from {
+		opacity: 0;
+		transform: translateY(-1.5rem) rotate(-2deg) scale(0.97);
+	}
+	35% {
+		opacity: 1;
+	}
+	to {
+		opacity: 1;
+		transform: none;
 	}
 }
 

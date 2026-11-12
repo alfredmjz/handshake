@@ -5,8 +5,9 @@ import { clearLocalData, db } from "@/lib/local-db";
 import { supabase } from "@/lib/supabase";
 import { deleteAccount, upgradeGuest } from "@/lib/sync/supabase-transport";
 
-// isAnonymous: a guest (Supabase anonymous sign-in) who hasn't added an email yet.
-export type CurrentUser = { id: string; email: string; isAnonymous: boolean };
+// isAnonymous: a guest (Supabase anonymous sign-in) who hasn't added an email yet. name: what they go by, set in
+// Settings and kept on the account; until then the start of their email.
+export type CurrentUser = { id: string; email: string; name: string; isAnonymous: boolean };
 export type AuthState = { status: "loading" } | { status: "signed-out" } | { status: "signed-in"; user: CurrentUser };
 
 const KNOWN_USER_KEY = "handshake.user";
@@ -19,10 +20,12 @@ function readKnownUser(): CurrentUser | null {
 		if (!raw) return null;
 		const known = JSON.parse(raw) as Partial<CurrentUser> | null;
 		if (typeof known?.id !== "string") return null;
-		// Stored before guests existed, so without isAnonymous.
+		// Stored before guests existed, so without isAnonymous; and before names, so without a name.
+		const email = typeof known.email === "string" ? known.email : "";
 		return {
 			id: known.id,
-			email: typeof known.email === "string" ? known.email : "",
+			email,
+			name: typeof known.name === "string" && known.name ? known.name : defaultDisplayName(email),
 			isAnonymous: known.isAnonymous === true,
 		};
 	} catch {
@@ -40,11 +43,18 @@ function writeKnownUser(user: CurrentUser | null) {
 }
 
 function toUser(session: Session): CurrentUser {
-	return { id: session.user.id, email: session.user.email ?? "", isAnonymous: session.user.is_anonymous === true };
+	const email = session.user.email ?? "";
+	const name = session.user.user_metadata?.display_name;
+	return {
+		id: session.user.id,
+		email,
+		name: typeof name === "string" && name.trim() ? name.trim() : defaultDisplayName(email),
+		isAnonymous: session.user.is_anonymous === true,
+	};
 }
 
 const sameUser = (a: CurrentUser, b: CurrentUser) =>
-	a.id === b.id && a.email === b.email && a.isAnonymous === b.isAnonymous;
+	a.id === b.id && a.email === b.email && a.name === b.name && a.isAnonymous === b.isAnonymous;
 
 export function useAuthState(): AuthState {
 	const [state, setState] = useState<AuthState>(() => {
@@ -102,6 +112,43 @@ export async function finishKeepMyData(email: string, code: string): Promise<voi
 	const { error } = await supabase.auth.verifyOtp({ email: email.trim(), token: code.trim(), type: "email_change" });
 	if (error) throw error;
 	await upgradeWithFreshToken();
+}
+
+// Online only. Keeps the name on the account, for groups started or joined from now on.
+export async function changeName(name: string): Promise<void> {
+	const { error } = await supabase.auth.updateUser({ data: { display_name: name.trim() } });
+	if (error) throw error;
+}
+
+// Moving an account to a new email, step 1: sends a code to the new address, and one to the current address too
+// where the server asks both to agree (double_confirm_changes). "done" where no confirmation is needed.
+export async function startEmailChange(email: string): Promise<"code-sent" | "done"> {
+	const { data, error } = await supabase.auth.updateUser({ email: email.trim() });
+	if (error) throw error;
+	return data.user.new_email ? "code-sent" : "done";
+}
+
+// Step 2: the current address's code first (when there is one), then the new address's, which makes the change.
+export async function finishEmailChange(change: {
+	currentEmail: string;
+	currentCode: string;
+	newEmail: string;
+	newCode: string;
+}): Promise<void> {
+	if (change.currentCode.trim()) {
+		const { error } = await supabase.auth.verifyOtp({
+			email: change.currentEmail,
+			token: change.currentCode.trim(),
+			type: "email_change",
+		});
+		if (error) throw error;
+	}
+	const { error } = await supabase.auth.verifyOtp({
+		email: change.newEmail.trim(),
+		token: change.newCode.trim(),
+		type: "email_change",
+	});
+	if (error) throw error;
 }
 
 async function endLocally() {

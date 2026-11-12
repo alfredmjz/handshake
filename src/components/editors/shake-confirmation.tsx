@@ -1,5 +1,6 @@
 import { useFaceTint } from "@/components/art/face";
 import { ShakeScene } from "@/components/art/shake-scene";
+import { Signatures } from "@/components/art/signatures";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from "@/components/ui/dialog";
 import { paymentSides } from "@/lib/changes";
@@ -14,6 +15,9 @@ export type ShakeConfirmationProps = {
 	onClose: () => void;
 };
 
+// Both sign first, one after the other; then the sleeves come in and shake.
+const SIGNING = 1.9;
+
 // The cobalt moment when a payment counts: two hands shake, "Jo paid you $50.00", then "Settled".
 export function ShakeConfirmation({ groupId, entryId, onClose }: ShakeConfirmationProps) {
 	const entry = useEntry(entryId ?? "");
@@ -26,6 +30,8 @@ export function ShakeConfirmation({ groupId, entryId, onClose }: ShakeConfirmati
 	// Names as people typed them; only "you" changes case at the start.
 	const name = (id: string | undefined, start = false) =>
 		id && id === me?.id ? (start ? "You" : "you") : (members?.find((m) => m.id === id)?.displayName ?? "Someone");
+	// People sign with their own name, you included.
+	const signedName = (id: string | undefined) => members?.find((m) => m.id === id)?.displayName ?? "Someone";
 	const payerTint = useFaceTint(from ?? "");
 	const line = payment ? `${name(from, true)} paid ${name(to)} ${formatAmount(payment.amountCents)}` : "";
 	const square = !summary?.debts.some(
@@ -44,14 +50,26 @@ export function ShakeConfirmation({ groupId, entryId, onClose }: ShakeConfirmati
 						<ShakeScene
 							key={payment.id}
 							payerTint={payerTint}
+							delay={SIGNING}
 							className="-mx-page mt-section h-auto w-[calc(100%+2*var(--space-page))] max-w-md shrink-0 sm:mx-0 sm:w-full"
 						/>
 						{/* Inner spans: the dialog's own type roles would otherwise win over these. */}
 						<DialogTitle className="mt-section">
-							<span className="type-h2 block animate-rise text-balance">{line}</span>
+							<span className="type-h2 block animate-rise text-balance [animation-delay:0.1s]">{line}</span>
 						</DialogTitle>
+						<Signatures
+							tone="paper"
+							signedOnly
+							delay={0.5}
+							payer={{ name: signedName(from), role: "paid", signed: !!payment.payerConfirmedAt }}
+							receiver={{ name: signedName(to), role: "received", signed: !!payment.receiverConfirmedAt }}
+							className="mx-auto mt-stack max-w-xs"
+						/>
 						<DialogDescription>
-							<span className="type-display inline-block animate-sign-off font-bold text-primary-foreground">
+							<span
+								className="type-display inline-block animate-sign-off font-bold text-primary-foreground"
+								style={{ animationDelay: `${SIGNING + 1.6}s` }}
+							>
 								{square ? "Settled" : "Shook on it"}
 							</span>
 						</DialogDescription>

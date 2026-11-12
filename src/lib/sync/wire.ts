@@ -20,6 +20,10 @@ export type RawGroup = {
 	base_currency: string;
 	// Missing from servers before 012.
 	join_code?: string | null;
+	// Missing from servers before 015.
+	cover_color?: string | null;
+	// Missing from servers before 016.
+	cover_sticker?: string | null;
 	created_by: string | null;
 	created_at: string;
 	deleted_at: string | null;
@@ -136,6 +140,8 @@ export function toGroupRow(raw: RawGroup): GroupRow {
 		id: raw.id,
 		name: raw.name,
 		note: raw.note ?? null,
+		coverColor: raw.cover_color ?? null,
+		coverSticker: raw.cover_sticker ?? null,
 		createdBy: raw.created_by,
 		createdAt: raw.created_at,
 		deletedAt: raw.deleted_at,

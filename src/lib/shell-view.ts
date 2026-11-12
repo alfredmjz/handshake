@@ -6,6 +6,28 @@ export function joinedSummary(names: string[]): string {
 	return `${sorted.slice(0, 3).join(", ")} and ${sorted.length - 3} more`;
 }
 
+type OwingEntry = {
+	kind: "expense" | "payment";
+	deletedAt: string | null;
+	paymentStatus: string | null;
+	shares: { memberId: string; owedTo: Record<string, number> }[];
+};
+
+// Whether anything was ever owed between you and someone else in a group: a bill split between you and another
+// person, or a payment between you that counted. Only then can a zero balance be called settled.
+export function everOwed(entries: readonly OwingEntry[], memberId: string | null | undefined): boolean {
+	if (!memberId) return false;
+	return entries.some((e) => {
+		if (e.deletedAt) return false;
+		if (e.kind === "payment") return e.paymentStatus === "confirmed" && e.shares.some((s) => s.memberId === memberId);
+		return e.shares.some((s) =>
+			s.memberId === memberId
+				? Object.entries(s.owedTo).some(([to, cents]) => to !== memberId && cents > 0)
+				: (s.owedTo[memberId] ?? 0) > 0
+		);
+	});
+}
+
 export type Overall = { standing: "owed" | "owe" | "settled"; cents: number };
 
 // Net of your balance in every open group: positive means friends owe you.

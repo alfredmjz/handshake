@@ -24,6 +24,8 @@ export const PERMISSION_CASES: PermissionCase[] = [
 	{ action: "group.complete", owner: true, member: false, guest: false, whenCompleted: false },
 	{ action: "group.reopen", owner: true, member: false, guest: false, whenCompleted: true },
 	{ action: "group.recode", owner: true, member: false, guest: false, whenCompleted: false },
+	{ action: "group.recolor", owner: true, member: true, guest: true, whenCompleted: false },
+	{ action: "group.sticker", owner: true, member: true, guest: true, whenCompleted: false },
 	{ action: "member.add", owner: true, member: true, guest: false, whenCompleted: false },
 	{ action: "member.rename.self", owner: true, member: true, guest: true, whenCompleted: false },
 	{ action: "member.rename.others", owner: true, member: false, guest: false, whenCompleted: false },

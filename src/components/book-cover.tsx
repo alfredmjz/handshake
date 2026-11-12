@@ -1,19 +1,12 @@
+import type { CSSProperties } from "react";
+
 import { Hand, type HandKind } from "@/components/art/hand";
+import { CoverSticker } from "@/components/cover-sticker";
+import { coverHsl, coverIsDeep, type CoverKey } from "@/lib/cover-colors";
 import { cn } from "@/lib/utils";
 
-// A group is a notebook. Its cover takes the colour and hand of what the group is mostly for, with a
-// spine on the left and pages showing behind.
-const COVER_TINT: Record<HandKind, string> = {
-	food: "bg-category-food",
-	drinks: "bg-category-drinks",
-	stay: "bg-category-stay",
-	travel: "bg-category-travel",
-	groceries: "bg-category-groceries",
-	fun: "bg-category-fun",
-	new: "bg-category-none",
-	shake: "bg-category-none",
-};
-
+// A group is a notebook. Its cover takes the group's own colour from the colour board, its sticker (or the hand of
+// what the group is mostly for), a spine on the left and pages showing behind.
 function PagesBehind() {
 	return <div aria-hidden className="absolute inset-[4px_-4px_-4px_4px] rounded-book border border-ink/20 bg-paper" />;
 }
@@ -27,20 +20,34 @@ type BookCoverProps = {
 	// The group's note, a second line under the name.
 	note?: string | null;
 	kind: HandKind;
+	// The group's sticker; null shows the hand of its kind.
+	sticker?: string | null;
+	cover: CoverKey;
 	className?: string;
 };
 
-// The small cover in the Groups grid.
-export function BookCover({ name, note, kind, className }: BookCoverProps) {
+// The small cover in the Groups grid. Deep colours take paper-coloured type.
+export function BookCover({ name, note, kind, sticker, cover, className }: BookCoverProps) {
 	return (
 		<div className={cn("relative aspect-[5/6] w-full", className)}>
 			<PagesBehind />
-			<div className={cn("absolute inset-0 overflow-hidden rounded-book", COVER_TINT[kind])}>
+			<div
+				className="absolute inset-0 overflow-hidden rounded-book bg-[hsl(var(--cover))] transition-colors duration-settle ease-out [container-type:inline-size]"
+				style={{ "--cover": coverHsl(cover) } as CSSProperties}
+			>
 				<Spine />
-				<div className="absolute left-1/2 top-1.5 size-[6.25rem] -translate-x-1/2 overflow-hidden">
-					<Hand kind={kind} size={100} />
-				</div>
-				<span className="absolute inset-x-[1.375rem] bottom-3.5 flex flex-col gap-0.5 pr-0.5 text-ink">
+				<CoverSticker
+					sticker={sticker}
+					fallback={kind}
+					size="54cqi"
+					className="absolute left-1/2 top-[5cqi] -translate-x-1/2"
+				/>
+				<span
+					className={cn(
+						"absolute inset-x-[1.375rem] bottom-3.5 flex flex-col gap-0.5 pr-0.5",
+						coverIsDeep(cover) ? "text-paper" : "text-ink"
+					)}
+				>
 					<span className="type-cover line-clamp-2 break-words">{name}</span>
 					{note && <span className="type-label line-clamp-1 break-words font-display">{note}</span>}
 				</span>
@@ -64,7 +71,7 @@ export function NewBookButton({
 			type="button"
 			onClick={onClick}
 			className={cn(
-				"type-body-sm flex aspect-[5/6] w-full flex-col items-center justify-center gap-1 rounded-book border-2 border-dashed border-ink/35 font-semibold transition-colors hover:border-ink/60 hover:bg-ink/[0.03]",
+				"type-hand flex aspect-[5/6] w-full flex-col items-center justify-center gap-1 rounded-book border-2 border-dashed border-ink/35 bg-paper/60 transition-colors hover:border-ink/60 hover:bg-raised",
 				className
 			)}
 		>

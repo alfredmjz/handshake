@@ -1,3 +1,5 @@
+import { isCoverKey } from "@/lib/cover-colors";
+import { isSticker } from "@/lib/cover-stickers";
 import { computeShares } from "@/lib/ledger";
 import type {
 	BillFields,
@@ -112,7 +114,8 @@ async function recordPayment(tables: LocalTables, m: MutationOf<"payment.record"
 	// The server refuses amounts computeShares can't split.
 	if (!me || !from || !to || from.id === to.id || !Number.isSafeInteger(m.amountCents) || m.amountCents <= 0) return;
 
-	const otherCanAnswer = me.id === from.id ? canAnswer(to) : me.id === to.id ? canAnswer(from) : false;
+	// Only the payer needs the other side to agree; the receiver saying they were paid is enough.
+	const otherCanAnswer = me.id === from.id ? canAnswer(to) : false;
 	await tables.entries.put([
 		{
 			id: m.entryId,
@@ -223,6 +226,8 @@ export async function applyMutation(tables: LocalTables, mutation: Mutation, use
 					id: m.groupId,
 					name: m.name.trim(),
 					note: groupNote(m.note),
+					coverColor: null,
+					coverSticker: null,
 					createdBy: userId,
 					createdAt: m.at,
 					deletedAt: null,
@@ -254,6 +259,18 @@ export async function applyMutation(tables: LocalTables, mutation: Mutation, use
 		case "group.describe": {
 			const group = await tables.groups.get(m.groupId);
 			if (group) await tables.groups.put([{ ...group, note: groupNote(m.note) }]);
+			return;
+		}
+		case "group.recolor": {
+			const group = await tables.groups.get(m.groupId);
+			const color = m.color === null || isCoverKey(m.color) ? m.color : undefined;
+			if (group && color !== undefined) await tables.groups.put([{ ...group, coverColor: color }]);
+			return;
+		}
+		case "group.sticker": {
+			const group = await tables.groups.get(m.groupId);
+			const sticker = m.sticker === null || isSticker(m.sticker) ? m.sticker : undefined;
+			if (group && sticker !== undefined) await tables.groups.put([{ ...group, coverSticker: sticker }]);
 			return;
 		}
 		case "group.delete": {

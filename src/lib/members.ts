@@ -25,3 +25,15 @@ export function useMyMember(groupId: string) {
 		[groupId, userId]
 	);
 }
+
+// Where the current user goes by a name they can change: their member row in each open group, by group name.
+export async function myOpenMemberships(userId: string) {
+	const mine = (await db.members.toArray()).filter((m) => m.userId === userId && !m.deletedAt);
+	const out: { groupId: string; groupName: string; memberId: string; displayName: string }[] = [];
+	for (const member of mine) {
+		const group = await db.groups.get(member.groupId);
+		if (!group || group.deletedAt || group.completedAt) continue;
+		out.push({ groupId: group.id, groupName: group.name, memberId: member.id, displayName: member.displayName });
+	}
+	return out.sort((a, b) => byLabel(a.groupName, b.groupName));
+}

@@ -100,6 +100,19 @@ export class LocalDb extends Dexie {
 				// Rows stored before group codes and guest codes: pull everything again to fill them in.
 				await tx.table("cursors").clear();
 			});
+		this.version(6)
+			.stores({})
+			.upgrade(async (tx) => {
+				await tx
+					.table("groups")
+					.toCollection()
+					.modify((group: Record<string, unknown>) => {
+						group.coverColor ??= null;
+						group.coverSticker ??= null;
+					});
+				// Groups stored before cover colours and stickers: pull everything again to fill them in.
+				await tx.table("cursors").clear();
+			});
 	}
 }
 

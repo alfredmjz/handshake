@@ -93,6 +93,7 @@ const config: Config = {
 			},
 			keyframes: {
 				// A new bill or payment is put down on the page: it drops in, tilted, and settles flat.
+				draw: { to: { strokeDashoffset: "0" } },
 				land: {
 					from: { opacity: "0", transform: "translateY(-1.5rem) rotate(-2deg) scale(0.97)" },
 					"35%": { opacity: "1" },

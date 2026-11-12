@@ -4,6 +4,7 @@ import { Link, useNavigate } from "react-router";
 
 import { CheckDoodle } from "@/components/art/doodles";
 import { BookCover, NewBookButton } from "@/components/book-cover";
+import { ColorBoard } from "@/components/color-board";
 import { EditorDialog } from "@/components/editor-dialog";
 import { JoinCodeForm } from "@/components/join-code-form";
 import { Amount } from "@/components/money";
@@ -11,17 +12,19 @@ import { useMyBalances, type GroupStanding } from "@/components/my-balances";
 import { EmptyState, Notice } from "@/components/notices";
 import { Screen, ScreenHeader, Section } from "@/components/screen";
 import { showRefusal } from "@/components/signed-in-layout";
+import { StickerPicker } from "@/components/sticker-picker";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Field } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Stack } from "@/components/ui/stack";
-import { defaultDisplayName, useCurrentUser } from "@/lib/auth";
+import { useCurrentUser } from "@/lib/auth";
 import { useCommit } from "@/lib/changes";
 import { dismissMovedAwayNotice, useMovedAwayNotices } from "@/lib/codes";
 import { useGroupCategories } from "@/lib/entries";
 import { useGroups } from "@/lib/groups";
+import { freeCover, shelfCovers, type CoverKey } from "@/lib/cover-colors";
 import { overallOf } from "@/lib/shell-view";
 import type { Category, GroupRow } from "@/lib/sync/types";
 
@@ -29,7 +32,9 @@ const GRID = "grid grid-cols-2 gap-x-stack gap-y-section sm:grid-cols-3 lg:grid-
 
 function Standing({ standing }: { standing: GroupStanding | undefined }) {
 	if (!standing) return <Skeleton className="h-12 w-24" />;
-	const { balanceCents, others } = standing;
+	const { balanceCents, others, everOwed } = standing;
+	// A group where nothing has been owed yet isn't settled: there was nothing to settle.
+	if (balanceCents === 0 && !everOwed) return <span className="type-hand text-muted-foreground">Nothing owed yet</span>;
 	if (balanceCents === 0)
 		return (
 			<span className="flex flex-col gap-0.5">
@@ -53,19 +58,21 @@ function Standing({ standing }: { standing: GroupStanding | undefined }) {
 function GroupCell({
 	group,
 	kind,
+	cover,
 	standing,
 }: {
 	group: GroupRow;
 	kind: Category | null | undefined;
+	cover: CoverKey;
 	standing: GroupStanding | undefined;
 }) {
 	return (
 		<Link
 			to={`/groups/${group.id}`}
 			state={{ fromShelf: true }}
-			className="flex flex-col gap-control rounded-book outline-none transition-transform duration-quick ease-spring focus-visible:ring-2 focus-visible:ring-ring active:scale-[0.97]"
+			className="flex flex-col gap-control rounded-book outline-none transition-transform duration-settle ease-spring hover:-translate-y-1 focus-visible:ring-2 focus-visible:ring-ring active:scale-[0.97]"
 		>
-			<BookCover name={group.name} note={group.note} kind={kind ?? "new"} />
+			<BookCover name={group.name} note={group.note} kind={kind ?? "new"} sticker={group.coverSticker} cover={cover} />
 			<Standing standing={standing} />
 			{group.rowVersion === 0 && (
 				<Badge tone="waiting" className="self-start">
@@ -115,24 +122,41 @@ function MovedAwayNotices() {
 	);
 }
 
-function NewGroupDialog({ open, onOpenChange }: { open: boolean; onOpenChange: (open: boolean) => void }) {
+function NewGroupDialog({
+	open,
+	onOpenChange,
+	suggested,
+}: {
+	open: boolean;
+	onOpenChange: (open: boolean) => void;
+	// A colour no book on the shelf has yet.
+	suggested: CoverKey;
+}) {
 	const user = useCurrentUser();
 	const commit = useCommit();
 	const navigate = useNavigate();
 	const [name, setName] = useState("");
 	const [note, setNote] = useState("");
+	const [color, setColor] = useState<CoverKey | null>(null);
+	const [sticker, setSticker] = useState<string | null>(null);
+	const chosen = color ?? suggested;
 
 	async function create() {
 		const plan = await commit({
 			type: "createGroup",
 			name: name.trim(),
-			displayName: defaultDisplayName(user.email),
+			displayName: user.name,
 			note: note.trim() || undefined,
 		});
 		if (!plan.ok) return showRefusal(plan.code, plan.reason);
+		// Its colour is the group's own from the start, so it stays apart from the other books on every device.
+		if (plan.createdId) await commit({ type: "recolorGroup", groupId: plan.createdId, color: chosen });
+		if (plan.createdId && sticker) await commit({ type: "stickGroup", groupId: plan.createdId, sticker });
 		onOpenChange(false);
 		setName("");
 		setNote("");
+		setColor(null);
+		setSticker(null);
 		navigate(`/groups/${plan.createdId}`);
 	}
 
@@ -164,6 +188,31 @@ function NewGroupDialog({ open, onOpenChange }: { open: boolean; onOpenChange: (
 					onChange={(e) => setNote(e.target.value)}
 				/>
 			</Field>
+			<div className="flex items-start gap-stack">
+				<BookCover
+					name={name.trim() || "New group"}
+					note={note.trim() || null}
+					kind="new"
+					sticker={sticker}
+					cover={chosen}
+					className="hidden w-36 shrink-0 sm:block"
+				/>
+				<div className="flex min-w-0 flex-1 flex-col gap-section">
+					<fieldset className="flex flex-col gap-control">
+						<legend className="type-label mb-control font-medium">Sticker</legend>
+						<StickerPicker value={sticker} onChange={setSticker} name={name} fallback="new" />
+					</fieldset>
+					<fieldset className="flex flex-col gap-control">
+						<legend className="type-label mb-control font-medium">Colour</legend>
+						<ColorBoard
+							allowDefault={false}
+							value={chosen}
+							fallback={suggested}
+							onChange={(key) => setColor(key ?? suggested)}
+						/>
+					</fieldset>
+				</div>
+			</div>
 		</EditorDialog>
 	);
 }
@@ -179,16 +228,24 @@ export function GroupsPage() {
 	const completed = groups?.filter((g) => g.completedAt) ?? [];
 	const canCreate = !user.isAnonymous;
 	const overall =
-		balances && open.length > 0 ? overallOf(open.map((g) => balances.get(g.id)?.balanceCents ?? 0)) : null;
+		balances && open.some((g) => balances.get(g.id)?.everOwed)
+			? overallOf(open.map((g) => balances.get(g.id)?.balanceCents ?? 0))
+			: null;
 
+	const covers = shelfCovers(groups ?? []);
 	const cell = (g: GroupRow) => (
-		<GroupCell key={g.id} group={g} kind={categories?.get(g.id)} standing={balances?.get(g.id)} />
+		<GroupCell
+			key={g.id}
+			group={g}
+			kind={categories?.get(g.id)}
+			cover={covers.get(g.id)!}
+			standing={balances?.get(g.id)}
+		/>
 	);
 
 	return (
 		<Screen width="wide">
 			<ScreenHeader
-				eyebrow={user.isAnonymous ? "Hi there" : `Hi ${defaultDisplayName(user.email)}`}
 				title="Your groups"
 				lead={
 					overall &&
@@ -236,7 +293,9 @@ export function GroupsPage() {
 			)}
 
 			<GroupCodeBox />
-			{canCreate && <NewGroupDialog open={creating} onOpenChange={setCreating} />}
+			{canCreate && (
+				<NewGroupDialog open={creating} onOpenChange={setCreating} suggested={freeCover(covers.values())} />
+			)}
 		</Screen>
 	);
 }

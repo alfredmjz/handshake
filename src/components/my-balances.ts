@@ -4,12 +4,14 @@ import { toLedgerMembers } from "@/lib/changes";
 import { useCurrentUser } from "@/lib/auth";
 import { summarizeGroup } from "@/lib/ledger";
 import { db } from "@/lib/local-db";
-import { balanceFor, type OpenDebt } from "@/lib/shell-view";
+import { balanceFor, everOwed, type OpenDebt } from "@/lib/shell-view";
 
 export type GroupStanding = {
 	balanceCents: number;
 	// Other people still in the group.
 	others: number;
+	// Something was once owed between you and someone here, so a zero balance means settled, not "nothing yet".
+	everOwed: boolean;
 };
 
 async function readStandings(userId: string) {
@@ -21,7 +23,7 @@ async function readStandings(userId: string) {
 				db.members.where("groupId").equals(group.id).toArray(),
 			]);
 			const me = members.find((m) => m.userId === userId && !m.deletedAt) ?? null;
-			return { group, members, me, summary: summarizeGroup(entries, toLedgerMembers(members)) };
+			return { group, members, me, entries, summary: summarizeGroup(entries, toLedgerMembers(members)) };
 		})
 	);
 }
@@ -31,10 +33,11 @@ export function useMyBalances() {
 	const { id: userId } = useCurrentUser();
 	return useLiveQuery(async () => {
 		const map = new Map<string, GroupStanding>();
-		for (const { group, members, me, summary } of await readStandings(userId)) {
+		for (const { group, members, me, entries, summary } of await readStandings(userId)) {
 			map.set(group.id, {
 				balanceCents: balanceFor(summary.people, me?.id),
 				others: members.filter((m) => !m.deletedAt && m.id !== me?.id).length,
+				everOwed: everOwed(entries, me?.id),
 			});
 		}
 		return map;
