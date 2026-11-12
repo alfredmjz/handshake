@@ -188,9 +188,8 @@ export function SignInPage() {
 					<>
 						{ended && <Notice className="text-ink">{ended}</Notice>}
 						<h1 className="type-display text-balance">
-							Who owes who,{" "}
 							<Underlined delay={0.6} tone="waiting">
-								sorted.
+								Who owes who?
 							</Underlined>
 						</h1>
 						<p className="type-body-lg max-w-[19rem] text-primary-foreground/85">

@@ -107,7 +107,7 @@ export function KitPage() {
 
 				<Section title="Type">
 					<Stack gap="control">
-						<span className="type-display">Who owes who, sorted.</span>
+						<span className="type-display">Who owes who?</span>
 						<span className="type-h1">Your groups</span>
 						<span className="type-h2">Japan 2027</span>
 						<span className="type-h3">New expense</span>
