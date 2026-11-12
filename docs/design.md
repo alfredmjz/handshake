@@ -69,7 +69,7 @@ Every colour takes Tailwind's alpha modifier (`bg-ink/5`, `border-ink/20`).
 `Card` (outline, well, raised), `Input` (line, boxed, amount, code: the sign-in code and a personal code)
 and `Textarea`, `Label`, `Field` and `FieldSet`, `Checkbox`, `ToggleGroup` chips, `Tabs` (the segmented
 control), `Dialog` (sheet or screen), `AlertDialog`, `DropdownMenu`, `Popover` (a hover or tap list, e.g.
-who joined), `Badge`, `List`/`ListRow`/`ListHeading`, `Separator`, `Skeleton`, `Stack`/`Inline`, `Toaster`.
+who joined), `Badge`, `List`/`ListRow`/`ListHeading`, `Skeleton`, `Stack`/`Inline`, `Toaster`.
 
 ## Art and containers (`src/components/`)
 

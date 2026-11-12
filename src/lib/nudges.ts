@@ -2,7 +2,7 @@ import { useLiveQuery } from "dexie-react-hooks";
 
 import { useCurrentUser } from "@/lib/auth";
 import { db } from "@/lib/local-db";
-import { lastNudge, newestFirst, receivedNudges, unseenCount, type ReceivedNudge } from "@/lib/nudge-view";
+import { lastNudge, receivedNudges, unseenCount, type ReceivedNudge } from "@/lib/nudge-view";
 
 // Local only, never synced: the ids of nudges to me already seen when the bell was last opened. Local data
 // belongs to one account (claimLocalData), so this is per user.
@@ -26,14 +26,6 @@ async function readReceived(userId: string): Promise<ReceivedNudge[]> {
 		seenIds(),
 	]);
 	return receivedNudges(nudges, groups, members, userId, seen);
-}
-
-// Every nudge in the group, newest first. Screens show each only to its two people.
-export function useNudges(groupId: string) {
-	return useLiveQuery(
-		async () => (await db.nudges.where("groupId").equals(groupId).toArray()).sort(newestFirst),
-		[groupId]
-	);
 }
 
 // Nudges sent to me across my groups, newest first, each with groupName, fromName and unseen.

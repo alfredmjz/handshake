@@ -99,11 +99,6 @@ const config: Config = {
 					"35%": { opacity: "1" },
 					to: { opacity: "1", transform: "none" },
 				},
-				// What just changed keeps a cobalt wash until you've had a moment to see it.
-				"just-changed": {
-					"0%, 60%": { backgroundColor: "hsl(var(--primary) / 0.14)" },
-					"100%": { backgroundColor: "hsl(var(--primary) / 0)" },
-				},
 				// Opening a group prints its receipt: the paper comes out of the top, a line at a time.
 				print: {
 					from: { clipPath: "inset(0 0 100% 0)", transform: "translateY(-1rem)" },
@@ -130,7 +125,6 @@ const config: Config = {
 			},
 			animation: {
 				land: "land var(--duration-settle) var(--ease-bounce) both",
-				"just-changed": "just-changed 4s var(--ease-out) both",
 				print: "print 0.9s var(--ease-out) 0.12s both",
 				"hand-in-left": "hand-in-left 1.9s cubic-bezier(.3,.7,.2,1) both",
 				"hand-in-right": "hand-in-right 1.9s cubic-bezier(.3,.7,.2,1) both",
