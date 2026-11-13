@@ -7,7 +7,6 @@ import type { GroupData } from "@/components/group/group-data";
 import { useRun } from "@/components/group/use-run";
 import { Section } from "@/components/screen";
 import { Button } from "@/components/ui/button";
-import { Hub } from "@/components/ui/hairline";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Inline } from "@/components/ui/stack";
 import { formatCode, joinPath } from "@/lib/code-format";
@@ -19,17 +18,12 @@ export function joinUrl(code: string): string {
 	return `${location.origin}${joinPath(code)}`;
 }
 
-// "3 joined · Ann, Jo and Sam"; with more than three, hovering or tapping lists everyone.
-function Joined({ names }: { names: string[] }) {
+// "3 joined · Ann, Jo and Sam"; with more than three, hovering or tapping lists everyone. Said once: when the
+// group is only you, the People tab already says it above.
+function Joined({ names, alone }: { names: string[]; alone: boolean }) {
 	const [open, setOpen] = useState(false);
 	if (names.length === 0)
-		return (
-			<div className="flex items-center gap-stack">
-				{/* Tiles on dashed links round a hub: each link turns solid as someone comes in. */}
-				<Hub play intensity={0.55} aria-label="" aria-hidden className="w-24 shrink-0" />
-				<p className="type-body-sm text-muted-foreground">No one has joined yet</p>
-			</div>
-		);
+		return alone ? null : <p className="type-body-sm text-muted-foreground">No one has joined yet</p>;
 	const line = `${names.length} joined · ${joinedSummary(names)}`;
 	if (names.length <= 3) return <p className="type-body-sm text-muted-foreground">{line}</p>;
 	const everyone = [...names].sort(byText((n) => n));
@@ -58,7 +52,7 @@ function Joined({ names }: { names: string[] }) {
 
 // The group's code for owners and members: the code, Copy, the link, Share, the owner's Reset code, and who
 // joined. A group not synced yet has no code.
-export function GroupCode({ data }: { data: GroupData }) {
+export function GroupCode({ data, alone = false }: { data: GroupData; alone?: boolean }) {
 	const run = useRun();
 	const groupId = data.group?.id ?? "";
 	const code = useGroupCode(groupId);
@@ -122,7 +116,7 @@ export function GroupCode({ data }: { data: GroupData }) {
 				</Inline>
 			)}
 			{completed && code && <p className="type-body-sm text-muted-foreground">No one can join while it's completed</p>}
-			<Joined names={joined} />
+			<Joined names={joined} alone={alone} />
 			<ConfirmDialog
 				open={confirming}
 				onOpenChange={setConfirming}

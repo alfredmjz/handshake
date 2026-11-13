@@ -6,19 +6,24 @@ import { cn } from "@/lib/utils";
 // An empty screen is an invitation: a hand, one line, and the action that fills it.
 export function EmptyState({
 	kind = "new",
+	art,
 	title,
 	action,
 	className,
 }: {
 	kind?: HandKind;
+	// In place of the hand: a hairline figure for a space that is waiting to fill. Every figure gets the same frame,
+	// as wide as the tab and one height, so an empty tab looks the same whichever it is; a figure fills its height
+	// (h-full), or the whole frame if it can draw at any width.
+	art?: ReactNode;
 	title: ReactNode;
 	action?: ReactNode;
 	className?: string;
 }) {
 	return (
 		<div className={cn("flex flex-col items-center gap-stack py-section text-center", className)}>
-			<Hand kind={kind} size={112} />
-			<p className="type-body max-w-xs text-muted-foreground">{title}</p>
+			{art ? <div className="flex h-56 w-full justify-center">{art}</div> : <Hand kind={kind} size={112} />}
+			<p className="type-hand-lg max-w-xs text-balance">{title}</p>
 			{action}
 		</div>
 	);

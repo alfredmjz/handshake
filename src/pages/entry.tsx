@@ -11,6 +11,7 @@ import { paymentTitle } from "@/components/group/entry-list-row";
 import { useGroupData, type GroupData } from "@/components/group/group-data";
 import { PaymentButtons, pendingSentence } from "@/components/group/payment-buttons";
 import { todayIso } from "@/components/group/today";
+import { EntryNote } from "@/components/group/entry-note";
 import { useRun } from "@/components/group/use-run";
 import { Amount, RowAmount } from "@/components/money";
 import { EmptyState, Notice } from "@/components/notices";
@@ -128,10 +129,10 @@ export function EntryPage() {
 				<BillDetail entry={entry} data={data} />
 			)}
 
-			{entry.notes && (
-				<Section title="Notes">
-					<p className="type-body whitespace-pre-wrap break-words">{entry.notes}</p>
-				</Section>
+			{isPayment ? (
+				entry.notes && <p className="type-hand-lg whitespace-pre-wrap break-words">{entry.notes}</p>
+			) : (
+				<EntryNote key={entry.id} entry={entry} mayEdit={mayEdit} />
 			)}
 
 			<p className="type-label text-muted-foreground">

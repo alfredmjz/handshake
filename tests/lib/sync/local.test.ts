@@ -71,6 +71,8 @@ describe("groups", () => {
 			id: "g1",
 			name: "Japan 2027",
 			note: null,
+			coverColor: null,
+			coverSticker: null,
 			createdBy: ME,
 			createdAt: AT,
 			deletedAt: null,
@@ -151,6 +153,24 @@ describe("groups", () => {
 		expect(groups.map.get("g1")?.note).toBe("\tKyoto");
 		await applyMutation(tables, change("group.describe", { groupId: "g1", note: null }), ME);
 		expect(groups.map.get("g1")?.note).toBeNull();
+	});
+
+	test("a group's sticker: none at create, set and cleared by group.sticker, anything else ignored", async () => {
+		const { tables, groups } = createMemoryTables();
+		await applyMutation(
+			tables,
+			change("group.create", { groupId: "g1", memberId: "me-1", name: "Japan", displayName: "Alex" }),
+			ME
+		);
+		expect(groups.map.get("g1")?.coverSticker).toBeNull();
+		await applyMutation(tables, change("group.sticker", { groupId: "g1", sticker: "emoji:🇯🇵" }), ME);
+		expect(groups.map.get("g1")?.coverSticker).toBe("emoji:🇯🇵");
+		await applyMutation(tables, change("group.sticker", { groupId: "g1", sticker: "emoji:hi" }), ME);
+		expect(groups.map.get("g1")?.coverSticker).toBe("emoji:🇯🇵");
+		await applyMutation(tables, change("group.sticker", { groupId: "g1", sticker: null }), ME);
+		expect(groups.map.get("g1")?.coverSticker).toBeNull();
+		await applyMutation(tables, change("group.sticker", { groupId: "missing", sticker: "hand:fun" }), ME);
+		expect(groups.map.has("missing")).toBe(false);
 	});
 });
 
@@ -499,14 +519,15 @@ describe("payments", () => {
 		});
 	});
 
-	test("recording one you received sets the receiver's side; no description means Payment", async () => {
+	test("recording one you received counts at once, on the receiver's word; no description means Payment", async () => {
 		const { tables, entries } = await seeded();
 		await applyMutation(tables, record("sam", "alex", { description: " " }), ME);
 		expect(entries.map.get("p1")).toMatchObject({
 			description: "Payment",
-			paymentStatus: "pending",
+			paymentStatus: "confirmed",
 			payerConfirmedAt: null,
 			receiverConfirmedAt: AT,
+			confirmedAt: AT,
 		});
 	});
 

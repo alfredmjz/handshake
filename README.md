@@ -32,7 +32,10 @@ bun run dev
 ```
 
 Open http://localhost:5173 and sign in with the 6-digit code emailed to you. Until a sending domain is
-verified in Resend, codes only reach the Resend account's own address.
+verified in Resend, codes only reach the Resend account's own address. To skip the code, use the test accounts
+(only in `bun run dev` against the local Supabase): **Owner** (`owner@handshake.test`), **Payee**
+(`payee@handshake.test`) and **Guest**, from the Welcome screen or under "Test accounts (local)" in the account menu,
+which switches straight to another. The guest stays the same guest between switches.
 
 ## Checks
 

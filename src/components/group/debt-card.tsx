@@ -11,6 +11,8 @@ type DebtCardProps = {
 	// A status badge under each face: "Paid", "Waiting".
 	fromBadge?: ReactNode;
 	toBadge?: ReactNode;
+	// A payment waiting for its handshake: the two dotted lines, signed so far by one. Replaces the badges.
+	signatures?: ReactNode;
 	// What's happening, in a few words: "You owe Sam", "Priya says they paid you".
 	sentence?: ReactNode;
 	// A line under it: a decline note.
@@ -32,6 +34,7 @@ export function DebtCard({
 	amountCents,
 	fromBadge,
 	toBadge,
+	signatures,
 	sentence,
 	detail,
 	actions,
@@ -50,7 +53,8 @@ export function DebtCard({
 	return (
 		<Card>
 			<PaymentArrow from={from} to={to} amountCents={amountCents} tilt={tilt} />
-			{(fromBadge || toBadge) && (
+			{signatures}
+			{!signatures && (fromBadge || toBadge) && (
 				<div className="-mt-1 flex items-start justify-between gap-stack">
 					<span className="flex min-w-0">{fromBadge}</span>
 					<span className="flex min-w-0 justify-end">{toBadge}</span>

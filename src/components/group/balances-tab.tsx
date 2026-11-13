@@ -1,6 +1,7 @@
 import { useState, type ReactNode } from "react";
 
 import { CheckDoodle } from "@/components/art/doodles";
+import { Signatures } from "@/components/art/signatures";
 import { Face } from "@/components/art/face";
 import { PaymentEditor } from "@/components/editors/payment-editor";
 import { ShakeConfirmation } from "@/components/editors/shake-confirmation";
@@ -10,15 +11,18 @@ import { NudgeButton } from "@/components/group/nudge-button";
 import { NudgeNotice } from "@/components/group/nudge-notice";
 import { PaymentButtons, pendingSentence } from "@/components/group/payment-buttons";
 import { Amount } from "@/components/money";
+import { EmptyState } from "@/components/notices";
 import { Badge } from "@/components/ui/badge";
-import { Settle } from "@/components/ui/hairline";
+import { HairlineFigure } from "@/components/art/figures/figure";
+import { square } from "@/components/art/figures/square";
 import { Button } from "@/components/ui/button";
 import { List, ListHeading, ListRow } from "@/components/ui/list";
-import { Inline, Stack } from "@/components/ui/stack";
+import { Stack } from "@/components/ui/stack";
 import { canAnswer, paymentSides } from "@/lib/changes";
 import type { Debt } from "@/lib/ledger";
 import type { EntryRow } from "@/lib/sync/types";
 import { formatAmount } from "@/lib/money";
+import { everOwed } from "@/lib/shell-view";
 import { byText } from "@/lib/utils";
 
 type PaymentDraft = { from: string; to: string; amountCents?: number };
@@ -59,18 +63,17 @@ export function BalancesTab({ data }: { data: GroupData }) {
 		.sort(byText((d) => `${names.of(d.fromMemberId)} ${names.of(d.toMemberId)}`));
 	const mayRecordOthers = data.can("payment.record.others");
 	const mayRecordOwn = data.can("payment.record.own");
+	// People sign with their own name, you included.
+	const signedName = (id: string) => data.members.find((m) => m.id === id)?.displayName ?? names.of(id);
 
 	return (
 		<Stack gap="section">
 			{mine.length === 0 ? (
-				<div className="flex items-center gap-stack">
-					{/* Loose tiles fall into place: everything between you and the others is in order. */}
-					<Settle play intensity={0.6} aria-label="" aria-hidden className="w-28 shrink-0 sm:w-32" />
-					<Inline gap="control" className="type-body">
-						<CheckDoodle className="size-6" />
-						You're all square.
-					</Inline>
-				</div>
+				// Laid out as Entries' empty state: the cube the cursor knocks about, then one line.
+				<EmptyState
+					art={<HairlineFigure mount={square} value={0.9} className="aspect-auto h-full w-full" />}
+					title={everOwed(data.entries, me) ? "You're all square." : "Nothing owed yet."}
+				/>
 			) : (
 				<Stack gap="stack">
 					{mine.map(({ otherId, debt, pending }, n) => {
@@ -129,6 +132,23 @@ export function BalancesTab({ data }: { data: GroupData }) {
 								amountCents={amountCents}
 								tilt={n % 2 === 0 ? "up" : "down"}
 								fromBadge={badges.get(fromId)}
+								signatures={
+									pending && sides?.from && sides.to ? (
+										<Signatures
+											write={false}
+											payer={{
+												name: signedName(sides.from),
+												role: "paid",
+												signed: pending.createdByMemberId === sides.from,
+											}}
+											receiver={{
+												name: signedName(sides.to),
+												role: "received",
+												signed: pending.createdByMemberId === sides.to,
+											}}
+										/>
+									) : undefined
+								}
 								toBadge={badges.get(toId)}
 								actions={actions}
 								actionsSide={iOwe ? "from" : "to"}

@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 
-import { balanceFor, describeDebt, joinedSummary, overallOf } from "@/lib/shell-view";
+import { balanceFor, describeDebt, everOwed, joinedSummary, overallOf } from "@/lib/shell-view";
 
 describe("joinedSummary", () => {
 	test("names everyone up to three, alphabetically", () => {
@@ -11,6 +11,72 @@ describe("joinedSummary", () => {
 	});
 	test("more than three: the first three and how many more", () => {
 		expect(joinedSummary(["Sam", "Ann", "Jo", "Kim", "Bo"])).toBe("Ann, Bo, Jo and 2 more");
+	});
+});
+
+describe("everOwed", () => {
+	const bill = (shares: { memberId: string; owedTo: Record<string, number> }[], deletedAt: string | null = null) => ({
+		kind: "expense" as const,
+		deletedAt,
+		paymentStatus: null,
+		shares,
+	});
+	const payment = (status: string) => ({
+		kind: "payment" as const,
+		deletedAt: null,
+		paymentStatus: status,
+		shares: [
+			{ memberId: "jo", owedTo: {} as Record<string, number> },
+			{ memberId: "me", owedTo: { jo: 500 } as Record<string, number> },
+		],
+	});
+	test("a new group, or bills only you shared, never had anything owed", () => {
+		expect(everOwed([], "me")).toBe(false);
+		expect(everOwed([bill([{ memberId: "me", owedTo: {} }])], "me")).toBe(false);
+		expect(
+			everOwed(
+				[
+					bill([
+						{ memberId: "jo", owedTo: { sam: 300 } },
+						{ memberId: "sam", owedTo: {} },
+					]),
+				],
+				"me"
+			)
+		).toBe(false);
+	});
+	test("a bill split with someone counts, either way round", () => {
+		expect(
+			everOwed(
+				[
+					bill([
+						{ memberId: "me", owedTo: {} },
+						{ memberId: "jo", owedTo: { me: 1200 } },
+					]),
+				],
+				"me"
+			)
+		).toBe(true);
+		expect(
+			everOwed(
+				[
+					bill([
+						{ memberId: "me", owedTo: { jo: 1200 } },
+						{ memberId: "jo", owedTo: {} },
+					]),
+				],
+				"me"
+			)
+		).toBe(true);
+	});
+	test("deleted bills and payments that never counted don't", () => {
+		expect(everOwed([bill([{ memberId: "jo", owedTo: { me: 1200 } }], "2026-11-12T00:00:00Z")], "me")).toBe(false);
+		expect(everOwed([payment("pending")], "me")).toBe(false);
+		expect(everOwed([payment("declined")], "me")).toBe(false);
+		expect(everOwed([payment("confirmed")], "me")).toBe(true);
+	});
+	test("nobody to ask about", () => {
+		expect(everOwed([payment("confirmed")], null)).toBe(false);
 	});
 });
 

@@ -151,11 +151,17 @@ const rawGuestCode: RawGuestCode = {
 };
 
 describe("wire", () => {
+	test("a group's cover sticker comes through as coverSticker", () => {
+		expect(toGroupRow({ ...rawGroup, cover_sticker: "emoji:🇯🇵" }).coverSticker).toBe("emoji:🇯🇵");
+	});
+
 	test("groups drop base_currency", () => {
 		expect(toGroupRow(rawGroup)).toEqual({
 			id: "g1",
 			name: "Japan 2027",
 			note: "Tokyo and Kyoto, April",
+			coverColor: null,
+			coverSticker: null,
 			createdBy: null,
 			createdAt: T,
 			deletedAt: null,

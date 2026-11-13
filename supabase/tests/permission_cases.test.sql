@@ -6,7 +6,7 @@
 -- ============================================================================
 BEGIN;
 CREATE EXTENSION IF NOT EXISTS pgtap WITH SCHEMA extensions;
-SELECT plan(92);
+SELECT plan(100);
 
 -- group.rename
 SELECT is(private.may('group.rename', 'owner'), true, 'group.rename: owner may');
@@ -37,6 +37,18 @@ SELECT is(private.may('group.recode', 'owner'), true, 'group.recode: owner may')
 SELECT is(private.may('group.recode', 'member'), false, 'group.recode: member may not');
 SELECT is(private.may('group.recode', 'guest'), false, 'group.recode: guest may not');
 SELECT is(private.allowed_when_completed('group.recode'), false, 'group.recode: refused in a completed group');
+
+-- group.recolor
+SELECT is(private.may('group.recolor', 'owner'), true, 'group.recolor: owner may');
+SELECT is(private.may('group.recolor', 'member'), true, 'group.recolor: member may');
+SELECT is(private.may('group.recolor', 'guest'), true, 'group.recolor: guest may');
+SELECT is(private.allowed_when_completed('group.recolor'), false, 'group.recolor: refused in a completed group');
+
+-- group.sticker
+SELECT is(private.may('group.sticker', 'owner'), true, 'group.sticker: owner may');
+SELECT is(private.may('group.sticker', 'member'), true, 'group.sticker: member may');
+SELECT is(private.may('group.sticker', 'guest'), true, 'group.sticker: guest may');
+SELECT is(private.allowed_when_completed('group.sticker'), false, 'group.sticker: refused in a completed group');
 
 -- member.add
 SELECT is(private.may('member.add', 'owner'), true, 'member.add: owner may');

@@ -7,6 +7,10 @@ export type GroupRow = {
 	name: string;
 	// The second line on its cover; trimmed, 1 to 120 characters, or null.
 	note: string | null;
+	// Its cover colour, a key on the colour board ("h7s2"), or null for the default (src/lib/cover-colors.ts).
+	coverColor: string | null;
+	// What sits on its cover: a hand, an emoji or a small picture, or null for the default (src/lib/cover-stickers.ts).
+	coverSticker: string | null;
 	// Null once the account that made the group is deleted.
 	createdBy: string | null;
 	createdAt: string;
@@ -145,6 +149,10 @@ type MutationBody =
 	| { type: "group.rename"; groupId: string; name: string }
 	// note null or blank clears it.
 	| { type: "group.describe"; groupId: string; note: string | null }
+	// color null goes back to the default.
+	| { type: "group.recolor"; groupId: string; color: string | null }
+	// sticker null goes back to the default.
+	| { type: "group.sticker"; groupId: string; sticker: string | null }
 	| { type: "group.delete"; groupId: string }
 	| { type: "group.complete"; groupId: string }
 	| { type: "group.reopen"; groupId: string }

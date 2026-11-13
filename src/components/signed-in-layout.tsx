@@ -1,9 +1,10 @@
 import { useEffect, useMemo, useState } from "react";
-import { LogOut, Settings } from "lucide-react";
+import { LogOut, Settings, Users } from "lucide-react";
 import { Link, Outlet, useNavigate } from "react-router";
 import { toast } from "sonner";
 
 import { Face } from "@/components/art/face";
+import { MarginDoodles } from "@/components/art/marks";
 import { HandsGlyph } from "@/components/art/hands-glyph";
 import { GuestBanner } from "@/components/guest-banner";
 import { NudgeBell } from "@/components/nudge-bell";
@@ -21,6 +22,13 @@ import { Inline } from "@/components/ui/stack";
 import { CurrentUserProvider, endIfAccountGone, signOut, type CurrentUser } from "@/lib/auth";
 import { CommitProvider, createCommitter, type Commit } from "@/lib/changes";
 import { newId } from "@/lib/ids";
+import {
+	currentTestAccount,
+	devLoginAvailable,
+	switchToTestAccount,
+	TEST_ACCOUNTS,
+	type TestAccount,
+} from "@/lib/dev-login";
 import { claimLocalData, db } from "@/lib/local-db";
 import { requestSync, startSync } from "@/lib/sync/controller";
 import { createDexieSyncStore, resetCursors } from "@/lib/sync/dexie-store";
@@ -64,7 +72,11 @@ export function SignedInLayout({ user }: { user: CurrentUser }) {
 		void claimLocalData(user.id).then(() => {
 			if (cancelled) return;
 			stop = startSync(createDexieSyncStore(db, user.id), supabaseTransport, (rejected) => {
-				for (const { code, reason } of rejected) showRefusal(code, reason);
+				// A refusal can mean the account itself is gone (deleted, or a guest whose group was completed): if so,
+				// sign out here instead of showing the server's error for every change.
+				void endIfAccountGone(user).then((gone) => {
+					if (!gone) for (const { code, reason } of rejected) showRefusal(code, reason);
+				});
 				// Rejected changes still show on this device; a full pull replaces them with the server's rows.
 				void resetCursors(db).then(requestSync);
 			});
@@ -97,6 +109,34 @@ export function SignedInLayout({ user }: { user: CurrentUser }) {
 	return <Shell user={user} commit={commit} />;
 }
 
+// Local development only: switch to another test account without going back to the Welcome screen.
+function TestAccountItems() {
+	const [current, setCurrent] = useState<TestAccount | null>(null);
+	useEffect(() => {
+		void currentTestAccount().then(setCurrent);
+	}, []);
+	return (
+		<>
+			<DropdownMenuSeparator />
+			<DropdownMenuLabel className="type-caption text-muted-foreground">Test accounts (local)</DropdownMenuLabel>
+			{TEST_ACCOUNTS.map((account) => (
+				<DropdownMenuItem
+					key={account.id}
+					disabled={account.id === current}
+					onSelect={() =>
+						void switchToTestAccount(account.id).catch((error: Error) =>
+							toast.error("Couldn't switch", { description: error.message })
+						)
+					}
+				>
+					<Users className="size-4" aria-hidden />
+					{account.id === current ? `${account.label} (you)` : `Switch to ${account.label}`}
+				</DropdownMenuItem>
+			))}
+		</>
+	);
+}
+
 function Shell({ user, commit }: { user: CurrentUser; commit: Commit }) {
 	const navigate = useNavigate();
 	const sync = useSyncState();
@@ -104,12 +144,12 @@ function Shell({ user, commit }: { user: CurrentUser; commit: Commit }) {
 	return (
 		<CurrentUserProvider value={user}>
 			<CommitProvider value={commit}>
-				<div className="mx-auto flex min-h-dvh w-full max-w-6xl flex-col px-page pb-section pt-[env(safe-area-inset-top)]">
+				<MarginDoodles />
+				<div className="relative mx-auto flex min-h-dvh w-full max-w-6xl flex-col px-page pb-section pt-[env(safe-area-inset-top)]">
 					<header className="flex h-16 items-center justify-between gap-stack">
 						<Link
 							to="/"
-							aria-label={`Handshake, home. ${sync.spoken}`}
-							title={sync.error ? `Couldn't reach the server (${sync.error})` : sync.spoken}
+							aria-label="Handshake, home"
 							className="-ml-1 flex min-h-tap items-center gap-control rounded-full px-1 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
 						>
 							<SyncMark state={sync.state} waiting={sync.waiting} className="h-7 w-11" />
@@ -136,7 +176,9 @@ function Shell({ user, commit }: { user: CurrentUser; commit: Commit }) {
 										/>
 										<span className="flex flex-col">
 											Sync now
-											<span className="type-caption text-muted-foreground">{sync.spoken}</span>
+											<span className="type-caption text-muted-foreground">
+												{sync.error ? `${sync.spoken}: couldn't reach the server` : sync.spoken}
+											</span>
 										</span>
 									</DropdownMenuItem>
 									<DropdownMenuItem onSelect={() => navigate("/settings")}>
@@ -153,6 +195,7 @@ function Shell({ user, commit }: { user: CurrentUser; commit: Commit }) {
 											</DropdownMenuItem>
 										</>
 									)}
+									{import.meta.env.DEV && devLoginAvailable() && <TestAccountItems />}
 								</DropdownMenuContent>
 							</DropdownMenu>
 						</Inline>

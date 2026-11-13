@@ -5,7 +5,12 @@ import { BellDoodle, CheckDoodle, HandshakeMark, ReceiptDoodle, SquiggleArrow } 
 import { Face, FacePile } from "@/components/art/face";
 import { Hand, HandDisc, type HandKind } from "@/components/art/hand";
 import { ShakeScene } from "@/components/art/shake-scene";
-import { Book, BookCover, NewBookButton } from "@/components/book-cover";
+import { HairlineFigure } from "@/components/art/figures/figure";
+import { queue } from "@/components/art/figures/queue";
+import { square } from "@/components/art/figures/square";
+import { Signatures } from "@/components/art/signatures";
+import { BookCover, NewBookButton } from "@/components/book-cover";
+import { GroupReceipt } from "@/components/group/group-receipt";
 import { ConfirmDialog } from "@/components/confirm-dialog";
 import { DebtCard } from "@/components/group/debt-card";
 import { GuestBanner } from "@/components/guest-banner";
@@ -102,7 +107,7 @@ export function KitPage() {
 
 				<Section title="Type">
 					<Stack gap="control">
-						<span className="type-display">Who owes who, sorted.</span>
+						<span className="type-display">Who owes who?</span>
 						<span className="type-h1">Your groups</span>
 						<span className="type-h2">Japan 2027</span>
 						<span className="type-h3">New expense</span>
@@ -170,7 +175,7 @@ export function KitPage() {
 
 				<Section title="Guest banner">
 					<div data-kit="guest-banner">
-						<CurrentUserProvider value={{ id: "kit-guest", email: "", isAnonymous: true }}>
+						<CurrentUserProvider value={{ id: "kit-guest", email: "", name: "Guest", isAnonymous: true }}>
 							<GuestBanner />
 						</CurrentUserProvider>
 					</div>
@@ -261,23 +266,57 @@ export function KitPage() {
 
 				<Section title="Covers">
 					<div className="grid grid-cols-2 gap-x-stack gap-y-section sm:grid-cols-4">
-						<BookCover name="Japan 2027" kind="travel" />
-						<BookCover name="Roommates" kind="stay" />
-						<BookCover name="Dinner club with a long name" kind="food" />
+						<BookCover name="Japan 2027" kind="travel" cover="h11s1" />
+						<BookCover name="Roommates" kind="stay" cover="h4s3" />
+						<BookCover name="Dinner club with a long name" kind="food" cover="h1s0" />
 						<NewBookButton label="Start a group" onClick={() => undefined} />
 					</div>
 					<div className="max-w-md">
-						<Book name="Japan 2027" note="Tokyo and Kyoto, April" kind="travel">
-							<Stack gap="control" className="h-full">
-								<span className="type-h2">Japan 2027</span>
-								<Inline>
-									<FacePile people={PEOPLE.map((p) => ({ id: p.id, name: p.label }))} size={30} />
-									<span className="type-label text-muted-foreground">4 friends</span>
-								</Inline>
-								<span className="mt-auto type-label text-muted-foreground">You're owed</span>
-								<Amount cents={6000} size="lg" tone="owed" />
-							</Stack>
-						</Book>
+						<GroupReceipt
+							name="Japan 2027"
+							note="Tokyo and Kyoto, April"
+							kind="travel"
+							bills={[
+								{ id: "ramen", description: "Ramen at Ichiran", amountCents: 6240, items: [], href: "/kit" },
+								{
+									id: "hostel",
+									description: "Hostel in Asakusa",
+									amountCents: 31200,
+									items: [
+										{ id: "n1", description: "Night one", amountCents: 15600 },
+										{ id: "n2", description: "Night two", amountCents: 15600 },
+									],
+									href: "/kit",
+								},
+								{ id: "train", description: "Shinkansen to Kyoto", amountCents: 12000, items: [], href: "/kit" },
+							]}
+							totalCents={49440}
+							myShareCents={12360}
+							entriesHref="/kit"
+						/>
+					</div>
+				</Section>
+
+				<Section title="Figures">
+					<div className="flex flex-wrap gap-section">
+						<HairlineFigure mount={square} value={0.9} label="A cube on the floor" className="w-72" />
+						<HairlineFigure mount={queue} value={1} label="People at a locked door" className="w-72" />
+					</div>
+				</Section>
+
+				<Section title="Signatures">
+					<div className="flex max-w-md flex-col gap-section">
+						<Signatures
+							payer={{ name: "Jo", role: "paid", signed: true }}
+							receiver={{ name: "Priya", role: "received", signed: false }}
+						/>
+						<div className="rounded-lg bg-primary p-panel">
+							<Signatures
+								tone="paper"
+								payer={{ name: "Jo", role: "paid", signed: true }}
+								receiver={{ name: "Alexandra", role: "received", signed: true }}
+							/>
+						</div>
 					</div>
 				</Section>
 
@@ -382,12 +421,6 @@ export function KitPage() {
 								<Amount cents={766} />
 							</Inline>
 							<span className="type-caption text-muted-foreground">You cover the 1¢ left over from rounding.</span>
-						</Card>
-						<Card variant="raised">
-							<CardHeader>
-								<CardTitle>Connected apps</CardTitle>
-								<CardDescription>Pholio reads payments that count.</CardDescription>
-							</CardHeader>
 						</Card>
 					</div>
 					<Notice

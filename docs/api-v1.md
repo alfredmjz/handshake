@@ -26,8 +26,18 @@ handshake). Bills stay in Handshake. Handshake never calls the other app.
 
 ## Authentication
 
-The person creates a token in Handshake (**Settings → Connected apps → Connect an app**), sees it once,
-and pastes it into Pholio. It looks like `hsk_` followed by 43 base64url characters.
+Pholio makes the token; Handshake has no screen for tokens. To connect, Pholio:
+
+1. Signs the person in to Handshake's auth with Handshake's public Supabase URL and anon key, by the same 6-digit
+   email code as Handshake's own sign-in (`signInWithOtp`, then `verifyOtp` with type `email`). Guests have no
+   email, so they can't connect.
+2. Calls `create_api_token` with `p_name: "Pholio"` while signed in. The token comes back this once; Pholio keeps
+   it on its server. At most 10 live tokens per person (`HS422` past that).
+3. Signs that Handshake session out (`signOut({ scope: "local" })`). From then on it uses only the token.
+
+To disconnect, Pholio signs in the same way and calls `revoke_api_token` with the token's id (from
+`create_api_token` or `list_api_tokens`), or simply forgets the token. A token looks like `hsk_` followed by
+43 base64url characters.
 
 ```
 Authorization: Bearer hsk_3q2-7wZ…
@@ -35,7 +45,7 @@ Authorization: Bearer hsk_3q2-7wZ…
 
 - Send it only in the `Authorization` header, never in a URL.
 - A token can read exactly what its owner can see in Handshake, and nothing can be written with it.
-- Tokens don't expire. The person can revoke one at any time, and deleting their Handshake account
+- Tokens don't expire. Pholio can revoke one at any time, and deleting their Handshake account
   deletes every token; from then on it gets `401 invalid_token`. Pholio should then ask the person to
   connect again.
 - Keep the token on Pholio's server. CORS is open (`Access-Control-Allow-Origin: *`) because the API uses no

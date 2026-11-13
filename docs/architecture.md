@@ -978,8 +978,9 @@ function mergePull(tables: LocalTables, pull: PullResult, pending: Mutation[], u
 
 - **What it is:** the production adapter at the `SyncTransport` seam, and the only file that talks to
   Supabase about data.
-- **Online functions:** it also exports `previewInvite`, `joinGroup`, `upgradeGuest`, `createApiToken`,
-  `listApiTokens` and `revokeApiToken` as plain functions. Each throws `TransportError { code, message }`
+- **Online functions:** it also exports `previewInvite`, `joinGroup` and `upgradeGuest` as plain functions.
+  API tokens are Pholio's to make (`create_api_token` and the rest, called from Pholio; see
+  `docs/api-v1.md`), so the app has no token functions. Each throws `TransportError { code, message }`
   with the SQLSTATE as `code`.
 - **Callers:** screens call the online functions directly, then `requestSync()` after `joinGroup` and
   `upgradeGuest`. There are no wrapper modules, which would be pass-through.

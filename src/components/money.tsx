@@ -37,10 +37,11 @@ export function RollingAmount({ cents, ...props }: AmountProps) {
 			setShown(cents);
 			return;
 		}
-		const began = performance.now();
-		const duration = 620;
+		// Starts once a closing editor is out of the way, so the roll is seen rather than finished behind it.
+		const began = performance.now() + 280;
+		const duration = 900;
 		let frame = requestAnimationFrame(function step(now) {
-			const t = Math.min(1, (now - began) / duration);
+			const t = Math.max(0, Math.min(1, (now - began) / duration));
 			const eased = 1 - Math.pow(1 - t, 4);
 			setShown(Math.round(start + (cents - start) * eased));
 			if (t < 1) frame = requestAnimationFrame(step);
@@ -49,12 +50,6 @@ export function RollingAmount({ cents, ...props }: AmountProps) {
 	}, [cents]);
 
 	return <Amount cents={shown} {...props} className={cn("tabular-nums", props.className)} />;
-}
-
-export type Standing = "owed" | "owe" | "settled";
-
-export function standingOf(balanceCents: number): Standing {
-	return balanceCents > 0 ? "owed" : balanceCents < 0 ? "owe" : "settled";
 }
 
 // A small label over an amount, right-aligned at the end of a row: "you lent / $40.00".

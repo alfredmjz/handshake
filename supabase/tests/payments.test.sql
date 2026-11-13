@@ -168,38 +168,38 @@ SELECT is(
 );
 
 -- ---------------------------------------------------------------------------
--- The receiver can start; decline and undo close a payment without it counting
+-- Decline and undo close a payment without it counting
 -- ---------------------------------------------------------------------------
 SELECT is(
-    pg_temp.try('cccccccc-cccc-cccc-cccc-cccccccccccc', pg_temp.pay('30000000-0000-0000-0000-000000000003', '20000000-0000-0000-0000-0000000000b1', '20000000-0000-0000-0000-0000000000c1', 1000)),
+    pg_temp.try('bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb', pg_temp.pay('30000000-0000-0000-0000-000000000003', '20000000-0000-0000-0000-0000000000b1', '20000000-0000-0000-0000-0000000000c1', 1000)),
     'applied',
-    'Jo records "Sam paid me $10.00"'
+    'Sam records "I paid Jo $10.00"'
 );
 SELECT results_eq(
     $$ SELECT status, payer_agreed, receiver_agreed FROM pg_temp.payment_now('30000000-0000-0000-0000-000000000003') $$,
-    $$ VALUES ('pending', FALSE, TRUE) $$,
-    'it waits for Sam, with Jo''s (the receiver''s) side agreed'
+    $$ VALUES ('pending', TRUE, FALSE) $$,
+    'it waits for Jo, with Sam''s (the payer''s) side agreed'
 );
-SELECT is(pg_temp.try('bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb', pg_temp.answer('payment.decline', '30000000-0000-0000-0000-000000000003', repeat('x', 201))), 'HS422', 'a decline note over 200 characters is refused');
-SELECT is(pg_temp.try('bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb', pg_temp.answer('payment.decline', '30000000-0000-0000-0000-000000000003', 'I didn''t pay this')), 'applied', 'Sam declines it, with a note');
+SELECT is(pg_temp.try('cccccccc-cccc-cccc-cccc-cccccccccccc', pg_temp.answer('payment.decline', '30000000-0000-0000-0000-000000000003', repeat('x', 201))), 'HS422', 'a decline note over 200 characters is refused');
+SELECT is(pg_temp.try('cccccccc-cccc-cccc-cccc-cccccccccccc', pg_temp.answer('payment.decline', '30000000-0000-0000-0000-000000000003', 'I didn''t get this')), 'applied', 'Jo declines it, with a note');
 SELECT results_eq(
     $$ SELECT * FROM pg_temp.payment_now('30000000-0000-0000-0000-000000000003') $$,
-    $$ VALUES ('declined', FALSE, TRUE, FALSE, TRUE, 'I didn''t pay this', TRUE) $$,
+    $$ VALUES ('declined', TRUE, FALSE, FALSE, TRUE, 'I didn''t get this', TRUE) $$,
     'it is declined and closed, with the note, and never counted'
 );
 
 SELECT is(
-    pg_temp.try('cccccccc-cccc-cccc-cccc-cccccccccccc', pg_temp.pay('30000000-0000-0000-0000-000000000004', '20000000-0000-0000-0000-0000000000b1', '20000000-0000-0000-0000-0000000000c1', 1000)),
+    pg_temp.try('bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb', pg_temp.pay('30000000-0000-0000-0000-000000000004', '20000000-0000-0000-0000-0000000000b1', '20000000-0000-0000-0000-0000000000c1', 1000)),
     'applied',
-    'once it is closed, Jo can record another payment from Sam'
+    'once it is closed, Sam can record another payment to Jo'
 );
-SELECT is(pg_temp.try('cccccccc-cccc-cccc-cccc-cccccccccccc', pg_temp.answer('payment.undo', '30000000-0000-0000-0000-000000000004')), 'applied', 'Jo, who started it, undoes it');
+SELECT is(pg_temp.try('bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb', pg_temp.answer('payment.undo', '30000000-0000-0000-0000-000000000004')), 'applied', 'Sam, who started it, undoes it');
 SELECT results_eq(
     $$ SELECT status, confirmed, closed FROM pg_temp.payment_now('30000000-0000-0000-0000-000000000004') $$,
     $$ VALUES ('undone', FALSE, TRUE) $$,
     'it is undone and closed, never counted'
 );
-SELECT is(pg_temp.try('bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb', pg_temp.answer('payment.confirm', '30000000-0000-0000-0000-000000000004')), 'HS409', 'confirming an undone payment is refused');
+SELECT is(pg_temp.try('cccccccc-cccc-cccc-cccc-cccccccccccc', pg_temp.answer('payment.confirm', '30000000-0000-0000-0000-000000000004')), 'HS409', 'confirming an undone payment is refused');
 SELECT is(pg_temp.try('bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb', pg_temp.answer('payment.confirm', '30000000-0000-0000-0000-000000000077')), 'applied', 'answering a payment the server never stored is accepted and does nothing');
 
 -- ---------------------------------------------------------------------------
@@ -283,6 +283,20 @@ SELECT is(
     'Jo records Kim (gone) paying Pat (name-only): neither can answer, so payment.record.others applies'
 );
 SELECT is((SELECT payment_status FROM public.ledger_entries WHERE id = '30000000-0000-0000-0000-000000000012'), 'confirmed', '... and it counts at once');
+
+-- ---------------------------------------------------------------------------
+-- The receiver settles alone: what they say they received counts without the payer signing
+-- ---------------------------------------------------------------------------
+SELECT is(
+    pg_temp.try('cccccccc-cccc-cccc-cccc-cccccccccccc', pg_temp.pay('30000000-0000-0000-0000-0000000000e9', '20000000-0000-0000-0000-0000000000b1', '20000000-0000-0000-0000-0000000000c1', 500)),
+    'applied',
+    'Jo records "Sam paid me $5.00"'
+);
+SELECT results_eq(
+    $$ SELECT * FROM pg_temp.payment_now('30000000-0000-0000-0000-0000000000e9') $$,
+    $$ VALUES ('confirmed', FALSE, TRUE, TRUE, FALSE, NULL::TEXT, TRUE) $$,
+    'it counts at once: only the receiver agreed, and Sam (who can answer) was never asked'
+);
 
 -- ---------------------------------------------------------------------------
 -- In a completed group a pending payment can still be answered, but not recorded anew or undone

@@ -3,6 +3,7 @@ import { toast } from "sonner";
 
 import { HandshakeMark, ReceiptDoodle } from "@/components/art/doodles";
 import { Hand, type HandKind } from "@/components/art/hand";
+import { Underlined } from "@/components/art/marks";
 import { JoinCodeForm } from "@/components/join-code-form";
 import { Notice } from "@/components/notices";
 import { Button } from "@/components/ui/button";
@@ -10,6 +11,7 @@ import { Field } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
 import { Stack } from "@/components/ui/stack";
 import { takeEndedNotice } from "@/lib/auth";
+import { devLoginAvailable, switchToTestAccount, TEST_ACCOUNTS } from "@/lib/dev-login";
 import { supabase } from "@/lib/supabase";
 import { cn } from "@/lib/utils";
 
@@ -130,6 +132,36 @@ export function EmailSignIn({ onBack }: { onBack?: () => void }) {
 	);
 }
 
+// Local development only: straight in as one of the test accounts, no emailed code.
+function TestAccountLinks() {
+	const [busy, setBusy] = useState(false);
+	return (
+		<p className="type-label flex flex-wrap items-center justify-center gap-x-stack gap-y-1 text-primary-foreground/70">
+			<span>Test account (local):</span>
+			{TEST_ACCOUNTS.map((account) => (
+				<Button
+					key={account.id}
+					variant="link"
+					size="inline"
+					className="type-label text-primary-foreground/85 hover:text-primary-foreground"
+					disabled={busy}
+					onClick={async () => {
+						setBusy(true);
+						try {
+							await switchToTestAccount(account.id);
+						} catch (error) {
+							toast.error("Couldn't sign in", { description: (error as Error).message });
+						}
+						setBusy(false);
+					}}
+				>
+					{account.label}
+				</Button>
+			))}
+		</p>
+	);
+}
+
 // The signed-out front door: hands passing a receipt, and a cobalt sheet that asks for an email or a group code.
 export function SignInPage() {
 	const [view, setView] = useState<"welcome" | "email" | "code">("welcome");
@@ -155,7 +187,11 @@ export function SignInPage() {
 				{view === "welcome" ? (
 					<>
 						{ended && <Notice className="text-ink">{ended}</Notice>}
-						<h1 className="type-display text-balance">Who owes who, sorted.</h1>
+						<h1 className="type-display text-balance">
+							<Underlined delay={0.6} tone="waiting">
+								Who owes who?
+							</Underlined>
+						</h1>
 						<p className="type-body-lg max-w-[19rem] text-primary-foreground/85">
 							Split costs with friends, see where everyone stands, and settle up in a tap.
 						</p>
@@ -171,6 +207,7 @@ export function SignInPage() {
 						>
 							Have a code?
 						</Button>
+						{import.meta.env.DEV && devLoginAvailable() && <TestAccountLinks />}
 					</>
 				) : view === "email" ? (
 					<>

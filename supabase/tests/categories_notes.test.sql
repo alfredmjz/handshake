@@ -107,7 +107,7 @@ SELECT is(pg_temp.note_of('10000000-0000-0000-0000-000000000001'), 'Tokyo and Ky
 SELECT is(pg_temp.pulled_group('10000000-0000-0000-0000-000000000001')->>'note', 'Tokyo and Kyoto, April', '... and pulled as note');
 SELECT is(
     (SELECT array_agg(k ORDER BY k) FROM jsonb_object_keys(pg_temp.pulled_group('10000000-0000-0000-0000-000000000001')) k),
-    ARRAY['base_currency', 'completed_at', 'completed_by_member_id', 'created_at', 'created_by', 'deleted_at', 'id', 'join_code', 'name', 'note', 'row_version'],
+    ARRAY['base_currency', 'completed_at', 'completed_by_member_id', 'cover_color', 'cover_sticker', 'created_at', 'created_by', 'deleted_at', 'id', 'join_code', 'name', 'note', 'row_version'],
     'a pulled group has exactly these keys'
 );
 

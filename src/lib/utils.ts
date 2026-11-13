@@ -24,6 +24,8 @@ const twMerge = extendTailwindMerge<"type">({
 						"label",
 						"caption",
 						"micro",
+						"hand",
+						"hand-lg",
 						"control",
 						"wordmark",
 						"money",

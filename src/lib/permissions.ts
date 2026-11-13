@@ -6,6 +6,8 @@ export type Action =
 	| "group.complete"
 	| "group.reopen"
 	| "group.recode"
+	| "group.recolor"
+	| "group.sticker"
 	| "member.add"
 	| "member.rename.self"
 	| "member.rename.others"
@@ -31,6 +33,8 @@ const ALLOWED: Record<Action, readonly Role[]> = {
 	"group.complete": ["owner"],
 	"group.reopen": ["owner"],
 	"group.recode": ["owner"],
+	"group.recolor": ["owner", "member", "guest"],
+	"group.sticker": ["owner", "member", "guest"],
 	"member.add": ["owner", "member"],
 	"member.rename.self": ["owner", "member", "guest"],
 	"member.rename.others": ["owner"],

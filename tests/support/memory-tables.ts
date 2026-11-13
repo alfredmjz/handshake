@@ -87,6 +87,8 @@ export function serverGroup(overrides: Partial<GroupRow> & Pick<GroupRow, "id">)
 	return {
 		name: "Trip",
 		note: null,
+		coverColor: null,
+		coverSticker: null,
 		createdBy: "user-1",
 		createdAt: "2026-11-01T12:00:00.000Z",
 		deletedAt: null,

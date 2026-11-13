@@ -24,8 +24,8 @@ marks the group completed.
 
 ## Positioning
 
-- **A payback counts only after a handshake.** One side records it, the other confirms it. Nobody can mark
-  themselves paid alone.
+- **Nobody can mark themselves paid alone.** A payback the payer records counts only once the receiver confirms
+  it. The receiver's own word is enough: when they record that they were paid, it counts at once.
 - **Debts stay between pairs.** What Sam owes Alex comes from their own bills, not a group-wide shuffle that
   has people paying strangers.
 - **Works offline.** Everything except joining a group works with no signal and syncs later.

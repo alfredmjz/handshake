@@ -10,12 +10,22 @@ const paperLine = {
 
 // Two sleeves slide in and shake on it: the moment a payment counts. The payer's sleeve takes their
 // colour, the receiver's is marigold. Drawn in paper lines, for the cobalt confirmation screen.
-export function ShakeScene({ payerTint, className }: { payerTint: string; className?: string }) {
+export function ShakeScene({
+	payerTint,
+	delay = 0,
+	className,
+}: {
+	payerTint: string;
+	// Seconds to hold before the sleeves come in, while the two sign.
+	delay?: number;
+	className?: string;
+}) {
+	const hold = { animationDelay: `${delay}s` };
 	return (
 		<svg viewBox="0 0 120 80" aria-hidden className={cn("overflow-visible", className)}>
-			<g className="animate-shake">
+			<g className="animate-shake" style={hold}>
 				<g transform="rotate(-2 60 40)">
-					<g className="animate-hand-in-left">
+					<g className="animate-hand-in-left" style={hold}>
 						<path
 							style={{ fill: payerTint }}
 							d="M-4 10.8 C 6 9.8, 15 9.6, 22.8 8.4 L 19.4 49.2 C 11 48.4, 3 48.8, -4 48.8 Z"
@@ -32,7 +42,7 @@ export function ShakeScene({ payerTint, className }: { payerTint: string; classN
 							<path d="M67 48.1 C 69.9 51.2, 72.8 54.1, 76.1 57.1 C 78.7 59.9, 84 59.8, 86.6 56.6 C 89.1 53.6, 88.9 49.4, 86.7 46.9 C 82.4 42.4, 77.9 37.4, 73.6 32.9" />
 						</g>
 					</g>
-					<g className="animate-hand-in-right">
+					<g className="animate-hand-in-right" style={hold}>
 						<path
 							style={{ fill: "hsl(var(--category-drinks))" }}
 							d="M97.9 8.2 C 106 9, 115 9, 124 9.8 L 124 48.4 C 115 48.4, 107 48.6, 101.7 49.1 Z"

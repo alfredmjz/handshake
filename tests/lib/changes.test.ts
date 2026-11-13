@@ -129,6 +129,8 @@ const toUndo: Record<Actor, string> = { alex: "p-alex-gus", sam: "p-sam-alex", g
 const MATRIX: [string, (as: Actor) => GroupIntent, [boolean, boolean, boolean], boolean][] = [
 	["renameGroup", () => ({ type: "renameGroup", name: "Japan" }), [true, false, false], false],
 	["describeGroup", () => ({ type: "describeGroup", note: "Tokyo" }), [true, false, false], false],
+	["recolorGroup", () => ({ type: "recolorGroup", color: "h3s1" }), [true, true, true], false],
+	["stickGroup", () => ({ type: "stickGroup", sticker: "emoji:🍣" }), [true, true, true], false],
 	["deleteGroup", () => ({ type: "deleteGroup" }), [true, false, false], true],
 	["completeGroup", () => ({ type: "completeGroup" }), [true, false, false], false],
 	["resetGroupCode", () => ({ type: "resetGroupCode" }), [true, false, false], false],
@@ -588,13 +590,13 @@ describe("planChange: payments", () => {
 		});
 	});
 
-	test("counts at once when the other side can't answer", () => {
+	test("counts at once when the other side can't answer, or when you are the one paid", () => {
 		const alex = state("alex");
 		expect(canAnswer(MEMBERS.find((m) => m.id === "sam"))).toBe(true);
 		expect(canAnswer(MEMBERS.find((m) => m.id === "jo"))).toBe(false); // no login
 		expect(canAnswer(MEMBERS.find((m) => m.id === "kim"))).toBe(false); // left
 		expect(paymentCountsAtOnce(alex, "alex", "sam")).toBe(false);
-		expect(paymentCountsAtOnce(alex, "sam", "alex")).toBe(false);
+		expect(paymentCountsAtOnce(alex, "sam", "alex")).toBe(true);
 		expect(paymentCountsAtOnce(alex, "alex", "jo")).toBe(true);
 		expect(paymentCountsAtOnce(alex, "kim", "alex")).toBe(true);
 		expect(paymentCountsAtOnce(alex, "jo", "nina")).toBe(true);
@@ -797,6 +799,31 @@ describe("planChange: categories and group notes", () => {
 		expect(plan(null, { type: "createGroup", name: "", displayName: "Alex", note: "x".repeat(121) })).toMatchObject({
 			reason: "A group note must be at most 120 characters",
 		});
+	});
+
+	test("recolorGroup sets a colour on the board, or null for the default", () => {
+		expect(plan(state("sam"), { type: "recolorGroup", color: "h7s2" })).toEqual({
+			ok: true,
+			createdId: null,
+			mutations: [{ id: "id-1", at: NOW, type: "group.recolor", groupId: G, color: "h7s2" }],
+		});
+		expect(plan(state("sam"), { type: "recolorGroup", color: null })).toMatchObject({ mutations: [{ color: null }] });
+		for (const color of ["h18s0", "h3s5", "#ff0000", "h03s1", ""])
+			expect(plan(state("sam"), { type: "recolorGroup", color })).toMatchObject({ ok: false, code: "HS422" });
+	});
+
+	test("stickGroup sets a hand, an emoji or a picture, or null for the default", () => {
+		expect(plan(state("sam"), { type: "stickGroup", sticker: "emoji:🇯🇵" })).toEqual({
+			ok: true,
+			createdId: null,
+			mutations: [{ id: "id-1", at: NOW, type: "group.sticker", groupId: G, sticker: "emoji:🇯🇵" }],
+		});
+		expect(plan(state("sam"), { type: "stickGroup", sticker: "hand:stay" })).toMatchObject({
+			mutations: [{ sticker: "hand:stay" }],
+		});
+		expect(plan(state("sam"), { type: "stickGroup", sticker: null })).toMatchObject({ mutations: [{ sticker: null }] });
+		for (const sticker of ["hand:shake", "emoji:hi", "data:image/svg+xml;base64,PHN2Zz4=", ""])
+			expect(plan(state("sam"), { type: "stickGroup", sticker })).toMatchObject({ ok: false, code: "HS422" });
 	});
 
 	test("describeGroup sets or clears the note", () => {

@@ -98,25 +98,6 @@ export async function upgradeGuest(): Promise<void> {
 	await call("upgrade_guest");
 }
 
-export type NewApiToken = { id: string; token: string; name: string; createdAt: string };
-export type ApiToken = { id: string; name: string; scope: "read"; createdAt: string; lastUsedAt: string | null };
-
-// The token is returned this once. HS403 for guests; HS422 for a name that isn't 1–60
-// characters or an 11th live token.
-export function createApiToken(name: string): Promise<NewApiToken> {
-	return call("create_api_token", { p_name: name });
-}
-
-// Live tokens, newest first. HS403 for guests.
-export function listApiTokens(): Promise<ApiToken[]> {
-	return call("list_api_tokens");
-}
-
-// Unknown or already revoked ids do nothing. HS403 for guests; 22P02 for a malformed id.
-export async function revokeApiToken(id: string): Promise<void> {
-	await call("revoke_api_token", { p_id: id });
-}
-
 // Leaves the person's history behind as a name-only person and removes their login.
 export async function deleteAccount(): Promise<void> {
 	await call("delete_account");

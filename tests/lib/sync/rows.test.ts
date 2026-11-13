@@ -125,6 +125,8 @@ describe("LocalDb version 2", () => {
 			id: "g1",
 			name: "Trip",
 			note: null,
+			coverColor: null,
+			coverSticker: null,
 			createdBy: "u1",
 			completedAt: null,
 			completedByMemberId: null,
@@ -213,6 +215,33 @@ describe("LocalDb version 5", () => {
 		const db = new LocalDb(name);
 		expect((await db.groups.get("g1"))?.joinCode).toBeNull();
 		expect(await db.guestCodes.count()).toBe(0);
+		expect(await db.cursors.count()).toBe(0);
+	});
+});
+
+describe("LocalDb version 6", () => {
+	test("gives groups a cover colour and sticker and pulls everything again", async () => {
+		const name = `rows-test-${++dbCount}`;
+		const v5 = new Dexie(name);
+		v5.version(5).stores({
+			groups: "id",
+			members: "id, groupId",
+			outbox: "++seq, &id",
+			cursors: "groupId",
+			meta: "key",
+			entries: "id, groupId, [groupId+entryDate]",
+			conflicts: "id, entryId, groupId",
+			invites: "id, groupId",
+			inviteTokens: "inviteId, groupId",
+			nudges: "id, groupId, toMemberId",
+			guestCodes: "memberId, groupId",
+		});
+		await v5.table("groups").put({ id: "g1", name: "Trip", note: null, joinCode: null, rowVersion: 2 });
+		await v5.table("cursors").put({ groupId: "g1", version: 2 });
+		v5.close();
+
+		const db = new LocalDb(name);
+		expect(await db.groups.get("g1")).toMatchObject({ coverColor: null, coverSticker: null });
 		expect(await db.cursors.count()).toBe(0);
 	});
 });

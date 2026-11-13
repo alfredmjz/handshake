@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { ChevronDown } from "lucide-react";
-import { useParams } from "react-router";
+import { useNavigate, useParams } from "react-router";
 
 import { CheckDoodle } from "@/components/art/doodles";
 import { Face } from "@/components/art/face";
@@ -40,6 +40,7 @@ type PaymentDraft = { from: string; to: string; amountCents: number };
 export function SettleUpPage() {
 	const { groupId = "" } = useParams();
 	const commit = useCommit();
+	const navigate = useNavigate();
 	const group = useGroup(groupId);
 	const members = useMembers(groupId, { includeLeft: true });
 	const me = useMyMember(groupId);
@@ -101,7 +102,8 @@ export function SettleUpPage() {
 	};
 	const complete = async () => {
 		setCompleting(false);
-		await run({ type: "completeGroup", groupId });
+		// A completed group is done with: back to the groups.
+		if (await run({ type: "completeGroup", groupId })) navigate("/");
 	};
 
 	const guests = guestsLosingAccess(members);
