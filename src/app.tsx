@@ -24,6 +24,7 @@ export function App() {
 		return (
 			<Suspense>
 				<KitPage />
+				<Toaster position="top-center" />
 			</Suspense>
 		);
 	}

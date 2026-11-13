@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { MoreHorizontal, Plus, Trash2 } from "lucide-react";
+import { toast } from "sonner";
 
 import { BellDoodle, CheckDoodle, HandshakeMark, ReceiptDoodle, SquiggleArrow } from "@/components/art/doodles";
 import { Face, FacePile } from "@/components/art/face";
@@ -10,6 +11,7 @@ import { queue } from "@/components/art/figures/queue";
 import { square } from "@/components/art/figures/square";
 import { Signatures } from "@/components/art/signatures";
 import { BookCover, NewBookButton } from "@/components/book-cover";
+import { CodeInput } from "@/components/code-input";
 import { GroupReceipt } from "@/components/group/group-receipt";
 import { ConfirmDialog } from "@/components/confirm-dialog";
 import { DebtCard } from "@/components/group/debt-card";
@@ -70,6 +72,13 @@ const SWATCHES = [
 	["Groceries", "bg-category-groceries"],
 	["Fun", "bg-category-fun"],
 ];
+
+function KitCode() {
+	const [code, setCode] = useState("482913");
+	return (
+		<CodeInput id="kit-code" value={code} onChange={setCode} onComplete={(done) => toast(`Code ${done} complete`)} />
+	);
+}
 
 // Development only (/kit): every token, primitive and container in one place.
 export function KitPage() {
@@ -381,7 +390,7 @@ export function KitPage() {
 								<Input id="kit-email" variant="boxed" aria-invalid defaultValue="alex@" />
 							</Field>
 							<Field label="Code" htmlFor="kit-code">
-								<Input id="kit-code" variant="code" defaultValue="482913" />
+								<KitCode />
 							</Field>
 							<Field label="Notes" htmlFor="kit-notes" hint="Only the group sees this.">
 								<Textarea id="kit-notes" />

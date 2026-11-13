@@ -29,6 +29,7 @@
 		"mobile:open:android": "bun --bun cap open android"
 	},
 	"dependencies": {
+		"@capacitor/clipboard": "^8",
 		"@capacitor/core": "^8",
 		"@fontsource-variable/funnel-display": "^5.3.0",
 		"@fontsource-variable/funnel-sans": "^5.3.0",

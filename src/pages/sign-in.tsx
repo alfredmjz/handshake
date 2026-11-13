@@ -4,6 +4,7 @@ import { toast } from "sonner";
 import { HandshakeMark, ReceiptDoodle } from "@/components/art/doodles";
 import { Hand, type HandKind } from "@/components/art/hand";
 import { Underlined } from "@/components/art/marks";
+import { CodeInput } from "@/components/code-input";
 import { JoinCodeForm } from "@/components/join-code-form";
 import { Notice } from "@/components/notices";
 import { Button } from "@/components/ui/button";
@@ -60,10 +61,9 @@ export function EmailSignIn({ onBack }: { onBack?: () => void }) {
 		setStep("code");
 	}
 
-	async function verifyCode(event: FormEvent) {
-		event.preventDefault();
+	async function verify(token: string) {
 		setBusy(true);
-		const { error } = await supabase.auth.verifyOtp({ email: email.trim(), token: code.trim(), type: "email" });
+		const { error } = await supabase.auth.verifyOtp({ email: email.trim(), token: token.trim(), type: "email" });
 		setBusy(false);
 		if (error) toast.error("That code didn't work", { description: error.message });
 	}
@@ -95,20 +95,21 @@ export function EmailSignIn({ onBack }: { onBack?: () => void }) {
 					</Stack>
 				</form>
 			) : (
-				<form onSubmit={verifyCode}>
+				<form
+					onSubmit={(event) => {
+						event.preventDefault();
+						void verify(code);
+					}}
+				>
 					<Stack>
 						<Field label="Code" htmlFor="code" hint={`We sent a 6-digit code to ${email.trim()}.`}>
-							<Input
+							<CodeInput
 								id="code"
-								variant="code"
-								inputMode="numeric"
-								autoComplete="one-time-code"
-								placeholder="000000"
-								required
 								autoFocus
-								maxLength={10}
 								value={code}
-								onChange={(e) => setCode(e.target.value.replace(/\D/g, ""))}
+								onChange={setCode}
+								onComplete={(complete) => void verify(complete)}
+								ready={!busy}
 							/>
 						</Field>
 						<Button type="submit" size="lg" className="w-full" disabled={busy || code.length < 6}>
