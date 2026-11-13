@@ -1,4 +1,140 @@
-<h2>Your code</h2>
-<p>Enter this code in Handshake to confirm the email on your account:</p>
-<p style="font-size: 28px; font-weight: 600; letter-spacing: 0.2em">{{ .Token }}</p>
-<p>The code expires in one hour. If you didn't ask for it, you can ignore this email.</p>
+<!doctype html>
+<html lang="en">
+	<head>
+		<meta charset="utf-8" />
+		<meta name="viewport" content="width=device-width, initial-scale=1" />
+		<meta name="color-scheme" content="light only" />
+		<meta name="supported-color-schemes" content="light" />
+		<title>Your Handshake code</title>
+		<link
+			href="https://fonts.googleapis.com/css2?family=Funnel+Display:wght@600;700&family=Funnel+Sans:wght@400;600&family=Shantell+Sans:wght@500&display=swap"
+			rel="stylesheet"
+		/>
+		<style>
+			.code {
+				-webkit-user-select: all;
+				user-select: all;
+			}
+			@media (max-width: 480px) {
+				.sheet {
+					padding: 28px 22px !important;
+				}
+				.code {
+					font-size: 40px !important;
+				}
+			}
+		</style>
+	</head>
+	<body style="margin: 0; padding: 0; background-color: #f8f7f4">
+		<div style="display: none; max-height: 0; overflow: hidden; opacity: 0; color: #f8f7f4">
+			Your Handshake verification code is {{ .Token }}.
+		</div>
+		<table
+			role="presentation"
+			width="100%"
+			cellpadding="0"
+			cellspacing="0"
+			border="0"
+			style="background-color: #f8f7f4; background-image: radial-gradient(#1c1b1922 1px, transparent 1px); background-size: 18px 18px"
+		>
+			<tr>
+				<td align="center" style="padding: 40px 16px">
+					<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="max-width: 440px">
+						<tr>
+							<td
+								style="
+									padding: 0 4px 16px;
+									font-family: 'Funnel Display', 'Helvetica Neue', Arial, sans-serif;
+									font-size: 22px;
+									font-weight: 700;
+									letter-spacing: -0.02em;
+									color: #1c1b19;
+								"
+							>
+								<span style="color: #2f45d8">&#x1F91D;</span>&nbsp;handshake
+							</td>
+						</tr>
+						<tr>
+							<td
+								class="sheet"
+								style="
+									padding: 36px 32px;
+									background-color: #fcfbf8;
+									border: 1.5px solid #1c1b1926;
+									border-radius: 20px;
+									font-family: 'Funnel Sans', 'Helvetica Neue', Arial, sans-serif;
+									color: #1c1b19;
+								"
+							>
+								<h1
+									style="
+										margin: 0 0 8px;
+										font-family: 'Funnel Display', 'Helvetica Neue', Arial, sans-serif;
+										font-size: 26px;
+										line-height: 1.2;
+										font-weight: 700;
+										letter-spacing: -0.01em;
+									"
+								>
+									Confirm your email
+								</h1>
+								<p style="margin: 0 0 24px; font-size: 15px; line-height: 1.5; color: #5e5e58">
+									Enter it in Handshake to confirm this email on your account.
+								</p>
+								<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0">
+									<tr>
+										<td
+											align="center"
+											style="padding: 22px 12px; background-color: #edebe6; border: 1.5px dashed #1c1b1938; border-radius: 14px"
+										>
+											<span
+												class="code"
+												style="
+													font-family: 'Funnel Display', 'Helvetica Neue', Arial, sans-serif;
+													font-size: 44px;
+													line-height: 1;
+													font-weight: 700;
+													letter-spacing: 0.18em;
+													color: #2f45d8;
+													-webkit-user-select: all;
+													user-select: all;
+												"
+												>{{ .Token }}</span
+											>
+										</td>
+									</tr>
+								</table>
+								<p
+									style="
+										margin: 12px 0 0;
+										text-align: center;
+										font-family: 'Shantell Sans', 'Comic Neue', 'Helvetica Neue', Arial, sans-serif;
+										font-size: 14px;
+										color: #5e5e58;
+									"
+								>
+									Copy it and head back to Handshake.
+								</p>
+								<p style="margin: 28px 0 0; font-size: 13px; line-height: 1.5; color: #5e5e58">
+									Expires in one hour. Didn't ask for it? Ignore this email.
+								</p>
+							</td>
+						</tr>
+						<tr>
+							<td
+								style="
+									padding: 16px 4px 0;
+									font-family: 'Funnel Sans', 'Helvetica Neue', Arial, sans-serif;
+									font-size: 12px;
+									color: #5e5e58;
+								"
+							>
+								Handshake keeps track of who owes who.
+							</td>
+						</tr>
+					</table>
+				</td>
+			</tr>
+		</table>
+	</body>
+</html>

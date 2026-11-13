@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { toast } from "sonner";
 
+import { CodeInput } from "@/components/code-input";
 import { EditorDialog } from "@/components/editor-dialog";
 import { MyGuestCodes } from "@/components/guest-code";
 import { Button } from "@/components/ui/button";
@@ -39,14 +40,14 @@ export function GuestBanner() {
 		toast.error(title, { description: error instanceof Error ? error.message : undefined });
 	}
 
-	async function submit() {
+	async function submit(token = code) {
 		setBusy(true);
 		try {
 			if (step === "email") {
 				if ((await startKeepMyData(email)) === "done") kept();
 				else setStep("code");
 			} else {
-				await finishKeepMyData(email, code);
+				await finishKeepMyData(email, token);
 				kept();
 			}
 		} catch (error) {
@@ -113,15 +114,12 @@ export function GuestBanner() {
 					</Field>
 				) : (
 					<Field label="Code" htmlFor="keep-code" error={online ? undefined : "Needs a connection"}>
-						<Input
+						<CodeInput
 							id="keep-code"
-							variant="code"
-							inputMode="numeric"
-							autoComplete="one-time-code"
-							placeholder="000000"
-							maxLength={10}
 							value={code}
-							onChange={(e) => setCode(e.target.value.replace(/\D/g, ""))}
+							onChange={setCode}
+							onComplete={(complete) => void submit(complete)}
+							ready={online && !busy}
 						/>
 					</Field>
 				)}
