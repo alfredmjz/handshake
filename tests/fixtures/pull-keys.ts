@@ -1,6 +1,6 @@
 // The keys pull_changes() sends, per level of its JSON, sorted. Both sides are held to it:
 // supabase/tests/pull_keys.test.sql (rendered by `bun run gen:pull-keys`) checks what the server builds
-// (supabase/migrations/017_pull_row_builders.sql), and tests/lib/sync/pull-keys.test.ts checks that
+// (supabase/migrations/020_baseline.sql), and tests/lib/sync/pull-keys.test.ts checks that
 // src/lib/sync/wire.ts reads every one of them and nothing else.
 
 export type PullLevel =

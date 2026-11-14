@@ -10,7 +10,7 @@ import {
 import { hashToken } from "../../src/server/api-v1/token";
 import type { ApiSeeder, BillItem } from "../api/store.contract";
 
-// The in-memory ApiStore: the same answers as api.v1_* in 009_api.sql, over rows held in maps. It honours
+// The in-memory ApiStore: the same answers as api.v1_* in supabase/migrations/020_baseline.sql, over rows held in maps. It honours
 // the seam's invariants, rate window included, and the store contract suite holds it to them.
 
 type MemoryUser = { id: string; displayName: string };

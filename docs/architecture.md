@@ -1391,6 +1391,17 @@ then `ADD`), revokes from `PUBLIC, anon` and grants explicitly, and stamps every
 
 ### 11.2 Migrations
 
+On 2026-11-14 migrations 001–020 were squashed into one file, `supabase/migrations/020_baseline.sql`. It
+rebuilds the whole schema on an empty Supabase project: tables, functions, policies, grants, the
+`on_auth_user_created` trigger on `auth.users`, the `handshake_api` role, and the default privileges for
+`private` and `api`. Built on a wiped local stack, its whole-database `pg_dump --schema-only` and
+`pg_dumpall --roles-only` were identical to the ones from 001–020. Two things a plain squash gets wrong are
+fixed by hand in the file: it leaves out roles and the `private`/`api` default privileges, and its grants only
+add to what Supabase's default privileges give `anon` and `authenticated` on new `public` objects. Without
+that fix a rebuilt database would let anyone write every table, so the file turns those defaults off while
+it builds and restores them at the end. The sections below describe the original migrations; their files
+are in git history before the squash. New changes go in new migrations from `021`.
+
 **`004_people.sql`**
 
 - `group_members.role` check → `('owner', 'member', 'guest')`; add `joined_at TIMESTAMPTZ` (backfill

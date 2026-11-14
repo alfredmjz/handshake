@@ -2,7 +2,6 @@
 	"compilerOptions": {
 		"target": "ES2022",
 		"lib": ["ES2022", "DOM", "DOM.Iterable"],
-		"types": ["bun-types", "vite/client"],
 		"module": "ESNext",
 		"moduleResolution": "bundler",
 		"jsx": "react-jsx",
@@ -17,5 +16,5 @@
 			"@/*": ["./src/*"]
 		}
 	},
-	"include": ["src", "api", "tests", "scripts", "vite.config.ts", "tailwind.config.ts", "capacitor.config.ts"]
+	"include": ["src", "api", "tests", "scripts", "vite.config.ts", "capacitor.config.ts"]
 }

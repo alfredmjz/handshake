@@ -63,7 +63,7 @@ src/
   server/api-v1/           API v1 for Pholio: createApiV1({ store }) and the ApiStore adapters
 api/v1/[...path].ts        the Vercel function (composition root); runtime imports are relative
 supabase/
-  migrations/              numbered SQL, applied in filename order
+  migrations/              020_baseline.sql (001–020 squashed: the whole schema), then numbered SQL from 021
   tests/                   pgTAP
 tests/                     bun unit tests, mirroring src/ paths; fakes in tests/support/
 ```
@@ -98,7 +98,8 @@ backend can change later.
 ## Database rules
 
 - Migrations are additive and safe to re-run: `IF NOT EXISTS`, `CREATE OR REPLACE`, `DROP POLICY IF EXISTS`.
-  Version prefixes are unique.
+  Version prefixes are unique. `020_baseline.sql` rebuilds the whole schema on an empty project; new changes
+  go in new files from `021`, never into the baseline.
 - Internal functions live in the `private` schema with no grants. Public functions get explicit
   `REVOKE … FROM PUBLIC, anon` and `GRANT … TO authenticated`.
 - Group data is visible to members only, through `public.is_group_member()` (SECURITY DEFINER so policies
