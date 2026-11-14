@@ -315,7 +315,7 @@ Nothing from Pholio is stored in Handshake, and none of Pholio's keys or URLs ap
 
 | Area                   | Choice                                                                             | Why                                                                                                  |
 | ---------------------- | ---------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------- |
-| Runtime and tooling    | Bun 1.3, for every script, tool and the API function (ADR-006)                     | One fast tool for install, scripts and tests; runs TypeScript directly.                              |
+| Runtime and tooling    | Bun 1.4, for every script, tool and the API function (ADR-006)                     | One fast tool for install, scripts and tests; runs TypeScript directly.                              |
 | Node.js                | 26 LTS, only where a host needs it (ADR-006)                                       | Vercel's build image, and the fallback runtime for the API function.                                 |
 | Client                 | Vite 8, React 19, React Router 8, static SPA                                       | A static build is what both the PWA and Capacitor need; no server rendering to host or keep offline. |
 | Local store            | Dexie (IndexedDB) with `useLiveQuery`                                              | Screens re-render from local rows, so the app works the same with or without signal.                 |
@@ -435,9 +435,9 @@ Nothing from Pholio is stored in Handshake, and none of Pholio's keys or URLs ap
 - **Decision:**
   - Every script runs its tool under Bun with `bun --bun` (Vite dev, build and preview, `tsc`, Prettier,
     the Capacitor CLI). Checked on 2026-11-03: all of them work, the PWA build included.
-  - `package.json` pins `"packageManager": "bun@1.3.3"`, which CI reads (`bun-version-file`).
-  - The API function runs on Vercel's **Bun runtime** (`"bunVersion": "1.x"` in `vercel.json`, the Bun 1.3
-    line). It talks to Postgres through `Bun.sql` with `prepare: false`, so it needs no driver package.
+  - `package.json` pins `"packageManager": "bun@1.4.4"`, which CI reads (`bun-version-file`).
+  - The API function runs on Vercel's **Bun runtime** (`"bunVersion": "1.4.x"` in `vercel.json`). It talks
+    to Postgres through `Bun.sql` with `prepare: false`, so it needs no driver package.
   - Node stays only where a host brings it: Vercel's build machine, and the fallback runtime if Bun's has to
     go. `"engines": { "node": "26.x" }` pins both to Node 26 LTS. Nothing in the repo runs Node directly,
     so a developer machine doesn't need it for Handshake.
@@ -449,12 +449,17 @@ Nothing from Pholio is stored in Handshake, and none of Pholio's keys or URLs ap
     the same handler runs on Node 26.
   - `Bun.sql` is younger than `postgres`. The `ApiStore` seam keeps the choice local to
     `postgres-store.ts`, and the store contract suite (§9.11) proves whichever one is used.
-  - Bun 1.4 (Vercel's `"1.4.x"`) is a rewrite with breaking changes. Stay on 1.3 until it has been tried
-    here on its own branch.
+  - Bun 1.4 is a rewrite with breaking changes. Tried on 2026-11-14 before adopting it: Bun 1.4.4 ran in
+    an isolated copy of the repo, beside the machine's 1.3.3. It installed the same 623 packages and left
+    `bun.lock` byte-identical (still `lockfileVersion: 1`, so 1.3 and 1.4 share it). Typecheck, 922 unit
+    tests, the build (PWA precache 17 entries), `api:lint`, `db:reset` with 1,320 pgTAP tests, and the
+    `Bun.sql` store contract suite all passed. The bundled API function answered a real request through
+    Postgres. Not tried: a Vercel deployment on `"1.4.x"`; check a preview deployment before production.
+    The way back is the two version strings above.
 - **Rejected:** keeping the Node runtime for the function (works, but goes against the owner's rule and
   adds a second runtime to test against); `.nvmrc` or `.node-version` files (nothing local needs Node,
   and `engines` is what Vercel reads).
-- **Revisit:** when Vercel's Bun runtime leaves beta, and when moving to Bun 1.4.
+- **Revisit:** when Vercel's Bun runtime leaves beta, and when Bun 1.5 arrives.
 
 ### ADR-007: One permission matrix, mirrored in TypeScript and SQL, held in step by a case table
 
