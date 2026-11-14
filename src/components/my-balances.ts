@@ -1,11 +1,11 @@
 import { useLiveQuery } from "dexie-react-hooks";
 
-import { toLedgerMembers } from "@/lib/changes";
 import { useCurrentUser } from "@/lib/auth";
-import { makeNames } from "@/lib/group-access";
+import { groupView, makeNames, toLedgerMembers } from "@/lib/group-access";
 import { summarizeGroup } from "@/lib/ledger";
 import { db } from "@/lib/local-db";
 import { balanceFor, everOwed, type OpenDebt } from "@/lib/shell-view";
+import { byLabel } from "@/lib/utils";
 
 export type GroupStanding = {
 	balanceCents: number;
@@ -23,7 +23,7 @@ async function readStandings(userId: string) {
 				db.entries.where("groupId").equals(group.id).toArray(),
 				db.members.where("groupId").equals(group.id).toArray(),
 			]);
-			const me = members.find((m) => m.userId === userId && !m.deletedAt) ?? null;
+			const me = groupView({ group, members, userId })?.me ?? null;
 			return { group, members, me, entries, summary: summarizeGroup(entries, toLedgerMembers(members)) };
 		})
 	);
@@ -66,10 +66,6 @@ export function useOpenDebts() {
 					});
 			}
 		}
-		return out.sort(
-			(a, b) =>
-				a.groupName.localeCompare(b.groupName, undefined, { sensitivity: "base" }) ||
-				a.otherName.localeCompare(b.otherName, undefined, { sensitivity: "base" })
-		);
+		return out.sort((a, b) => byLabel(a.groupName, b.groupName) || byLabel(a.otherName, b.otherName));
 	}, [userId]);
 }

@@ -1,13 +1,12 @@
 import { describe, expect, test } from "bun:test";
-import { readFileSync } from "node:fs";
 
 import { LEDGER_CASES_SQL_PATH, renderLedgerCasesSql } from "../../scripts/ledger-cases-sql";
+import { readSqlFile } from "../../scripts/case-sql";
 import { LEDGER_CASES } from "../fixtures/ledger-cases";
 
 describe("the shared ledger case table", () => {
 	test("supabase/tests/ledger_cases.test.sql is current (run `bun run gen:ledger-cases`)", () => {
-		const onDisk = readFileSync(LEDGER_CASES_SQL_PATH, "utf8").replaceAll("\r\n", "\n");
-		expect(onDisk).toBe(renderLedgerCasesSql(LEDGER_CASES));
+		expect(readSqlFile(LEDGER_CASES_SQL_PATH)).toBe(renderLedgerCasesSql(LEDGER_CASES));
 	});
 
 	// Catches slips in the hand-worked numbers; it checks the table against itself, not against code.

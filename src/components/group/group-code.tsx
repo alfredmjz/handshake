@@ -65,7 +65,7 @@ export function GroupCode({ data, alone = false }: { data: GroupData; alone?: bo
 		<Section
 			title="Group code"
 			action={
-				data.can("group.recode") &&
+				data.may("group.recode") &&
 				code && (
 					<Button size="sm" variant="secondary" onClick={() => setConfirming(true)}>
 						Reset code

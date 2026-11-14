@@ -8,17 +8,15 @@ import { Field } from "@/components/ui/field";
 import { Textarea } from "@/components/ui/input";
 import type { Names } from "@/lib/group-access";
 import { formatAmount } from "@/lib/money";
-import { answeringSide, awaitedSide, counterpart, isPendingPayment, mayUndo, paymentSides } from "@/lib/payment-rules";
+import { readPayment, type PaymentReading } from "@/lib/payment-rules";
 import type { EntryRow } from "@/lib/sync/types";
 
-// What a pending payment is waiting for, from the current person's side.
-export function pendingSentence(entry: EntryRow, names: Names, myMemberId: string | null | undefined): string {
-	const { from, to } = paymentSides(entry);
-	if (myMemberId && entry.createdByMemberId === myMemberId)
-		return `Waiting for ${names.inSentence(counterpart(entry, myMemberId))}`;
-	if (to === myMemberId) return `${names.of(from)} says they paid you`;
-	if (from === myMemberId) return `${names.of(to)} says you paid them`;
-	return `Waiting for ${names.inSentence(awaitedSide(entry))}`;
+// What a pending payment is waiting for, from the side of the person it was read for.
+export function pendingSentence(payment: PaymentReading, names: Names): string {
+	if (payment.mayUndo) return `Waiting for ${names.inSentence(payment.other)}`;
+	if (payment.side === "receiver") return `${names.of(payment.from)} says they paid you`;
+	if (payment.side === "payer") return `${names.of(payment.to)} says you paid them`;
+	return `Waiting for ${names.inSentence(payment.answerer)}`;
 }
 
 type PaymentButtonsProps = {
@@ -35,9 +33,10 @@ export function PaymentButtons({ entry, data, onConfirmed, size = "sm" }: Paymen
 	const [declining, setDeclining] = useState(false);
 	const [note, setNote] = useState("");
 	const me = data.me?.id;
-	if (!isPendingPayment(entry) || !me) return null;
+	const payment = readPayment(entry, me);
+	if (payment?.status !== "pending" || !me) return null;
 
-	if (answeringSide(entry, me) && data.can("payment.respond")) {
+	if (payment.answeringAs && data.may("payment.respond")) {
 		return (
 			<>
 				<Button
@@ -59,7 +58,7 @@ export function PaymentButtons({ entry, data, onConfirmed, size = "sm" }: Paymen
 						if (!open) setNote("");
 					}}
 					title="Decline this payment?"
-					description={`${pendingSentence(entry, data.names, me)} ${formatAmount(entry.amountCents)}.`}
+					description={`${pendingSentence(payment, data.names)} ${formatAmount(entry.amountCents)}.`}
 					confirmLabel="Decline"
 					onConfirm={async () => {
 						await run({
@@ -85,7 +84,7 @@ export function PaymentButtons({ entry, data, onConfirmed, size = "sm" }: Paymen
 		);
 	}
 
-	if (mayUndo(entry, me) && data.can("payment.undo")) {
+	if (payment.mayUndo && data.may("payment.undo")) {
 		return (
 			<Button
 				size={size}

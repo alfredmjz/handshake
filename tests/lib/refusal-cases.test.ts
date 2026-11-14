@@ -3,7 +3,7 @@ import { describe, expect, test } from "bun:test";
 import { planChange } from "@/lib/changes";
 import type { Mutation } from "@/lib/sync/types";
 
-import { expectedOutcome, NOW, REFUSAL_CASES, worldState } from "../fixtures/refusal-cases";
+import { NOW, REFUSAL_CASES, worldState } from "../fixtures/refusal-cases";
 import type { RefusalCase } from "../fixtures/refusal-cases";
 
 const MUTATION_TYPES = [
@@ -54,7 +54,7 @@ describe("planChange against the refusal case table", () => {
 		test(label, () => {
 			const result = plan(refusalCase);
 			const outcome = result.ok ? "accepted" : result.code;
-			expect(outcome).toBe(expectedOutcome(refusalCase, "planChange"));
+			expect(outcome).toBe(refusalCase.expect);
 			// The intent and the mutation column describe the same change.
 			if (result.ok && result.mutations.length > 0) expect(result.mutations[0].type).toBe(refusalCase.mutation.type);
 		});
@@ -67,7 +67,7 @@ describe("the refusal case table", () => {
 	});
 
 	test.each([...MUTATION_TYPES])("%s has an accepted case and a refused one", (type) => {
-		const cases = REFUSAL_CASES.filter((refusalCase) => refusalCase.mutation.type === type && !refusalCase.mismatch);
+		const cases = REFUSAL_CASES.filter((refusalCase) => refusalCase.mutation.type === type);
 		expect(cases.some((refusalCase) => refusalCase.expect === "accepted")).toBe(true);
 		expect(cases.some((refusalCase) => refusalCase.expect !== "accepted")).toBe(true);
 	});

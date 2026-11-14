@@ -20,7 +20,7 @@ import { List, ListHeading, ListRow } from "@/components/ui/list";
 import { Stack } from "@/components/ui/stack";
 import type { Debt } from "@/lib/ledger";
 import { formatAmount } from "@/lib/money";
-import { isPendingPayment, paymentSides, recordableForOthers } from "@/lib/payment-rules";
+import { readPayment, recordingRule } from "@/lib/payment-rules";
 import { paymentCards } from "@/lib/settle-view";
 import type { EntryRow } from "@/lib/sync/types";
 import { everOwed } from "@/lib/shell-view";
@@ -45,10 +45,15 @@ export function BalancesTab({ data }: { data: GroupData }) {
 	};
 
 	const cards = data.me
-		? paymentCards(debts, data.entries.filter(isPendingPayment), data.members, {
-				memberId: data.me.id,
-				role: data.me.role,
-			})
+		? paymentCards(
+				debts,
+				data.entries.filter((e) => readPayment(e)?.status === "pending"),
+				data.members,
+				{
+					memberId: data.me.id,
+					role: data.me.role,
+				}
+			)
 		: [];
 	const byOther = new Map<string, Counterpart>();
 	for (const card of cards) {
@@ -63,10 +68,8 @@ export function BalancesTab({ data }: { data: GroupData }) {
 	const others = debts
 		.filter((d) => d.fromMemberId !== me && d.toMemberId !== me)
 		.sort(byText((d) => `${names.of(d.fromMemberId)} ${names.of(d.toMemberId)}`));
-	const mayRecordOthers = data.can("payment.record.others");
-	const mayRecordOwn = data.can("payment.record.own");
-	// People sign with their own name, you included.
-	const signedName = (id: string) => data.members.find((m) => m.id === id)?.displayName ?? names.of(id);
+	const mayRecordOthers = data.may("payment.record.others");
+	const mayRecordOwn = data.may("payment.record.own");
 
 	return (
 		<Stack gap="section">
@@ -81,25 +84,25 @@ export function BalancesTab({ data }: { data: GroupData }) {
 					{mine.map(({ otherId, debt, pending }, n) => {
 						if (!me) return null;
 						const person = (id: string) => ({ id, name: names.of(id) });
-						const sides = pending ? paymentSides(pending) : null;
+						const payment = pending ? readPayment(pending, me) : null;
 						// The arrow follows the debt; a payment with nobody owing anything follows the payment.
-						const fromId = debt?.fromMemberId ?? sides?.from ?? otherId;
-						const toId = debt?.toMemberId ?? sides?.to ?? otherId;
+						const fromId = debt?.fromMemberId ?? payment?.from ?? otherId;
+						const toId = debt?.toMemberId ?? payment?.to ?? otherId;
 						const amountCents = debt?.amountCents ?? pending?.amountCents ?? 0;
 						const iOwe = fromId === me;
 
 						// A badge under each face for their part of the handshake; your buttons go on your side.
 						const badges = new Map<string, ReactNode>();
 						let actions: ReactNode = null;
-						if (pending && sides?.from && sides.to) {
+						if (pending && payment) {
 							const recorder = pending.createdByMemberId;
-							const target = recorder === sides.from ? sides.to : sides.from;
+							const target = recorder === payment.from ? payment.to : payment.from;
 							const part = pending.amountCents !== amountCents ? ` ${formatAmount(pending.amountCents)}` : "";
 							badges.set(
 								recorder,
 								<Badge tone="settled">
 									<CheckDoodle />
-									{recorder === sides.from ? "Paid" : "Received"}
+									{recorder === payment.from ? "Paid" : "Received"}
 									{part}
 								</Badge>
 							);
@@ -135,18 +138,18 @@ export function BalancesTab({ data }: { data: GroupData }) {
 								tilt={n % 2 === 0 ? "up" : "down"}
 								fromBadge={badges.get(fromId)}
 								signatures={
-									pending && sides?.from && sides.to ? (
+									payment ? (
 										<Signatures
 											write={false}
 											payer={{
-												name: signedName(sides.from),
+												name: names.signed(payment.from),
 												role: "paid",
-												signed: pending.createdByMemberId === sides.from,
+												signed: payment.signed.payer,
 											}}
 											receiver={{
-												name: signedName(sides.to),
+												name: names.signed(payment.to),
 												role: "received",
-												signed: pending.createdByMemberId === sides.to,
+												signed: payment.signed.receiver,
 											}}
 										/>
 									) : undefined
@@ -155,8 +158,8 @@ export function BalancesTab({ data }: { data: GroupData }) {
 								actions={actions}
 								actionsSide={iOwe ? "from" : "to"}
 								sentence={
-									pending
-										? pendingSentence(pending, names, me)
+									payment
+										? pendingSentence(payment, names)
 										: iOwe
 											? `You owe ${names.of(otherId)}`
 											: `${names.of(otherId)} owes you`
@@ -191,7 +194,8 @@ export function BalancesTab({ data }: { data: GroupData }) {
 					<List>
 						{others.map((debt) => {
 							const recordable =
-								mayRecordOthers && recordableForOthers(names.member(debt.fromMemberId), names.member(debt.toMemberId));
+								mayRecordOthers &&
+								recordingRule(me, names.member(debt.fromMemberId), names.member(debt.toMemberId)).mayRecord;
 							return (
 								<ListRow
 									key={`${debt.fromMemberId}:${debt.toMemberId}`}

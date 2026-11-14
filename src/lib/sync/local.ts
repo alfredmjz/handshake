@@ -1,7 +1,8 @@
 import { isCoverKey } from "@/lib/cover-colors";
 import { isSticker } from "@/lib/cover-stickers";
+import { nextOwner } from "@/lib/group-access";
 import { computeShares } from "@/lib/ledger";
-import { answeringSide, countsAtOnce, isPendingPayment } from "@/lib/payment-rules";
+import { readPayment, recordingRule } from "@/lib/payment-rules";
 import { storedNote } from "@/lib/stored-text";
 import { keptAfterFullPull, pulledRows, rowKey, TABLE_NAMES, type RowOf, type TableName } from "@/lib/sync/tables";
 import type { BillFields, EntryRow, GroupChanges, Mutation, MutationOf, PullResult, Share } from "@/lib/sync/types";
@@ -49,16 +50,13 @@ function billFields(fields: BillFields) {
 
 async function pendingPayment(tables: LocalTables, groupId: string, entryId: string) {
 	const entry = await tables.entries.get(entryId);
-	return entry && entry.groupId === groupId && isPendingPayment(entry) ? entry : undefined;
+	return entry && entry.groupId === groupId && readPayment(entry)?.status === "pending" ? entry : undefined;
 }
 
-// private.hand_over: the full member who joined first becomes owner, or the group goes.
-async function handOver(tables: LocalTables, groupId: string, at: string) {
-	const heirs = (await tables.members.byGroup(groupId))
-		.filter((m) => m.role === "member" && m.userId !== null && !m.deletedAt)
-		.sort((a, b) => (a.joinedAt ?? "￿").localeCompare(b.joinedAt ?? "￿") || a.id.localeCompare(b.id));
-	if (heirs.length > 0) {
-		await tables.members.put([{ ...heirs[0], role: "owner" }]);
+async function handOver(tables: LocalTables, groupId: string, leavingId: string, at: string) {
+	const heir = nextOwner(await tables.members.byGroup(groupId), leavingId);
+	if (heir) {
+		await tables.members.put([{ ...heir, role: "owner" }]);
 		return;
 	}
 	const group = await tables.groups.get(groupId);
@@ -74,7 +72,7 @@ async function recordPayment(tables: LocalTables, m: MutationOf<"payment.record"
 	// The server refuses amounts computeShares can't split.
 	if (!me || !from || !to || from.id === to.id || !Number.isSafeInteger(m.amountCents) || m.amountCents <= 0) return;
 
-	const counts = countsAtOnce(me.id, from.id, to);
+	const counts = recordingRule(me.id, from, to).countsAtOnce;
 	await tables.entries.put([
 		{
 			id: m.entryId,
@@ -112,7 +110,7 @@ async function answerPayment(
 	const me = await callerMember(tables, m.groupId, userId);
 	if (!entry || !me) return;
 
-	const side = answeringSide(entry, me.id);
+	const side = readPayment(entry, me.id)?.answeringAs;
 	if (!side) return;
 
 	const answered = { ...entry, updatedByMemberId: me.id, updatedAt: m.at };
@@ -139,7 +137,10 @@ async function removeMember(tables: LocalTables, m: MutationOf<"member.remove">)
 
 	// private.undo_pending_payments: nobody would be left to answer them.
 	const undone = (await tables.entries.byGroup(m.groupId))
-		.filter((e) => e.paymentStatus === "pending" && e.shares.some((s) => s.memberId === target.id))
+		.filter((e) => {
+			const payment = readPayment(e, target.id);
+			return payment?.status === "pending" && payment.side !== null;
+		})
 		.map((e) => ({
 			...e,
 			paymentStatus: "undone" as const,
@@ -149,7 +150,7 @@ async function removeMember(tables: LocalTables, m: MutationOf<"member.remove">)
 		}));
 	if (undone.length > 0) await tables.entries.put(undone);
 
-	if (target.role === "owner") await handOver(tables, m.groupId, m.at);
+	if (target.role === "owner") await handOver(tables, m.groupId, target.id, m.at);
 }
 
 async function saveBill(tables: LocalTables, entry: EntryRow, fields: BillFields, memberId: string, at: string) {
@@ -382,7 +383,7 @@ export async function applyMutation(tables: LocalTables, mutation: Mutation, use
 		case "payment.undo": {
 			const entry = await pendingPayment(tables, m.groupId, m.entryId);
 			const me = await callerMember(tables, m.groupId, userId);
-			if (entry && me && entry.createdByMemberId === me.id)
+			if (entry && me && readPayment(entry, me.id)?.mayUndo)
 				await tables.entries.put([
 					{ ...entry, paymentStatus: "undone", closedAt: m.at, updatedByMemberId: me.id, updatedAt: m.at },
 				]);

@@ -1,9 +1,9 @@
 import { describe, expect, test } from "bun:test";
-import { readFileSync } from "node:fs";
 
 import { toPullResult } from "@/lib/sync/wire";
 import type { RawPull } from "@/lib/sync/wire";
 
+import { readSqlFile } from "../../../scripts/case-sql";
 import { PULL_KEYS_SQL_PATH, readPullScenario, renderPullKeysSql } from "../../../scripts/pull-keys-sql";
 import { PULL_KEYS, PULL_KEYS_THE_DEVICE_IGNORES } from "../../fixtures/pull-keys";
 import type { PullLevel } from "../../fixtures/pull-keys";
@@ -50,8 +50,7 @@ function readWholePull(): Record<PullLevel, Set<string>> {
 
 describe("the pull key table", () => {
 	test("supabase/tests/pull_keys.test.sql is current (run `bun run gen:pull-keys`)", () => {
-		const onDisk = readFileSync(PULL_KEYS_SQL_PATH, "utf8").replaceAll("\r\n", "\n");
-		expect(onDisk).toBe(renderPullKeysSql(PULL_KEYS, readPullScenario()));
+		expect(readSqlFile(PULL_KEYS_SQL_PATH)).toBe(renderPullKeysSql(PULL_KEYS, readPullScenario()));
 	});
 
 	test("each level's keys are sorted and listed once", () => {

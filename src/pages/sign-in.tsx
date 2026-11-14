@@ -13,7 +13,7 @@ import { Input } from "@/components/ui/input";
 import { Stack } from "@/components/ui/stack";
 import { takeEndedNotice } from "@/lib/auth";
 import { devLoginAvailable, switchToTestAccount, TEST_ACCOUNTS } from "@/lib/dev-login";
-import { OFFLINE_SIGN_IN } from "@/lib/online-outcome";
+import { failureNotice, OFFLINE_SIGN_IN } from "@/lib/online-outcome";
 import { supabase } from "@/lib/supabase";
 import { cn } from "@/lib/utils";
 
@@ -56,7 +56,7 @@ export function EmailSignIn({ onBack }: { onBack?: () => void }) {
 		const { error } = await supabase.auth.signInWithOtp({ email: email.trim(), options: { shouldCreateUser: true } });
 		setBusy(false);
 		if (error) {
-			toast.error("Couldn't send the code", { description: error.message });
+			toast.error(...failureNotice(error, "Couldn't send the code"));
 			return;
 		}
 		setStep("code");
@@ -66,7 +66,7 @@ export function EmailSignIn({ onBack }: { onBack?: () => void }) {
 		setBusy(true);
 		const { error } = await supabase.auth.verifyOtp({ email: email.trim(), token: token.trim(), type: "email" });
 		setBusy(false);
-		if (error) toast.error("That code didn't work", { description: error.message });
+		if (error) toast.error(...failureNotice(error, "That code didn't work"));
 	}
 
 	return (

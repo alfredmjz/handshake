@@ -15,7 +15,8 @@ import {
 	DropdownMenuSeparator,
 	DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { counterpart, isPendingPayment } from "@/lib/payment-rules";
+import { nextOwner } from "@/lib/group-access";
+import { readPayment, type PaymentReading } from "@/lib/payment-rules";
 
 // The group's "…" menu: name and note, cover, settle up and complete, reopen, leave, delete.
 export function GroupMenu({ data }: { data: GroupData }) {
@@ -26,27 +27,26 @@ export function GroupMenu({ data }: { data: GroupData }) {
 	if (!group || !me) return null;
 
 	const completed = !!group.completedAt;
-	const fullMembers = data.active.filter((m) => m.userId !== null && m.role !== "guest");
-	const lastFullMember = me.role !== "guest" && fullMembers.length === 1;
-	const nextOwner = fullMembers
-		.filter((m) => m.id !== me.id)
-		.sort((a, b) => (a.joinedAt ?? "").localeCompare(b.joinedAt ?? "") || a.id.localeCompare(b.id))[0];
+	const heir = me.role === "owner" ? nextOwner(data.active, me.id) : undefined;
+	const lastFullMember = me.role === "owner" && !heir;
 
 	// Leaving undoes your payments still waiting for an answer.
-	const pending = data.entries.filter((e) => isPendingPayment(e) && e.shares.some((sh) => sh.memberId === me.id));
+	const pending = data.entries
+		.map((e) => readPayment(e, me.id))
+		.filter((p): p is PaymentReading => p?.status === "pending" && p.side !== null);
 	const pendingLine =
 		pending.length === 1
-			? `Your payment waiting for ${data.names.inSentence(counterpart(pending[0], me.id))} is undone.`
+			? `Your payment waiting for ${data.names.inSentence(pending[0].other)} is undone.`
 			: pending.length > 1
 				? `Your ${pending.length} payments waiting for an answer are undone.`
 				: null;
 
-	const mayEdit = data.can("group.rename");
-	const mayCover = data.can("group.recolor") || data.can("group.sticker");
-	const mayComplete = data.can("group.complete");
-	const mayReopen = completed && data.can("group.reopen");
-	const mayLeave = data.can("member.remove.self");
-	const mayDelete = data.can("group.delete");
+	const mayEdit = data.may("group.rename");
+	const mayCover = data.may("group.recolor") || data.may("group.sticker");
+	const mayComplete = data.may("group.complete");
+	const mayReopen = completed && data.may("group.reopen");
+	const mayLeave = data.may("member.remove.self");
+	const mayDelete = data.may("group.delete");
 	const close = (open: boolean) => !open && setDialog(null);
 
 	return (
@@ -93,7 +93,7 @@ export function GroupMenu({ data }: { data: GroupData }) {
 						{lastFullMember ? (
 							<p>You're the last member, so the group is deleted for everyone.</p>
 						) : (
-							me.role === "owner" && nextOwner && <p>{nextOwner.displayName} becomes the owner.</p>
+							heir && <p>{heir.displayName} becomes the owner.</p>
 						)}
 					</>
 				}

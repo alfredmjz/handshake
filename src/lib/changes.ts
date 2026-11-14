@@ -1,17 +1,17 @@
 import { createContext, useContext } from "react";
 
 import { isCategory } from "@/lib/categories";
-import { denial } from "@/lib/group-access";
-import { computeShares, validateEntry, type Item, type LedgerMember } from "@/lib/ledger";
+import { denial, isNameTaken, makeNames, toLedgerMembers } from "@/lib/group-access";
+import { computeShares, validateEntry, type Item } from "@/lib/ledger";
 import type { LocalDb } from "@/lib/local-db";
 import { currentDebt, lastNudge, nudgedRecently } from "@/lib/nudge-view";
-import { answeringSide, canAnswer, mayUndo, pendingPaymentBetween, recordableForOthers } from "@/lib/payment-rules";
+import { canAnswer, pendingPaymentBetween, readPayment, recordingRule } from "@/lib/payment-rules";
 import type { Action } from "@/lib/permissions";
 import { isCoverKey } from "@/lib/cover-colors";
 import { isSticker } from "@/lib/cover-stickers";
 import { charLength, storedNote } from "@/lib/stored-text";
 import { dexieTables, writeTables } from "@/lib/sync/dexie-store";
-import { applyMutation } from "@/lib/sync/local";
+import { applyMutation, type LocalTables } from "@/lib/sync/local";
 import type {
 	BillFields,
 	Category,
@@ -95,10 +95,6 @@ type MutationBody = Mutation extends infer M ? (M extends Mutation ? Omit<M, "id
 
 const refuse = (code: RefusalCode, reason: string): Plan => ({ ok: false, code, reason });
 const nothing: Plan = { ok: true, mutations: [], createdId: null };
-
-export function toLedgerMembers(members: MemberRow[]): LedgerMember[] {
-	return members.map((m) => ({ id: m.id, displayName: m.displayName, hasLogin: m.userId !== null }));
-}
 
 function nameLength(name: string) {
 	return charLength(name.trim());
@@ -186,12 +182,6 @@ const groupNoteProblem = (note: string | null) => {
 };
 const displayNameProblem = (name: string) =>
 	nameLength(name) < 1 || nameLength(name) > 60 ? refuse("HS422", "A name must be 1 to 60 characters") : null;
-
-// private.require_unique_name: names are unique among the group's active people, ignoring case and outer spaces.
-export function isNameTaken(members: MemberRow[], name: string, exceptMemberId: string | null = null): boolean {
-	const key = name.trim().toLowerCase();
-	return members.some((m) => !m.deletedAt && m.id !== exceptMemberId && m.displayName.trim().toLowerCase() === key);
-}
 
 const nameClash = (name: string) => refuse("HS409", `${name.trim()} is already in this group`);
 
@@ -340,10 +330,11 @@ export function planChange(state: GroupState | null, intent: Intent, ctx: PlanCo
 			if (refused) return refused;
 			const conflict = state!.conflicts.find((c) => c.id === intent.conflictId);
 			if (!conflict) return refuse("HS404", "That conflict doesn't exist in this group");
-			if (conflict.resolvedAt) {
-				const by = conflict.resolvedByMemberId ? member(conflict.resolvedByMemberId)?.displayName : undefined;
-				return refuse("HS409", `${by ?? "Someone"} already resolved this`);
-			}
+			if (conflict.resolvedAt)
+				return refuse(
+					"HS409",
+					`${makeNames(state!.members, null).signed(conflict.resolvedByMemberId)} already resolved this`
+				);
 			let final: BillFields | { deleted: true } = { deleted: true };
 			if (intent.final !== "deleted") {
 				const fields = billFields(intent.final, state!.members);
@@ -368,7 +359,7 @@ export function planChange(state: GroupState | null, intent: Intent, ctx: PlanCo
 			const to = member(intent.to);
 			if (!from || !to) return refuse("HS422", "Both sides of a payment must be in this group");
 			if (from.id === to.id) return refuse("HS422", "A payment is between two different people");
-			if (!own && !recordableForOthers(from, to))
+			if (!recordingRule(me, from, to).mayRecord)
 				return refuse("HS422", "You can only record payments between two people who can't answer them themselves");
 			if (!isCents(intent.amountCents, 1))
 				return refuse("HS422", "The amount must be a whole number of cents from 1 to 10^12");
@@ -400,9 +391,10 @@ export function planChange(state: GroupState | null, intent: Intent, ctx: PlanCo
 			const payment = entry(intent.entryId);
 			if (!payment) return nothing;
 			if (payment.kind !== "payment") return refuse("HS422", "That is a bill, not a payment");
+			const reading = readPayment(payment, me);
 			// Answered already (here or by the other side): a second tap does nothing.
-			if (payment.paymentStatus !== "pending") return nothing;
-			if (!answeringSide(payment, me)) return refuse("HS403", "Only the other side of this payment can answer it");
+			if (reading?.status !== "pending") return nothing;
+			if (!reading.answeringAs) return refuse("HS403", "Only the other side of this payment can answer it");
 			if (intent.type === "confirmPayment") return one({ type: "payment.confirm", groupId, entryId: payment.id });
 			if (intent.note !== null && charLength(intent.note) > 200)
 				return refuse("HS422", "A note must be text of at most 200 characters");
@@ -414,8 +406,9 @@ export function planChange(state: GroupState | null, intent: Intent, ctx: PlanCo
 			const payment = entry(intent.entryId);
 			if (!payment) return nothing;
 			if (payment.kind !== "payment") return refuse("HS422", "That is a bill, not a payment");
-			if (payment.paymentStatus !== "pending") return nothing;
-			if (!mayUndo(payment, me)) return refuse("HS403", "Only whoever recorded this payment can undo it");
+			const reading = readPayment(payment, me);
+			if (reading?.status !== "pending") return nothing;
+			if (!reading.mayUndo) return refuse("HS403", "Only whoever recorded this payment can undo it");
 			return one({ type: "payment.undo", groupId, entryId: payment.id });
 		}
 
@@ -443,16 +436,16 @@ function localDate(date: Date) {
 }
 
 // The group as planChange sees it, or null when this person isn't an active member of it here.
-async function readGroupState(db: LocalDb, groupId: string, userId: string, isAnonymous: boolean) {
-	const group = await db.groups.get(groupId);
+async function readGroupState(tables: LocalTables, groupId: string, userId: string, isAnonymous: boolean) {
+	const group = await tables.groups.get(groupId);
 	if (!group) return null;
-	const members = await db.members.where("groupId").equals(groupId).toArray();
+	const members = await tables.members.byGroup(groupId);
 	const mine = members.find((m) => m.userId === userId && !m.deletedAt);
 	if (!mine) return null;
 	const [entries, conflicts, nudges] = await Promise.all([
-		db.entries.where("groupId").equals(groupId).toArray(),
-		db.conflicts.where("groupId").equals(groupId).toArray(),
-		db.nudges.where("groupId").equals(groupId).toArray(),
+		tables.entries.byGroup(groupId),
+		tables.conflicts.byGroup(groupId),
+		tables.nudges.byGroup(groupId),
 	]);
 	const state: GroupState = {
 		group,
@@ -489,11 +482,11 @@ export function createCommitter(deps: CommitterDeps): Commit {
 			isAnonymous,
 		};
 		const plan = await db.transaction("rw", writeTables(db), async () => {
+			const tables = dexieTables(db);
 			const state =
-				intent.type === "createGroup" ? null : await readGroupState(db, intent.groupId, userId, isAnonymous);
+				intent.type === "createGroup" ? null : await readGroupState(tables, intent.groupId, userId, isAnonymous);
 			const plan = planChange(state, intent, ctx);
 			if (!plan.ok) return plan;
-			const tables = dexieTables(db);
 			for (const mutation of plan.mutations) {
 				await applyMutation(tables, mutation, userId);
 				await db.outbox.add({ id: mutation.id, mutation });

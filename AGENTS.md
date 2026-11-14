@@ -55,9 +55,10 @@ src/
     changes.ts             planChange() and commit(intent): the only way screens change data
     ledger.ts              shares, entry checks, balances and debts (pure)
     permissions.ts         the role matrix (mirrors private.may)
-    group-access.ts        the "may I?" gate, its reason in words, and names ("You", "Jo (left)")
-    payment-rules.ts       pending-payment rules: who answers, who may undo, what counts at once
-    groups.ts              read hooks, with members.ts, entries.ts and invites.ts
+    group-access.ts        a group as one person sees it: groupView (may, whyNot, names), next owner
+    payment-rules.ts       one reading of a payment: who answers, who may undo, what counts at once
+    join-flow.ts           join or return with a code, as one flow behind ports (stash, go, guest)
+    groups.ts              read hooks, with members.ts and entries.ts
     auth.tsx, money.ts, ids.ts, supabase.ts
   server/api-v1/           API v1 for Pholio: createApiV1({ store }) and the ApiStore adapters
 api/v1/[...path].ts        the Vercel function (composition root); runtime imports are relative
@@ -103,6 +104,8 @@ backend can change later.
 - Group data is visible to members only, through `public.is_group_member()` (SECURITY DEFINER so policies
   don't recurse).
 - Add a pgTAP test for every change to the sync functions or permissions, with expected values worked out by hand.
+- Checks live in private helpers; apply functions call the checks, then write. To change a check, replace its
+  helper. Extract an inline rule in the same migration that changes it.
 
 ## Money and dates
 

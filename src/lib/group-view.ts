@@ -50,11 +50,6 @@ export function joinNames(names: readonly string[]): string {
 	return `${names.slice(0, -1).join(", ")} and ${names.at(-1)}`;
 }
 
-// A list of names that starts a sentence: "You and Sam", "Alex and you".
-export function sentenceList(names: readonly string[]): string {
-	return joinNames(names.map((name, i) => (i > 0 && name === "You" ? "you" : name)));
-}
-
 type PaymentLike = Pick<EntryRow, "kind" | "paymentStatus" | "shares">;
 
 // Everyone sees bills and payments that count; a pending, declined or undone payment only its two people.

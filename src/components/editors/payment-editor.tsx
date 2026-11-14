@@ -3,6 +3,7 @@ import { toast } from "sonner";
 
 import { EditorDialog } from "@/components/editor-dialog";
 import { PaymentArrow } from "@/components/editors/payment-arrow";
+import { useGroupView } from "@/components/group/group-data";
 import { Notice } from "@/components/notices";
 import { showRefusal } from "@/components/signed-in-layout";
 import { Field } from "@/components/ui/field";
@@ -11,11 +12,9 @@ import { Stack } from "@/components/ui/stack";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { useCommit } from "@/lib/changes";
 import { useEntries, useGroupSummary } from "@/lib/entries";
-import { groupAccess } from "@/lib/group-access";
-import { useGroup } from "@/lib/groups";
-import { useMembers, useMyMember } from "@/lib/members";
+import { makeNames, NOT_IN_GROUP } from "@/lib/group-access";
 import { formatAmount, parseAmount } from "@/lib/money";
-import { countsAtOnce as paymentCountsAtOnce, pendingPaymentBetween } from "@/lib/payment-rules";
+import { pendingPaymentBetween, recordingRule } from "@/lib/payment-rules";
 
 export type PaymentEditorProps = {
 	groupId: string;
@@ -43,9 +42,7 @@ function amountText(cents: number) {
 // "You paid Sam" or "Jo paid you": who and which way are set by the debt it was opened from.
 export function PaymentEditor({ groupId, from, to, amountCents, open, onOpenChange, onCounted }: PaymentEditorProps) {
 	const commit = useCommit();
-	const group = useGroup(groupId);
-	const members = useMembers(groupId, { includeLeft: true });
-	const me = useMyMember(groupId);
+	const view = useGroupView(groupId);
 	const entries = useEntries(groupId);
 	const summary = useGroupSummary(groupId);
 	const [amount, setAmount] = useState("");
@@ -69,10 +66,11 @@ export function PaymentEditor({ groupId, from, to, amountCents, open, onOpenChan
 		}
 	}, [open, filled, summary, defaultCents]);
 
-	const payer = members?.find((m) => m.id === from);
-	const receiver = members?.find((m) => m.id === to);
-	const access = groupAccess({ group, members, me });
-	const name = access.names.of;
+	const me = view?.me;
+	const payer = view?.names.member(from);
+	const receiver = view?.names.member(to);
+	// Before the group loads, no one is known yet.
+	const name = (view?.names ?? makeNames([], null)).of;
 	const title =
 		me?.id === to
 			? `${name(from)} paid you`
@@ -81,15 +79,16 @@ export function PaymentEditor({ groupId, from, to, amountCents, open, onOpenChan
 				: `${name(from)} paid ${name(to)}`;
 	const other = me?.id === from ? to : from;
 
-	const countsAtOnce = group && members && entries && me ? paymentCountsAtOnce(me.id, from, receiver) : false;
+	const countsAtOnce = entries && me ? recordingRule(me.id, payer, receiver).countsAtOnce : false;
 	const waiting = entries ? pendingPaymentBetween(entries, from, to) : undefined;
 	const own = me?.id === from || me?.id === to;
 	const action = own ? "payment.record.own" : "payment.record.others";
 
-	const loaded = group !== undefined && members !== undefined && me !== undefined && entries !== undefined && !!summary;
+	const loaded = view !== undefined && entries !== undefined && !!summary;
 	const blocked = !loaded
 		? null
-		: (access.whyNot(action) ?? (waiting ? `A payment with ${name(other)} is already waiting.` : null));
+		: ((view ? view.whyNot(action) : NOT_IN_GROUP) ??
+			(waiting ? `A payment with ${name(other)} is already waiting.` : null));
 
 	const cents = parseAmount(amount);
 	const valid = cents !== null && cents >= 1 && /^\d{4}-\d{2}-\d{2}$/.test(entryDate) && !!payer && !!receiver;

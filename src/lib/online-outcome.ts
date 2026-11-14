@@ -22,13 +22,21 @@ export function isServerError(error: unknown): boolean {
 	return transportCode(error) !== null;
 }
 
-export function messageOf(error: unknown): string | undefined {
-	return error instanceof Error ? error.message : undefined;
+// A lost connection: the transport's failed fetch, or Supabase auth's. Auth raises AuthRetryableFetchError with
+// status 0 only when the fetch itself failed; with a 5xx status it is a server error and keeps its message.
+function lostConnection(error: unknown): boolean {
+	if (transportCode(error) === "network") return true;
+	return (
+		error instanceof Error && error.name === "AuthRetryableFetchError" && (error as { status?: number }).status === 0
+	);
 }
 
-// A toast description where a lost connection reads "Needs a connection" instead of the raw message.
-export function describeProblem(error: unknown): string | undefined {
-	return transportCode(error) === "network" ? NEEDS_CONNECTION : messageOf(error);
+// A failure toast's arguments: a lost connection reads "Needs a connection", anything else keeps its message.
+export function failureNotice(error: unknown, title: string): [string, { description: string | undefined }] {
+	return [
+		title,
+		{ description: lostConnection(error) ? NEEDS_CONNECTION : error instanceof Error ? error.message : undefined },
+	];
 }
 
 export function previewFailure(error: unknown): "gone" | "failed" {

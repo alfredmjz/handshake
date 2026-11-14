@@ -17,7 +17,7 @@ export function NudgeButton({ data, memberId }: { data: GroupData; memberId: str
 	const last = useLastNudge(groupId, me, memberId);
 	const member = data.names.member(memberId);
 
-	if (!data.can("nudge.send") || !member || member.deletedAt || last === undefined) return null;
+	if (!data.may("nudge.send") || !member || member.deletedAt || last === undefined) return null;
 
 	if (!canAnswer(member)) {
 		return (

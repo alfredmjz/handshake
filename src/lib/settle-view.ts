@@ -1,7 +1,7 @@
-import { byLabel } from "@/lib/groups";
 import type { Debt, GroupSummary, Item } from "@/lib/ledger";
-import { answeringSide, mayUndo, paymentSides, recordableForOthers } from "@/lib/payment-rules";
+import { pendingPaymentBetween, readPayment, recordingRule } from "@/lib/payment-rules";
 import type { EntryRow, MemberRow, Role } from "@/lib/sync/types";
+import { byLabel } from "@/lib/utils";
 
 // A bill's items, or one item rebuilt from its shares for a bill stored without them.
 export function billItems(entry: EntryRow): Item[] {
@@ -97,22 +97,31 @@ export function paymentCards(
 	const used = new Set<string>();
 
 	const pendingCard = (entry: EntryRow, debt?: Debt): PaymentCard | null => {
-		const { from, to } = paymentSides(entry);
-		if (!from || !to) return null;
-		const sides = { entry, entryId: entry.id, from, to, amountCents: entry.amountCents, debt };
-		return answeringSide(entry, me.memberId)
-			? { kind: "answer", ...sides }
-			: { kind: "waiting", ...sides, canUndo: mayUndo(entry, me.memberId) };
+		const payment = readPayment(entry, me.memberId);
+		if (!payment) return null;
+		const sides = {
+			entry,
+			entryId: entry.id,
+			from: payment.from,
+			to: payment.to,
+			amountCents: entry.amountCents,
+			debt,
+		};
+		return payment.answeringAs ? { kind: "answer", ...sides } : { kind: "waiting", ...sides, canUndo: payment.mayUndo };
 	};
 	const pendingBetween = (a: string, b: string) =>
-		pending.find(
-			(e) => !used.has(e.id) && e.shares.some((s) => s.memberId === a) && e.shares.some((s) => s.memberId === b)
+		pendingPaymentBetween(
+			pending.filter((e) => !used.has(e.id)),
+			a,
+			b
 		);
 
 	for (const debt of debts) {
 		const mine = debt.fromMemberId === me.memberId || debt.toMemberId === me.memberId;
 		const forOthers =
-			!mine && me.role !== "guest" && recordableForOthers(byId.get(debt.fromMemberId), byId.get(debt.toMemberId));
+			!mine &&
+			me.role !== "guest" &&
+			recordingRule(me.memberId, byId.get(debt.fromMemberId), byId.get(debt.toMemberId)).mayRecord;
 		if (!mine && !forOthers) continue;
 		const waiting = mine ? pendingBetween(debt.fromMemberId, debt.toMemberId) : undefined;
 		const card = waiting ? pendingCard(waiting, debt) : null;

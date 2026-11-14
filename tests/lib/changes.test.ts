@@ -1,7 +1,6 @@
 import { describe, expect, test } from "bun:test";
 
 import {
-	isNameTaken,
 	planChange,
 	type ExpenseDraft,
 	type GroupIntent,
@@ -1023,13 +1022,6 @@ describe("group codes and unique names", () => {
 			code: "HS403",
 			reason: "Only the group's owner can do this",
 		});
-	});
-
-	test("isNameTaken compares active people's names ignoring case and outer spaces", () => {
-		expect(isNameTaken(MEMBERS, " jo ")).toBe(true);
-		expect(isNameTaken(MEMBERS, "KIM")).toBe(false);
-		expect(isNameTaken(MEMBERS, "Jo", "jo")).toBe(false);
-		expect(isNameTaken(MEMBERS, "Lee")).toBe(false);
 	});
 
 	test("addPerson refuses a name already in the group (HS409), not one of someone who left", () => {

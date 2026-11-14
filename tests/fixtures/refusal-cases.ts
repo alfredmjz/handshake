@@ -10,9 +10,6 @@
 // - `intent` is what a screen asks planChange for, `mutation` what a device would push for it (the server
 //   adds nothing; the runner adds the mutation id). `intent: null` marks a change no screen plans (invites are
 //   made online, src/lib/groups.ts): only push_changes runs it.
-// - `mismatch` marks a case where the two sides disagree today. Neither side is changed here: each runner
-//   checks its own side still gives what is recorded, so a fix on either side fails the row and asks for it
-//   to become an ordinary case.
 
 import type { ExpenseDraft, GroupState, Intent } from "@/lib/changes";
 import type { BillFields, EntryRow, Item, MemberRow, Mutation, Share } from "@/lib/sync/types";
@@ -24,20 +21,14 @@ export type Outcome = "accepted" | "HS403" | "HS404" | "HS409" | "HS422";
 // A mutation as pushed, without its id; loose so a case can carry a malformed field.
 export type CaseMutation = { type: Mutation["type"]; [field: string]: unknown };
 
-export type Mismatch = { planChange: Outcome; pushChanges: Outcome; why: string };
-
 export type RefusalCase = {
 	name: string;
 	actor: Actor;
 	group: GroupSetup;
 	intent: Intent | null;
 	mutation: CaseMutation;
-} & ({ expect: Outcome; mismatch?: undefined } | { expect?: undefined; mismatch: Mismatch });
-
-// What one side must give for a case.
-export function expectedOutcome(refusalCase: RefusalCase, side: "planChange" | "pushChanges"): Outcome {
-	return refusalCase.mismatch ? refusalCase.mismatch[side] : refusalCase.expect;
-}
+	expect: Outcome;
+};
 
 // ---------------------------------------------------------------------------
 // The world
@@ -221,12 +212,7 @@ export function worldState(actor: Actor, setup: GroupSetup): GroupState | null {
 // Builders: one intent and its mutation
 // ---------------------------------------------------------------------------
 
-type Case = RefusalCase extends infer R
-	? R extends RefusalCase
-		? Omit<R, "group"> & { group?: GroupSetup }
-		: never
-	: never;
-const c = (rc: Case): RefusalCase => ({ group: "open", ...rc }) as RefusalCase;
+const c = (rc: Omit<RefusalCase, "group"> & { group?: GroupSetup }): RefusalCase => ({ group: "open", ...rc });
 
 const groupChange = (
 	intent: Intent extends infer I ? (I extends { groupId: string } ? Omit<I, "groupId"> : never) : never,

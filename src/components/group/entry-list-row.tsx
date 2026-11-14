@@ -6,23 +6,24 @@ import { Badge } from "@/components/ui/badge";
 import { ListRow } from "@/components/ui/list";
 import { Inline } from "@/components/ui/stack";
 import type { Names } from "@/lib/group-access";
-import { effectOn, payerIds, sentenceList } from "@/lib/group-view";
+import { effectOn, payerIds } from "@/lib/group-view";
 import { formatAmount } from "@/lib/money";
-import { awaitedSide, paymentSides } from "@/lib/payment-rules";
+import { readPayment } from "@/lib/payment-rules";
 import type { EntryRow } from "@/lib/sync/types";
 import { cn } from "@/lib/utils";
 
 // "Sam paid Alex $30.00" / "You paid Sam $10.00".
 export function paymentTitle(entry: EntryRow, names: Names): string {
-	const { from, to } = paymentSides(entry);
-	return `${names.of(from)} paid ${names.inSentence(to)} ${formatAmount(entry.amountCents)}`;
+	const payment = readPayment(entry);
+	return `${names.of(payment?.from)} paid ${names.inSentence(payment?.to)} ${formatAmount(entry.amountCents)}`;
 }
 
 // Where a payment stands, in a few words.
 export function paymentState(entry: EntryRow, names: Names): string {
-	switch (entry.paymentStatus) {
+	const payment = readPayment(entry);
+	switch (payment?.status) {
 		case "pending":
-			return `Waiting for ${names.inSentence(awaitedSide(entry))}`;
+			return `Waiting for ${names.inSentence(payment.answerer)}`;
 		case "declined":
 			return "Declined";
 		case "undone":
@@ -34,7 +35,7 @@ export function paymentState(entry: EntryRow, names: Names): string {
 
 // "Alex paid $90.00", "Alex and Sam paid $100.00".
 export function payersLine(entry: EntryRow, names: Names): string {
-	return `${sentenceList(payerIds(entry).map(names.of))} paid ${formatAmount(entry.amountCents)}`;
+	return `${names.list(payerIds(entry), "start")} paid ${formatAmount(entry.amountCents)}`;
 }
 
 type EntryListRowProps = {

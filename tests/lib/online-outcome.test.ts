@@ -1,11 +1,10 @@
 import { describe, expect, test } from "bun:test";
 
 import {
-	describeProblem,
 	DOESNT_WORK,
+	failureNotice,
 	isServerError,
 	joinOutcome,
-	messageOf,
 	NEEDS_CONNECTION,
 	previewFailure,
 } from "@/lib/online-outcome";
@@ -83,19 +82,35 @@ describe("previewFailure", () => {
 	});
 });
 
-describe("describeProblem and messageOf", () => {
-	test("a lost connection reads as needing one", () => {
-		expect(describeProblem(te("network", "Failed to fetch"))).toBe(NEEDS_CONNECTION);
+describe("failureNotice", () => {
+	const authFetchError = Object.assign(new Error("Failed to fetch"), { name: "AuthRetryableFetchError", status: 0 });
+	test("a lost connection reads as needing one, from the transport or from auth", () => {
+		expect(failureNotice(te("network", "Failed to fetch"), "Couldn't change your name")).toEqual([
+			"Couldn't change your name",
+			{ description: NEEDS_CONNECTION },
+		]);
+		expect(failureNotice(authFetchError, "Couldn't send the code")).toEqual([
+			"Couldn't send the code",
+			{ description: NEEDS_CONNECTION },
+		]);
 	});
 	test("other errors keep their message; non-errors have none", () => {
-		expect(describeProblem(te("HS422", "Bad"))).toBe("Bad");
-		expect(describeProblem(new Error("Oops"))).toBe("Oops");
-		expect(describeProblem("x")).toBeUndefined();
-		expect(messageOf(te("network", "Failed to fetch"))).toBe("Failed to fetch");
-		expect(messageOf(null)).toBeUndefined();
+		expect(failureNotice(te("HS422", "Bad"), "T")).toEqual(["T", { description: "Bad" }]);
+		const authApi = Object.assign(new Error("Token has expired or is invalid"), { name: "AuthApiError" });
+		expect(failureNotice(authApi, "That code didn't work")).toEqual([
+			"That code didn't work",
+			{ description: "Token has expired or is invalid" },
+		]);
+		for (const status of [500, 503]) {
+			const serverError = Object.assign(new Error(`HTTP ${status}`), { name: "AuthRetryableFetchError", status });
+			expect(failureNotice(serverError, "T")).toEqual(["T", { description: `HTTP ${status}` }]);
+		}
+		expect(failureNotice(new Error("Oops"), "T")).toEqual(["T", { description: "Oops" }]);
+		expect(failureNotice("x", "T")).toEqual(["T", { description: undefined }]);
 	});
 	test("isServerError", () => {
 		expect(isServerError(te("HS404"))).toBe(true);
+		expect(isServerError(authFetchError)).toBe(false);
 		expect(isServerError(new Error("x"))).toBe(false);
 	});
 });

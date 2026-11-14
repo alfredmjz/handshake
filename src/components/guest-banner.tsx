@@ -9,7 +9,7 @@ import { Field } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
 import { finishKeepMyData, startKeepMyData } from "@/lib/auth";
 import { useOnline } from "@/lib/online";
-import { isServerError, messageOf, NEEDS_CONNECTION } from "@/lib/online-outcome";
+import { failureNotice, isServerError, NEEDS_CONNECTION } from "@/lib/online-outcome";
 import { requestSync } from "@/lib/sync/controller";
 
 // Shown on every screen for a guest: their data goes when a group completes, unless they add an email; and
@@ -36,10 +36,6 @@ export function GuestBanner() {
 		close(false);
 	}
 
-	function failed(title: string, error: unknown) {
-		toast.error(title, { description: messageOf(error) });
-	}
-
 	async function submit(token = code) {
 		setBusy(true);
 		try {
@@ -51,13 +47,15 @@ export function GuestBanner() {
 				kept();
 			}
 		} catch (error) {
-			failed(
-				step === "email"
-					? "Couldn't send the code"
-					: isServerError(error)
-						? "Couldn't keep your data"
-						: "That code didn't work",
-				error
+			toast.error(
+				...failureNotice(
+					error,
+					step === "email"
+						? "Couldn't send the code"
+						: isServerError(error)
+							? "Couldn't keep your data"
+							: "That code didn't work"
+				)
 			);
 		} finally {
 			setBusy(false);

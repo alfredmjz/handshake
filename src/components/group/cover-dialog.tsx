@@ -34,8 +34,8 @@ export function CoverDialog({
 
 	const fallback = coverOf({ id: group.id, coverColor: null });
 	const kind = data.category ?? "new";
-	const mayColor = data.can("group.recolor");
-	const maySticker = data.can("group.sticker");
+	const mayColor = data.may("group.recolor");
+	const maySticker = data.may("group.sticker");
 
 	return (
 		<EditorDialog

@@ -1,23 +1,13 @@
 import { describe, expect, test } from "bun:test";
 
 import { computeShares } from "@/lib/ledger";
-import {
-	answeringSide,
-	awaitedSide,
-	canAnswer,
-	counterpart,
-	countsAtOnce,
-	isPendingPayment,
-	mayUndo,
-	paymentSides,
-	pendingPaymentBetween,
-	recordableForOthers,
-} from "@/lib/payment-rules";
+import { canAnswer, pendingPaymentBetween, readPayment, recordingRule } from "@/lib/payment-rules";
 import type { EntryRow, MemberRow } from "@/lib/sync/types";
 import { serverBill, serverMember } from "../support/memory-tables";
 
 const LEFT = "2026-11-02T00:00:00.000Z";
 const AT = "2026-11-03T00:00:00.000Z";
+const UPDATED = "2026-11-01T12:00:00.000Z";
 
 const member = (id: string, overrides: Partial<MemberRow> = {}) =>
 	serverMember({ id, groupId: "g1", userId: `u-${id}`, displayName: id, role: "member", ...overrides });
@@ -38,14 +28,23 @@ const payment = (by: "sam" | "alex", overrides: Partial<EntryRow> = {}): EntryRo
 		...overrides,
 	});
 
-describe("the two sides", () => {
-	test("paymentSides: the payer paid, the receiver owes", () => {
-		expect(paymentSides(payment("sam"))).toEqual({ from: "sam", to: "alex" });
-		expect(paymentSides({ shares: [] })).toEqual({ from: undefined, to: undefined });
+describe("readPayment: the two sides", () => {
+	test("the payer paid, the receiver owes; null for a bill or a payment missing a side", () => {
+		expect(readPayment(payment("sam"))).toMatchObject({ from: "sam", to: "alex", status: "pending" });
+		expect(readPayment(payment("sam", { shares: [] }))).toBeNull();
+		expect(readPayment(payment("sam", { kind: "expense", paymentStatus: null }))).toBeNull();
 	});
 
-	test("counterpart is the other side", () => {
-		expect([counterpart(payment("sam"), "sam"), counterpart(payment("sam"), "alex")]).toEqual(["alex", "sam"]);
+	test("side and other are from my view; neither when I'm not a side or nobody", () => {
+		expect(readPayment(payment("sam"), "sam")).toMatchObject({ side: "payer", other: "alex" });
+		expect(readPayment(payment("sam"), "alex")).toMatchObject({ side: "receiver", other: "sam" });
+		expect(readPayment(payment("sam"), "jo")).toMatchObject({ side: null, other: null });
+		expect(readPayment(payment("sam"))).toMatchObject({ side: null, other: null, answeringAs: null, mayUndo: false });
+	});
+
+	test("signed: which sides have confirmed", () => {
+		expect(readPayment(payment("sam"))?.signed).toEqual({ payer: true, receiver: false });
+		expect(readPayment(payment("alex"))?.signed).toEqual({ payer: false, receiver: true });
 	});
 
 	test("canAnswer: still in the group, with a login", () => {
@@ -56,44 +55,69 @@ describe("the two sides", () => {
 	});
 });
 
-describe("answering", () => {
+describe("readPayment: answering", () => {
 	test("the side that hasn't confirmed answers; the recorder waits", () => {
-		expect([answeringSide(payment("sam"), "alex"), answeringSide(payment("sam"), "sam")]).toEqual(["receiver", null]);
-		expect([answeringSide(payment("alex"), "sam"), answeringSide(payment("alex"), "alex")]).toEqual(["payer", null]);
-		expect(answeringSide(payment("sam"), "jo")).toBeNull();
-		expect(answeringSide(payment("sam"), null)).toBeNull();
+		const as = (by: "sam" | "alex", me: string | null) => readPayment(payment(by), me)?.answeringAs;
+		expect([as("sam", "alex"), as("sam", "sam")]).toEqual(["receiver", null]);
+		expect([as("alex", "sam"), as("alex", "alex")]).toEqual(["payer", null]);
+		expect([as("sam", "jo"), as("sam", null)]).toEqual([null, null]);
 	});
 
-	test("awaitedSide: the receiver once the payer confirmed, else the payer", () => {
-		expect([awaitedSide(payment("sam")), awaitedSide(payment("alex"))]).toEqual(["alex", "sam"]);
+	test("answerer: while pending, the receiver once the payer confirmed, else the payer", () => {
+		expect([readPayment(payment("sam"))?.answerer, readPayment(payment("alex"))?.answerer]).toEqual(["alex", "sam"]);
+	});
+
+	test("answerer: once declined, the side that declined; otherwise none", () => {
+		const declined = (by: "sam" | "alex") => readPayment(payment(by, { paymentStatus: "declined" }))?.answerer;
+		expect([declined("sam"), declined("alex")]).toEqual(["alex", "sam"]);
+		expect(readPayment(payment("sam", { paymentStatus: "confirmed" }))?.answerer).toBeNull();
+		expect(readPayment(payment("sam", { paymentStatus: "undone" }))?.answerer).toBeNull();
 	});
 
 	test("only the recorder may undo", () => {
-		expect([mayUndo(payment("sam"), "sam"), mayUndo(payment("sam"), "alex"), mayUndo(payment("sam"), null)]).toEqual([
-			true,
-			false,
-			false,
-		]);
+		const undo = (me: string | null) => readPayment(payment("sam"), me)?.mayUndo;
+		expect([undo("sam"), undo("alex"), undo(null)]).toEqual([true, false, false]);
+	});
+
+	test("nothing to answer or undo once it isn't pending", () => {
+		for (const paymentStatus of ["confirmed", "declined", "undone"] as const) {
+			const answered = { ...payment("sam"), paymentStatus, payerConfirmedAt: null };
+			expect(readPayment(answered, "sam")).toMatchObject({ answeringAs: null, mayUndo: false });
+		}
+	});
+
+	test("countedAt: when it was confirmed (its update time when that's missing), only once it counts", () => {
+		expect(readPayment(payment("sam"))?.countedAt).toBeNull();
+		expect(readPayment(payment("sam", { paymentStatus: "confirmed", confirmedAt: AT }))?.countedAt).toBe(AT);
+		expect(readPayment(payment("sam", { paymentStatus: "confirmed" }))?.countedAt).toBe(UPDATED);
+		expect(readPayment(payment("sam", { paymentStatus: "declined", confirmedAt: AT }))?.countedAt).toBeNull();
 	});
 });
 
-describe("recording", () => {
+describe("recordingRule", () => {
 	const sam = member("sam");
+	const alex = member("alex");
 	const jo = member("jo", { userId: null });
 	const kim = member("kim", { deletedAt: LEFT });
 
 	test("counts at once unless the payer records it and the receiver can answer", () => {
-		expect(countsAtOnce("sam", "sam", member("alex"))).toBe(false);
-		expect(countsAtOnce("alex", "sam", member("alex"))).toBe(true); // the receiver says they were paid
-		expect(countsAtOnce("sam", "sam", jo)).toBe(true); // name-only
-		expect(countsAtOnce("sam", "sam", kim)).toBe(true); // left
-		expect(countsAtOnce("alex", "jo", kim)).toBe(true); // for others
+		expect(recordingRule("sam", sam, alex).countsAtOnce).toBe(false);
+		expect(recordingRule("alex", sam, alex).countsAtOnce).toBe(true); // the receiver says they were paid
+		expect(recordingRule("sam", sam, jo).countsAtOnce).toBe(true); // name-only
+		expect(recordingRule("sam", sam, kim).countsAtOnce).toBe(true); // left
+		expect(recordingRule("alex", jo, kim).countsAtOnce).toBe(true); // for others
 	});
 
-	test("someone else may record only between two people who can't answer", () => {
-		expect(recordableForOthers(jo, kim)).toBe(true);
-		expect(recordableForOthers(jo, sam)).toBe(false);
-		expect(recordableForOthers(sam, jo)).toBe(false);
+	test("a side may record; someone else only between two people who can't answer", () => {
+		expect(recordingRule("sam", sam, jo).mayRecord).toBe(true);
+		expect(recordingRule("jo", sam, jo).mayRecord).toBe(true);
+		expect(recordingRule("alex", jo, kim).mayRecord).toBe(true);
+		expect(recordingRule("alex", jo, sam).mayRecord).toBe(false);
+		expect(recordingRule("alex", sam, jo).mayRecord).toBe(false);
+	});
+
+	test("nobody records as nobody", () => {
+		expect(recordingRule(undefined, sam, alex)).toEqual({ mayRecord: false, countsAtOnce: true });
 	});
 
 	test("pendingPaymentBetween finds it either way round, pending only", () => {
@@ -101,7 +125,6 @@ describe("recording", () => {
 		expect(pendingPaymentBetween(entries, "sam", "alex")?.id).toBe("p-sam");
 		expect(pendingPaymentBetween(entries, "alex", "sam")?.id).toBe("p-sam");
 		expect(pendingPaymentBetween(entries, "jo", "alex")).toBeUndefined();
-		expect(isPendingPayment(entries[0])).toBe(false);
-		expect(isPendingPayment({ kind: "expense", paymentStatus: null })).toBe(false);
+		expect(pendingPaymentBetween([payment("sam", { kind: "expense" })], "sam", "alex")).toBeUndefined();
 	});
 });

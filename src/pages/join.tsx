@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import { useNavigate, useParams } from "react-router";
 import { toast } from "sonner";
 
@@ -15,19 +15,10 @@ import { List, ListRow } from "@/components/ui/list";
 import { Stack } from "@/components/ui/stack";
 import { signInAsGuest, useCurrentUser } from "@/lib/auth";
 import { codeKind, normaliseCode } from "@/lib/code-format";
-import {
-	draftReady,
-	nameClash,
-	personalCode,
-	stashDraft,
-	stashReturn,
-	takeDraft,
-	takeReturn,
-	type Choice,
-	type Draft,
-} from "@/lib/join-draft";
+import { draftReady, nameClash, type Choice, type Draft, type ReadyDraft } from "@/lib/join-draft";
+import { createJoinFlow, type JoinPorts, type JoinResult } from "@/lib/join-flow";
 import { useOnline } from "@/lib/online";
-import { DOESNT_WORK, joinOutcome, previewFailure } from "@/lib/online-outcome";
+import { DOESNT_WORK, previewFailure } from "@/lib/online-outcome";
 import { requestSync } from "@/lib/sync/controller";
 import {
 	joinWithCode,
@@ -38,6 +29,37 @@ import {
 } from "@/lib/sync/supabase-transport";
 import { byText } from "@/lib/utils";
 import { EmailSignIn } from "@/pages/sign-in";
+
+const ports: JoinPorts = { joinWithCode, returnWithCode, signInAsGuest, requestSync, storage: () => sessionStorage };
+
+// Into the group, or the problem shown and the button given back.
+function useShowResult(setBusy: (busy: boolean) => void, onError: (message: string) => void, onGone: () => void) {
+	const navigate = useNavigate();
+	return (result: JoinResult | null) => {
+		if (!result) return;
+		if (result.kind === "in") {
+			const state: GuestCodeSheetState | null = result.showGuestCode ? { showGuestCode: true } : null;
+			return void navigate(`/groups/${result.groupId}`, { replace: true, state });
+		}
+		setBusy(false);
+		if (result.kind === "gone") {
+			toast.error(result.title);
+			onGone();
+		} else if (result.kind === "inline") onError(result.message);
+		else toast.error(result.title, { description: result.description });
+	};
+}
+
+// Finishes once, on mount, what was chosen before signing in. StrictMode runs effects twice: go() hands back the
+// attempt in flight, and only the live run shows its result.
+function useResume(start: (() => Promise<JoinResult>) | null, show: (result: JoinResult) => void) {
+	useEffect(() => {
+		if (!start) return;
+		let cancelled = false;
+		void start().then((result) => cancelled || show(result));
+		return () => void (cancelled = true);
+	}, [!!start]);
+}
 
 // Opening the code of a group you're in takes you straight into it; a screen saying so would be a dead end.
 function AlreadyIn({ groupId, groupName }: { groupId: string; groupName: string }) {
@@ -160,7 +182,7 @@ type ChoiceProps = { code: string; preview: GroupPreview; onGone: () => void };
 // An account's own name fills "I'm new here".
 function SignedInJoinChoice(props: ChoiceProps) {
 	const user = useCurrentUser();
-	return <JoinChoice {...props} signedIn defaultName={user.isAnonymous ? "" : user.name} />;
+	return <JoinChoice {...props} signedIn guest={user.isAnonymous} defaultName={user.isAnonymous ? "" : user.name} />;
 }
 
 function JoinChoice({
@@ -168,10 +190,11 @@ function JoinChoice({
 	preview,
 	onGone,
 	signedIn = false,
+	guest = false,
 	defaultName = "",
-}: ChoiceProps & { signedIn?: boolean; defaultName?: string }) {
-	const navigate = useNavigate();
-	const [restored] = useState(() => (signedIn ? takeDraft(() => sessionStorage, code) : null));
+}: ChoiceProps & { signedIn?: boolean; guest?: boolean; defaultName?: string }) {
+	const [flow] = useState(() => createJoinFlow(ports, code));
+	const [restored] = useState(() => (signedIn ? flow.restore().draft : null));
 	const [choice, setChoice] = useState<Choice | null>(
 		restored?.choice ?? (preview.unclaimed.length === 0 && preview.returning.length === 0 ? { kind: "new" } : null)
 	);
@@ -180,12 +203,21 @@ function JoinChoice({
 	const [error, setError] = useState<string | null>(null);
 	const [busy, setBusy] = useState(false);
 	const [account, setAccount] = useState(false);
+	const show = useShowResult(setBusy, setError, onGone);
 
 	const unclaimed = [...preview.unclaimed].sort(byText((p) => p.displayName));
 	const returning = [...preview.returning].sort(byText((p) => p.displayName));
 	const draft: Draft = { choice, name, personalCode };
 	const clash = nameClash(draft, preview);
 	const ready = draftReady(draft) && !clash;
+
+	function join(ready: ReadyDraft) {
+		setBusy(true);
+		return flow.go({ kind: "join", draft: ready }, guest);
+	}
+
+	// A choice made before signing in: join once without another tap.
+	useResume(restored && draftReady(restored) && !preview.alreadyMember ? () => join(restored) : null, show);
 
 	const pick = (next: Choice) => {
 		setChoice(next);
@@ -284,17 +316,9 @@ function JoinChoice({
 			{choice?.kind === "claim" && error && <p className="type-body-sm text-owe">{error}</p>}
 
 			{signedIn ? (
-				<JoinButton
-					code={code}
-					preview={preview}
-					draft={draft}
-					ready={ready}
-					auto={!!restored && draftReady(restored)}
-					busy={busy}
-					setBusy={setBusy}
-					onError={setError}
-					onGone={onGone}
-				/>
+				<Button size="lg" disabled={busy || !ready} onClick={() => ready && void join(draft).then(show)}>
+					{busy ? "Joining…" : choice?.kind === "back" ? "Get back in" : `Join ${preview.groupName}`}
+				</Button>
 			) : account ? (
 				<Card>
 					<EmailSignIn onBack={() => setAccount(false)} />
@@ -306,7 +330,7 @@ function JoinChoice({
 						className="w-full"
 						disabled={!ready}
 						onClick={() => {
-							stashDraft(() => sessionStorage, code, draft);
+							if (ready) flow.stash({ kind: "join", draft });
 							setAccount(true);
 						}}
 					>
@@ -318,14 +342,9 @@ function JoinChoice({
 						className="w-full"
 						disabled={!ready || busy}
 						onClick={() => {
-							stashDraft(() => sessionStorage, code, draft);
+							if (!ready) return;
 							setBusy(true);
-							signInAsGuest().catch((e: unknown) => {
-								toast.error("Couldn't continue as a guest", {
-									description: e instanceof Error ? e.message : undefined,
-								});
-								setBusy(false);
-							});
+							void flow.viaGuest({ kind: "join", draft }).then(show);
 						}}
 					>
 						Continue as guest
@@ -333,74 +352,6 @@ function JoinChoice({
 				</Stack>
 			)}
 		</>
-	);
-}
-
-function JoinButton({
-	code,
-	preview,
-	draft,
-	ready,
-	auto,
-	busy,
-	setBusy,
-	onError,
-	onGone,
-}: {
-	code: string;
-	preview: GroupPreview;
-	draft: Draft;
-	ready: boolean;
-	// A choice made before signing in: join once without another tap.
-	auto: boolean;
-	busy: boolean;
-	setBusy: (busy: boolean) => void;
-	onError: (message: string) => void;
-	onGone: () => void;
-}) {
-	const user = useCurrentUser();
-	const navigate = useNavigate();
-	const started = useRef(false);
-	const back = draft.choice?.kind === "back";
-
-	async function join() {
-		const { choice } = draft;
-		if (!choice) return;
-		setBusy(true);
-		try {
-			const groupId = await joinWithCode({
-				code,
-				claimMemberId: choice.kind === "new" ? undefined : (choice.memberId ?? undefined),
-				displayName: choice.kind === "new" ? draft.name.trim() : undefined,
-				personalCode: choice.kind === "back" ? (personalCode(draft.personalCode) ?? undefined) : undefined,
-			});
-			requestSync();
-			const state: GuestCodeSheetState | null =
-				user.isAnonymous && choice.kind !== "back" ? { showGuestCode: true } : null;
-			navigate(`/groups/${groupId}`, { replace: true, state });
-		} catch (error) {
-			setBusy(false);
-			const outcome = joinOutcome(error, "join");
-			if (outcome.kind === "gone") {
-				toast.error(outcome.title);
-				onGone();
-			} else if (outcome.kind === "inline") onError(outcome.message);
-			else toast.error(outcome.title, { description: outcome.description });
-		}
-	}
-
-	useEffect(() => {
-		if (auto && !started.current) {
-			started.current = true;
-			void join();
-		}
-		// Runs once, for the choice restored on mount.
-	}, [auto]);
-
-	return (
-		<Button size="lg" disabled={busy || !ready} onClick={() => void join()}>
-			{busy ? "Joining…" : back ? "Get back in" : `Join ${preview.groupName}`}
-		</Button>
 	);
 }
 
@@ -418,37 +369,19 @@ function PersonalReturn({
 	signedIn: boolean;
 	onGone: () => void;
 }) {
-	const navigate = useNavigate();
-	const [auto] = useState(() => signedIn && takeReturn(() => sessionStorage, code));
+	const [flow] = useState(() => createJoinFlow(ports, code));
+	const [auto] = useState(() => signedIn && flow.restore().returning);
 	const [busy, setBusy] = useState(false);
 	const [error, setError] = useState<string | null>(null);
-	const started = useRef(false);
+	const show = useShowResult(setBusy, setError, onGone);
 
-	async function getBackIn() {
+	function getBackIn() {
 		setBusy(true);
 		setError(null);
-		try {
-			const groupId = await returnWithCode(code);
-			requestSync();
-			navigate(`/groups/${groupId}`, { replace: true });
-		} catch (e) {
-			setBusy(false);
-			const outcome = joinOutcome(e, "return");
-			if (outcome.kind === "gone") {
-				toast.error(outcome.title);
-				onGone();
-			} else if (outcome.kind === "inline") setError(outcome.message);
-			else toast.error(outcome.title, { description: outcome.description });
-		}
+		return flow.go({ kind: "return" });
 	}
 
-	useEffect(() => {
-		if (auto && !started.current && !preview.alreadyMember) {
-			started.current = true;
-			void getBackIn();
-		}
-		// Runs once, for "Continue as guest" tapped before signing in.
-	}, [auto]);
+	useResume(auto && !preview.alreadyMember ? getBackIn : null, show);
 
 	if (signedIn && preview.alreadyMember) return <AlreadyIn groupId={preview.groupId} groupName={preview.groupName} />;
 
@@ -457,7 +390,7 @@ function PersonalReturn({
 			<ScreenHeader eyebrow={preview.groupName} title={`Welcome back, ${preview.displayName}`} />
 			{error && <p className="type-body-sm text-owe">{error}</p>}
 			{signedIn ? (
-				<Button size="lg" disabled={busy} onClick={() => void getBackIn()}>
+				<Button size="lg" disabled={busy} onClick={() => void getBackIn().then(show)}>
 					{busy ? "Joining…" : "Get back in"}
 				</Button>
 			) : (
@@ -465,14 +398,8 @@ function PersonalReturn({
 					size="lg"
 					disabled={busy}
 					onClick={() => {
-						stashReturn(() => sessionStorage, code);
 						setBusy(true);
-						signInAsGuest().catch((e: unknown) => {
-							toast.error("Couldn't continue as a guest", {
-								description: e instanceof Error ? e.message : undefined,
-							});
-							setBusy(false);
-						});
+						void flow.viaGuest({ kind: "return" }).then(show);
 					}}
 				>
 					Continue as guest

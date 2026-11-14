@@ -26,7 +26,7 @@ import {
 } from "@/lib/group-view";
 import { computeShares } from "@/lib/ledger";
 import type { ConflictRow, EntryRow, Item } from "@/lib/sync/types";
-import { cn } from "@/lib/utils";
+import { byText, cn } from "@/lib/utils";
 
 // "Alex's", "Yours".
 function whose(names: Names, memberId: string | null) {
@@ -49,7 +49,8 @@ export function conflictSentence(entry: EntryRow, conflict: ConflictRow, names: 
 	const who =
 		current === proposed
 			? names.inSentence(entry.updatedByMemberId)
-			: joinNames([names.inSentence(entry.updatedByMemberId), names.inSentence(conflict.proposedByMemberId)]);
+			: names.list([entry.updatedByMemberId, conflict.proposedByMemberId], "middle");
+
 	return `${entry.description} was changed by ${who} at the same time`;
 }
 
@@ -137,21 +138,19 @@ function SplitPreview({ items, names }: { items: Item[]; names: Names }) {
 	}
 	return (
 		<Card variant="well">
-			{[...shares]
-				.sort((a, b) => names.of(a.memberId).localeCompare(names.of(b.memberId)))
-				.map((s) => (
-					<Inline key={s.memberId} justify="between" wrap={false}>
-						<span className="type-body-sm truncate">{names.of(s.memberId)}</span>
-						<span className="type-label text-right text-muted-foreground">
-							{s.paidCents > 0 && (
-								<>
-									paid <Amount cents={s.paidCents} />,{" "}
-								</>
-							)}
-							owes <Amount cents={s.owedCents} />
-						</span>
-					</Inline>
-				))}
+			{[...shares].sort(byText((s) => names.of(s.memberId))).map((s) => (
+				<Inline key={s.memberId} justify="between" wrap={false}>
+					<span className="type-body-sm truncate">{names.of(s.memberId)}</span>
+					<span className="type-label text-right text-muted-foreground">
+						{s.paidCents > 0 && (
+							<>
+								paid <Amount cents={s.paidCents} />,{" "}
+							</>
+						)}
+						owes <Amount cents={s.owedCents} />
+					</span>
+				</Inline>
+			))}
 		</Card>
 	);
 }

@@ -13,7 +13,6 @@ import {
 	payerIds,
 	resolutionOf,
 	roundingCents,
-	sentenceList,
 	shortDate,
 	type BillVersion,
 } from "@/lib/group-view";
@@ -63,13 +62,6 @@ describe("days", () => {
 		expect(joinNames(["Alex"])).toBe("Alex");
 		expect(joinNames(["Alex", "Sam"])).toBe("Alex and Sam");
 		expect(joinNames(["Alex", "Jo", "Sam"])).toBe("Alex, Jo and Sam");
-	});
-
-	test("sentenceList: You starts a sentence, and is lower case after", () => {
-		expect(sentenceList(["You", "Sam"])).toBe("You and Sam");
-		expect(sentenceList(["alex.f", "You"])).toBe("alex.f and you");
-		expect(sentenceList(["Jo", "You", "Sam"])).toBe("Jo, you and Sam");
-		expect(sentenceList(["You"])).toBe("You");
 	});
 });
 

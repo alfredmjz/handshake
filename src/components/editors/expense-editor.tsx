@@ -1,7 +1,8 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useState } from "react";
 import { Plus, X } from "lucide-react";
 
 import { EditorDialog } from "@/components/editor-dialog";
+import { useGroupView } from "@/components/group/group-data";
 import { Amount } from "@/components/money";
 import { Notice } from "@/components/notices";
 import { CategoryPicker, PeoplePicker, PersonPicker, type PersonOption } from "@/components/pickers";
@@ -12,13 +13,11 @@ import { Field, FieldSet } from "@/components/ui/field";
 import { Input, Textarea } from "@/components/ui/input";
 import { Inline, Stack } from "@/components/ui/stack";
 import { CATEGORIES } from "@/lib/categories";
-import { toLedgerMembers, useCommit, type ExpenseDraft } from "@/lib/changes";
+import { useCommit, type ExpenseDraft } from "@/lib/changes";
 import { useEntry } from "@/lib/entries";
-import { groupAccess } from "@/lib/group-access";
-import { useGroup } from "@/lib/groups";
+import { makeNames, NOT_IN_GROUP, toLedgerMembers } from "@/lib/group-access";
 import { newId } from "@/lib/ids";
 import { computeShares, explainRounding, validateEntry, type Item, type Share } from "@/lib/ledger";
-import { useMembers, useMyMember } from "@/lib/members";
 import { parseAmount } from "@/lib/money";
 import { billItems } from "@/lib/settle-view";
 import type { Category, EntryRow, MemberRow } from "@/lib/sync/types";
@@ -112,17 +111,19 @@ function toItems(draft: Draft): Item[] | null {
 	return items;
 }
 
+const NO_ONE: MemberRow[] = [];
+
 export function ExpenseEditor({ groupId, entryId, open, onOpenChange }: ExpenseEditorProps) {
 	const commit = useCommit();
-	const group = useGroup(groupId);
-	const members = useMembers(groupId, { includeLeft: true });
-	const me = useMyMember(groupId);
+	const view = useGroupView(groupId);
 	const entry = useEntry(entryId ?? "");
 	const [draft, setDraft] = useState<Draft | null>(null);
 	const [saving, setSaving] = useState(false);
 
-	const active = useMemo(() => (members ?? []).filter((m) => !m.deletedAt), [members]);
-	const ready = group !== undefined && members !== undefined && me !== undefined && (!entryId || entry !== undefined);
+	// A missing or deleted group reads as not being in it.
+	const me = view?.me ?? null;
+	const active = view?.active ?? NO_ONE;
+	const ready = view !== undefined && (!entryId || entry !== undefined);
 
 	// A fresh draft each time the editor opens.
 	useEffect(() => {
@@ -160,9 +161,8 @@ export function ExpenseEditor({ groupId, entryId, open, onOpenChange }: ExpenseE
 	}, 0);
 	const shares = items ? computeShares(items) : null;
 
-	const access = groupAccess({ group, members, me });
 	const blocked =
-		access.whyNot(entryId ? "entry.update" : "entry.create") ??
+		(view ? view.whyNot(entryId ? "entry.update" : "entry.create") : NOT_IN_GROUP) ??
 		(entryId && entry?.kind === "payment" ? "Payments can't be edited." : null);
 
 	const valid =
@@ -179,7 +179,7 @@ export function ExpenseEditor({ groupId, entryId, open, onOpenChange }: ExpenseE
 				items,
 				shares,
 			},
-			toLedgerMembers(members ?? [])
+			toLedgerMembers(view?.members ?? NO_ONE)
 		).length === 0;
 
 	const save = async () => {
@@ -207,7 +207,8 @@ export function ExpenseEditor({ groupId, entryId, open, onOpenChange }: ExpenseE
 		}
 	};
 
-	const { names } = access;
+	// Names show only with a draft, which waits for the group.
+	const names = view?.names ?? makeNames(NO_ONE, null);
 	const label = names.of;
 
 	// Active people, plus anyone who left but is already on this item: you first, then by name.
@@ -265,7 +266,7 @@ export function ExpenseEditor({ groupId, entryId, open, onOpenChange }: ExpenseE
 			canSubmit={valid && !blocked && !saving}
 			onSubmit={save}
 		>
-			{ready && !me && <Notice>You're not in this group.</Notice>}
+			{ready && !me && <Notice>{NOT_IN_GROUP}</Notice>}
 			{draft && first && (
 				<>
 					{blocked && <Notice>{blocked}</Notice>}

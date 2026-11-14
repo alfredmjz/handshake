@@ -23,9 +23,9 @@ import { Inline, Stack } from "@/components/ui/stack";
 import { useConflicts, useEntry } from "@/lib/entries";
 import { dayLabel, isVisibleTo, joinNames, roundingCents } from "@/lib/group-view";
 import { formatAmount } from "@/lib/money";
-import { paymentSides } from "@/lib/payment-rules";
+import { readPayment } from "@/lib/payment-rules";
 import type { EntryRow } from "@/lib/sync/types";
-import { byText } from "@/lib/utils";
+import { byLabel, byText } from "@/lib/utils";
 
 // Each person's part of one item, rounded normally ("$3.33 each").
 function eachCents(amountCents: number, people: number) {
@@ -50,14 +50,13 @@ export function EntryPage() {
 	const navigate = useNavigate();
 	const run = useRun();
 
-	if (data.loading || entry === undefined) return null;
-	const { group, me, names } = data;
-	const back = { to: `/groups/${groupId}`, label: group?.name ?? "Group" };
+	if (data === undefined || entry === undefined) return null;
+	const back = { to: `/groups/${groupId}`, label: data?.group.name ?? "Group" };
 
 	const openConflicts = conflicts ?? [];
+	const me = data?.me;
 	if (
-		!group ||
-		group.deletedAt ||
+		!data ||
 		!me ||
 		!entry ||
 		entry.groupId !== groupId ||
@@ -80,10 +79,11 @@ export function EntryPage() {
 		);
 	}
 
+	const { names } = data;
 	const isPayment = entry.kind === "payment";
 	const mine = entry.createdByMemberId === me.id;
-	const mayEdit = !isPayment && !entry.deletedAt && data.can("entry.update");
-	const mayDelete = !isPayment && !entry.deletedAt && data.can(mine ? "entry.delete.own" : "entry.delete.others");
+	const mayEdit = !isPayment && !entry.deletedAt && data.may("entry.update");
+	const mayDelete = !isPayment && !entry.deletedAt && data.may(mine ? "entry.delete.own" : "entry.delete.others");
 	const edited = entry.updatedByMemberId !== entry.createdByMemberId || entry.updatedAt !== entry.createdAt;
 
 	return (
@@ -108,7 +108,7 @@ export function EntryPage() {
 			)}
 
 			{openConflicts.length > 0 &&
-				(data.can("conflict.resolve") ? (
+				(data.may("conflict.resolve") ? (
 					<Notice
 						tone="waiting"
 						action={
@@ -175,9 +175,10 @@ export function EntryPage() {
 }
 
 function PaymentBadge({ entry, data }: { entry: EntryRow; data: GroupData }) {
-	switch (entry.paymentStatus) {
+	const payment = readPayment(entry, data.me?.id);
+	switch (payment?.status) {
 		case "pending":
-			return <Badge tone="waiting">{pendingSentence(entry, data.names, data.me?.id)}</Badge>;
+			return <Badge tone="waiting">{pendingSentence(payment, data.names)}</Badge>;
 		case "declined":
 			return <Badge tone="owe">Declined</Badge>;
 		case "undone":
@@ -196,9 +197,9 @@ function PaymentDetail({
 	data: GroupData;
 	onConfirmed: (entryId: string) => void;
 }) {
-	const { from, to } = paymentSides(entry);
+	const payment = readPayment(entry);
 	const { names } = data;
-	const people = [from, to].filter((id): id is string => !!id);
+	const people = payment ? [payment.from, payment.to] : [];
 	return (
 		<>
 			<List>
@@ -207,23 +208,23 @@ function PaymentDetail({
 						key={id}
 						leading={<Face seed={id} name={names.of(id)} size={36} />}
 						title={names.of(id)}
-						subtitle={id === from ? "Paid" : "Received"}
+						subtitle={id === payment?.from ? "Paid" : "Received"}
 						trailing={<Amount cents={entry.amountCents} />}
 					/>
 				))}
 			</List>
-			{entry.paymentStatus === "declined" && entry.closeNote && (
+			{payment?.status === "declined" && entry.closeNote && (
 				<Notice>
-					{names.of(entry.payerConfirmedAt ? to : from)} said: “{entry.closeNote}”
+					{names.of(payment.answerer)} said: “{entry.closeNote}”
 				</Notice>
 			)}
-			{entry.paymentStatus === "pending" && (
+			{payment?.status === "pending" && (
 				<Inline gap="control">
 					<PaymentButtons entry={entry} data={data} onConfirmed={onConfirmed} size="default" />
 				</Inline>
 			)}
-			{entry.paymentStatus !== "confirmed" && (
-				<p className="type-label text-muted-foreground">Only {joinNames(people.map(names.inSentence))} see this.</p>
+			{payment?.status !== "confirmed" && (
+				<p className="type-label text-muted-foreground">Only {names.list(people, "middle")} see this.</p>
 			)}
 		</>
 	);
@@ -244,7 +245,7 @@ function BillDetail({ entry, data }: { entry: EntryRow; data: GroupData }) {
 							key={item.id}
 							title={item.description || (items.length === 1 ? entry.description : `Item ${i + 1}`)}
 							subtitle={`${names.of(item.paidBy)} paid · ${joinNames(
-								item.splitAmong.map(names.inSentence).sort((a, b) => a.localeCompare(b))
+								item.splitAmong.map(names.inSentence).sort(byLabel)
 							)}`}
 							trailing={
 								<RowAmount

@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 
-import { toLedgerMembers } from "@/lib/changes";
+import { toLedgerMembers } from "@/lib/group-access";
 import { currentDebt, lastNudge, nextNudgeAt, nudgedRecently, receivedNudges, unseenCount } from "@/lib/nudge-view";
 import type { MemberRow, NudgeRow } from "@/lib/sync/types";
 import { serverBill, serverGroup, serverMember } from "../support/memory-tables";
