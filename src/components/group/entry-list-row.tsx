@@ -1,14 +1,14 @@
 import { Link } from "react-router";
 
 import { HandDisc } from "@/components/art/hand";
-import type { Names } from "@/components/group/group-data";
 import { RowAmount } from "@/components/money";
 import { Badge } from "@/components/ui/badge";
 import { ListRow } from "@/components/ui/list";
 import { Inline } from "@/components/ui/stack";
-import { paymentSides } from "@/lib/changes";
+import type { Names } from "@/lib/group-access";
 import { effectOn, payerIds, sentenceList } from "@/lib/group-view";
 import { formatAmount } from "@/lib/money";
+import { awaitedSide, paymentSides } from "@/lib/payment-rules";
 import type { EntryRow } from "@/lib/sync/types";
 import { cn } from "@/lib/utils";
 
@@ -20,10 +20,9 @@ export function paymentTitle(entry: EntryRow, names: Names): string {
 
 // Where a payment stands, in a few words.
 export function paymentState(entry: EntryRow, names: Names): string {
-	const { from, to } = paymentSides(entry);
 	switch (entry.paymentStatus) {
 		case "pending":
-			return `Waiting for ${names.inSentence(entry.payerConfirmedAt ? to : from)}`;
+			return `Waiting for ${names.inSentence(awaitedSide(entry))}`;
 		case "declined":
 			return "Declined";
 		case "undone":

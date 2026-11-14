@@ -1,12 +1,15 @@
 import { createContext, useContext } from "react";
 
 import { isCategory } from "@/lib/categories";
+import { denial } from "@/lib/group-access";
 import { computeShares, validateEntry, type Item, type LedgerMember } from "@/lib/ledger";
 import type { LocalDb } from "@/lib/local-db";
 import { currentDebt, lastNudge, nudgedRecently } from "@/lib/nudge-view";
-import { allowedWhenCompleted, may, type Action } from "@/lib/permissions";
+import { answeringSide, canAnswer, mayUndo, pendingPaymentBetween, recordableForOthers } from "@/lib/payment-rules";
+import type { Action } from "@/lib/permissions";
 import { isCoverKey } from "@/lib/cover-colors";
 import { isSticker } from "@/lib/cover-stickers";
+import { charLength, storedNote } from "@/lib/stored-text";
 import { dexieTables, writeTables } from "@/lib/sync/dexie-store";
 import { applyMutation } from "@/lib/sync/local";
 import type {
@@ -72,7 +75,7 @@ export type Intent =
 	| { type: "createGroup"; name: string; displayName: string; note?: string | null }
 	| ({ groupId: string } & GroupIntent);
 
-export type RefusalCode = "HS403" | "HS409" | "HS422";
+export type RefusalCode = "HS403" | "HS404" | "HS409" | "HS422";
 
 export type Plan =
 	// createdId: the new group, person, entry or nudge.
@@ -93,55 +96,12 @@ type MutationBody = Mutation extends infer M ? (M extends Mutation ? Omit<M, "id
 const refuse = (code: RefusalCode, reason: string): Plan => ({ ok: false, code, reason });
 const nothing: Plan = { ok: true, mutations: [], createdId: null };
 
-// private.can_answer: still in the group, with a login.
-export function canAnswer(member: MemberRow | undefined): boolean {
-	return !!member && member.userId !== null && !member.deletedAt;
-}
-
-// private.payment_sides: the payer has paid cents, the receiver owed cents.
-export function paymentSides(entry: EntryRow): { from: string | undefined; to: string | undefined } {
-	return {
-		from: entry.shares.find((s) => s.paidCents > 0)?.memberId,
-		to: entry.shares.find((s) => s.owedCents > 0)?.memberId,
-	};
-}
-
-// The payment waiting for an answer between two people, either way round.
-export function pendingPaymentBetween(entries: EntryRow[], a: string, b: string): EntryRow | undefined {
-	return entries.find(
-		(e) =>
-			e.kind === "payment" &&
-			e.paymentStatus === "pending" &&
-			e.shares.some((s) => s.memberId === a) &&
-			e.shares.some((s) => s.memberId === b)
-	);
-}
-
-// Whether a payment recorded by me between these two counts at once (no one to ask) rather than waiting.
-export function paymentCountsAtOnce(state: GroupState, from: string, to: string): boolean {
-	const member = (id: string) => state.members.find((m) => m.id === id);
-	if (state.me.memberId === from) return !canAnswer(member(to));
-	// The receiver saying they were paid is enough on its own (migration 014).
-	return true;
-}
-
 export function toLedgerMembers(members: MemberRow[]): LedgerMember[] {
 	return members.map((m) => ({ id: m.id, displayName: m.displayName, hasLogin: m.userId !== null }));
 }
 
-// Postgres char_length counts code points, not UTF-16 units.
-function charLength(text: string) {
-	return [...text].length;
-}
-
 function nameLength(name: string) {
 	return charLength(name.trim());
-}
-
-// What SQL's btrim + NULLIF(…, '') stores: spaces only are trimmed, blank is no note.
-function storedNote(note: string | null) {
-	const trimmed = note?.replace(/^ +| +$/g, "") ?? "";
-	return trimmed === "" ? null : trimmed;
 }
 
 function isCents(value: number, min: number) {
@@ -203,15 +163,17 @@ function isPlan(value: BillFields | Plan): value is Plan {
 function check(state: GroupState | null, action: Action): Plan | null {
 	if (!state) return refuse("HS403", "You are not a member of this group");
 	if (state.group.deletedAt) return refuse("HS403", "This group was deleted");
-	if (state.group.completedAt && !allowedWhenCompleted(action)) return refuse("HS403", "This group is completed");
-	if (!may(action, state.me.role)) {
-		return refuse(
-			"HS403",
-			may(action, "owner") && !may(action, "member") ? "Only the group's owner can do this" : "Guests can't do this"
-		);
-	}
-	return null;
+	const why = denial(state.group, state.me.role, action);
+	return why ? refuse("HS403", SERVER_WORDS[why]) : null;
 }
+
+// The server's wording for the gate's refusals (ADR-007: each side words its own).
+const SERVER_WORDS = {
+	"not-member": "You are not a member of this group",
+	completed: "This group is completed",
+	"owner-only": "Only the group's owner can do this",
+	guests: "Guests can't do this",
+} as const;
 
 const groupNameProblem = (name: string) =>
 	nameLength(name) < 1 || nameLength(name) > 80 ? refuse("HS422", "A group name must be 1 to 80 characters") : null;
@@ -250,8 +212,6 @@ export function planChange(state: GroupState | null, intent: Intent, ctx: PlanCo
 		if (noteProblem) return noteProblem;
 		const problem = groupNameProblem(intent.name);
 		if (problem) return problem;
-		// The server would fall back to the profile name for a blank one, but this device would show "" until
-		// the pull; refusing it is the smaller surprise (callers pass the account's name).
 		const nameProblem = displayNameProblem(intent.displayName);
 		if (nameProblem) return nameProblem;
 		const groupId = ctx.newId();
@@ -288,9 +248,12 @@ export function planChange(state: GroupState | null, intent: Intent, ctx: PlanCo
 				one({ type: "group.describe", groupId, note: storedNote(intent.note) })
 			);
 		case "recolorGroup":
-			if (intent.color !== null && !isCoverKey(intent.color))
-				return refuse("HS422", "That isn't a colour on the board");
-			return check(state, "group.recolor") ?? one({ type: "group.recolor", groupId, color: intent.color });
+			return (
+				check(state, "group.recolor") ??
+				(intent.color !== null && !isCoverKey(intent.color)
+					? refuse("HS422", "That isn't a colour on the board")
+					: one({ type: "group.recolor", groupId, color: intent.color }))
+			);
 		case "stickGroup":
 			return (
 				check(state, "group.sticker") ??
@@ -376,7 +339,7 @@ export function planChange(state: GroupState | null, intent: Intent, ctx: PlanCo
 			const refused = check(state, "conflict.resolve");
 			if (refused) return refused;
 			const conflict = state!.conflicts.find((c) => c.id === intent.conflictId);
-			if (!conflict) return refuse("HS422", "That conflict doesn't exist in this group");
+			if (!conflict) return refuse("HS404", "That conflict doesn't exist in this group");
 			if (conflict.resolvedAt) {
 				const by = conflict.resolvedByMemberId ? member(conflict.resolvedByMemberId)?.displayName : undefined;
 				return refuse("HS409", `${by ?? "Someone"} already resolved this`);
@@ -405,7 +368,7 @@ export function planChange(state: GroupState | null, intent: Intent, ctx: PlanCo
 			const to = member(intent.to);
 			if (!from || !to) return refuse("HS422", "Both sides of a payment must be in this group");
 			if (from.id === to.id) return refuse("HS422", "A payment is between two different people");
-			if (!own && (canAnswer(from) || canAnswer(to)))
+			if (!own && !recordableForOthers(from, to))
 				return refuse("HS422", "You can only record payments between two people who can't answer them themselves");
 			if (!isCents(intent.amountCents, 1))
 				return refuse("HS422", "The amount must be a whole number of cents from 1 to 10^12");
@@ -439,10 +402,7 @@ export function planChange(state: GroupState | null, intent: Intent, ctx: PlanCo
 			if (payment.kind !== "payment") return refuse("HS422", "That is a bill, not a payment");
 			// Answered already (here or by the other side): a second tap does nothing.
 			if (payment.paymentStatus !== "pending") return nothing;
-			const sides = paymentSides(payment);
-			const mayAnswer =
-				(me === sides.from && !payment.payerConfirmedAt) || (me === sides.to && !payment.receiverConfirmedAt);
-			if (!mayAnswer) return refuse("HS403", "Only the other side of this payment can answer it");
+			if (!answeringSide(payment, me)) return refuse("HS403", "Only the other side of this payment can answer it");
 			if (intent.type === "confirmPayment") return one({ type: "payment.confirm", groupId, entryId: payment.id });
 			if (intent.note !== null && charLength(intent.note) > 200)
 				return refuse("HS422", "A note must be text of at most 200 characters");
@@ -455,7 +415,7 @@ export function planChange(state: GroupState | null, intent: Intent, ctx: PlanCo
 			if (!payment) return nothing;
 			if (payment.kind !== "payment") return refuse("HS422", "That is a bill, not a payment");
 			if (payment.paymentStatus !== "pending") return nothing;
-			if (payment.createdByMemberId !== me) return refuse("HS403", "Only whoever recorded this payment can undo it");
+			if (!mayUndo(payment, me)) return refuse("HS403", "Only whoever recorded this payment can undo it");
 			return one({ type: "payment.undo", groupId, entryId: payment.id });
 		}
 

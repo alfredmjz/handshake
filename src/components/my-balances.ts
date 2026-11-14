@@ -2,6 +2,7 @@ import { useLiveQuery } from "dexie-react-hooks";
 
 import { toLedgerMembers } from "@/lib/changes";
 import { useCurrentUser } from "@/lib/auth";
+import { makeNames } from "@/lib/group-access";
 import { summarizeGroup } from "@/lib/ledger";
 import { db } from "@/lib/local-db";
 import { balanceFor, everOwed, type OpenDebt } from "@/lib/shell-view";
@@ -51,7 +52,7 @@ export function useOpenDebts() {
 		const out: OpenDebt[] = [];
 		for (const { group, members, me, summary } of await readStandings(userId)) {
 			if (!me) continue;
-			const nameOf = (id: string) => members.find((m) => m.id === id)?.displayName ?? "Someone";
+			const nameOf = makeNames(members, me.id).of;
 			for (const d of summary.debts) {
 				if (d.amountCents <= 0) continue;
 				if (d.fromMemberId === me.id)

@@ -4,6 +4,7 @@ import { groupCategory } from "@/lib/categories";
 import { toLedgerMembers } from "@/lib/changes";
 import { summarizeGroup } from "@/lib/ledger";
 import { db } from "@/lib/local-db";
+import { isPendingPayment } from "@/lib/payment-rules";
 import type { Category, EntryRow } from "@/lib/sync/types";
 
 // Bills and payments of every status, without deleted bills: newest day first, then latest added first.
@@ -41,7 +42,7 @@ export function usePendingPayments(groupId: string) {
 	return useLiveQuery(
 		async () =>
 			(await db.entries.where("groupId").equals(groupId).toArray())
-				.filter((e) => e.kind === "payment" && e.paymentStatus === "pending")
+				.filter(isPendingPayment)
 				.sort((a, b) => a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id)),
 		[groupId]
 	);

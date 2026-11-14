@@ -1,22 +1,24 @@
 import { useState } from "react";
 
 import { ConfirmDialog } from "@/components/confirm-dialog";
-import type { GroupData, Names } from "@/components/group/group-data";
+import type { GroupData } from "@/components/group/group-data";
 import { useRun } from "@/components/group/use-run";
 import { Button } from "@/components/ui/button";
 import { Field } from "@/components/ui/field";
 import { Textarea } from "@/components/ui/input";
-import { paymentSides } from "@/lib/changes";
+import type { Names } from "@/lib/group-access";
 import { formatAmount } from "@/lib/money";
+import { answeringSide, awaitedSide, counterpart, isPendingPayment, mayUndo, paymentSides } from "@/lib/payment-rules";
 import type { EntryRow } from "@/lib/sync/types";
 
 // What a pending payment is waiting for, from the current person's side.
 export function pendingSentence(entry: EntryRow, names: Names, myMemberId: string | null | undefined): string {
 	const { from, to } = paymentSides(entry);
-	if (entry.createdByMemberId === myMemberId) return `Waiting for ${names.inSentence(from === myMemberId ? to : from)}`;
+	if (myMemberId && entry.createdByMemberId === myMemberId)
+		return `Waiting for ${names.inSentence(counterpart(entry, myMemberId))}`;
 	if (to === myMemberId) return `${names.of(from)} says they paid you`;
 	if (from === myMemberId) return `${names.of(to)} says you paid them`;
-	return `Waiting for ${names.inSentence(entry.payerConfirmedAt ? to : from)}`;
+	return `Waiting for ${names.inSentence(awaitedSide(entry))}`;
 }
 
 type PaymentButtonsProps = {
@@ -33,13 +35,9 @@ export function PaymentButtons({ entry, data, onConfirmed, size = "sm" }: Paymen
 	const [declining, setDeclining] = useState(false);
 	const [note, setNote] = useState("");
 	const me = data.me?.id;
-	if (entry.kind !== "payment" || entry.paymentStatus !== "pending" || !me) return null;
+	if (!isPendingPayment(entry) || !me) return null;
 
-	const { from, to } = paymentSides(entry);
-	const toAnswer = (me === from && !entry.payerConfirmedAt) || (me === to && !entry.receiverConfirmedAt);
-	const mayUndo = entry.createdByMemberId === me && data.can("payment.undo");
-
-	if (toAnswer && data.can("payment.respond")) {
+	if (answeringSide(entry, me) && data.can("payment.respond")) {
 		return (
 			<>
 				<Button
@@ -87,7 +85,7 @@ export function PaymentButtons({ entry, data, onConfirmed, size = "sm" }: Paymen
 		);
 	}
 
-	if (mayUndo) {
+	if (mayUndo(entry, me) && data.can("payment.undo")) {
 		return (
 			<Button
 				size={size}

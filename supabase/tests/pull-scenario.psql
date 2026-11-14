@@ -1,0 +1,32 @@
+-- ============================================================================
+-- A group with a row in every synced table, for checking what pull_changes() sends (pull_keys.test.sql).
+-- Alex owns group 1 with Sam (joined with an invite), Pat (name-only) and Kim (a guest, so a guest code); a
+-- bill Alex edited while Sam's edit from the same version became a conflict; Sam's pending payment; and Alex's
+-- nudge to Sam. Needs prelude.psql. Its checks are the lines starting `SELECT is` / `SELECT isnt`.
+-- ============================================================================
+
+-- A bill Alex paid (900), split by Alex, Sam and Pat.
+CREATE FUNCTION pg_temp.dinner(p_description TEXT) RETURNS JSONB LANGUAGE sql AS $$
+    SELECT jsonb_build_object('type', 'entry.create', 'groupId', '10000000-0000-0000-0000-000000000001', 'entryId', '30000000-0000-0000-0000-000000000001',
+        'description', p_description, 'amountCents', 900, 'entryDate', '2026-11-02', 'notes', 'Ramen', 'category', 'food',
+        'items', '[{"id": "i1", "amountCents": 900, "paidBy": "20000000-0000-0000-0000-0000000000a1", "splitAmong": ["20000000-0000-0000-0000-0000000000a1", "20000000-0000-0000-0000-0000000000b1", "20000000-0000-0000-0000-0000000000f1"]}]'::JSONB,
+        'shares', '[{"memberId": "20000000-0000-0000-0000-0000000000a1", "paidCents": 900, "owedCents": 300, "owedTo": {"20000000-0000-0000-0000-0000000000a1": 300}},
+            {"memberId": "20000000-0000-0000-0000-0000000000b1", "paidCents": 0, "owedCents": 300, "owedTo": {"20000000-0000-0000-0000-0000000000a1": 300}},
+            {"memberId": "20000000-0000-0000-0000-0000000000f1", "paidCents": 0, "owedCents": 300, "owedTo": {"20000000-0000-0000-0000-0000000000a1": 300}}]'::JSONB);
+$$;
+
+SELECT pg_temp.add_user('aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa', 'alex@pull-keys.test', 'Alex');
+SELECT pg_temp.add_user('bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb', 'sam@pull-keys.test', 'Sam');
+SELECT pg_temp.add_guest('cccccccc-cccc-cccc-cccc-cccccccccccc');
+SELECT is(pg_temp.try('aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa', '{"type": "group.create", "groupId": "10000000-0000-0000-0000-000000000001", "memberId": "20000000-0000-0000-0000-0000000000a1", "name": "Japan", "displayName": "Alex", "note": "April"}'), 'applied', 'Alex creates group 1');
+SELECT is(pg_temp.try('aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa', '{"type": "member.add", "groupId": "10000000-0000-0000-0000-000000000001", "memberId": "20000000-0000-0000-0000-0000000000b1", "displayName": "Sam"}'), 'applied', 'Alex adds Sam by name');
+SELECT is(pg_temp.try('aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa', '{"type": "member.add", "groupId": "10000000-0000-0000-0000-000000000001", "memberId": "20000000-0000-0000-0000-0000000000f1", "displayName": "Pat"}'), 'applied', 'Alex adds Pat by name');
+SELECT is(pg_temp.try('aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa', '{"type": "invite.create", "groupId": "10000000-0000-0000-0000-000000000001", "inviteId": "40000000-0000-0000-0000-000000000001", "token": "pullkeysinvitetoken000000000000000000000001", "claimMemberId": "20000000-0000-0000-0000-0000000000b1", "expiresAt": null}'), 'applied', 'Alex invites Sam');
+SELECT is(pg_temp.join('bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb', 'pullkeysinvitetoken000000000000000000000001', '20000000-0000-0000-0000-0000000000b1'), '10000000-0000-0000-0000-000000000001'::UUID, 'Sam joins as Sam');
+SELECT isnt(pg_temp.join_code('cccccccc-cccc-cccc-cccc-cccccccccccc', pg_temp.code('10000000-0000-0000-0000-000000000001'), NULL, 'Kim'), NULL, 'Kim joins as a guest with the group code');
+SELECT is(pg_temp.try('aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa', pg_temp.dinner('Dinner')), 'applied', 'Alex adds a bill');
+CREATE TEMP TABLE first_version AS SELECT pg_temp.version_of('30000000-0000-0000-0000-000000000001') AS v;
+SELECT is(pg_temp.try('aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa', pg_temp.dinner('Ramen dinner') || jsonb_build_object('type', 'entry.update', 'baseVersion', (SELECT v FROM first_version))), 'applied', 'Alex edits it');
+SELECT is(pg_temp.try('bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb', pg_temp.dinner('Sushi dinner') || jsonb_build_object('type', 'entry.update', 'baseVersion', (SELECT v FROM first_version))), 'applied', 'Sam''s edit from the first version is kept as a conflict');
+SELECT is(pg_temp.try('bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb', '{"type": "payment.record", "groupId": "10000000-0000-0000-0000-000000000001", "entryId": "30000000-0000-0000-0000-000000000002", "fromMemberId": "20000000-0000-0000-0000-0000000000b1", "toMemberId": "20000000-0000-0000-0000-0000000000a1", "amountCents": 100, "entryDate": "2026-11-04", "notes": null}'), 'applied', 'Sam records paying Alex back 100');
+SELECT is(pg_temp.try('aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa', '{"type": "nudge.send", "groupId": "10000000-0000-0000-0000-000000000001", "nudgeId": "60000000-0000-0000-0000-000000000001", "toMemberId": "20000000-0000-0000-0000-0000000000b1", "amountCents": 300}'), 'applied', 'Alex nudges Sam');

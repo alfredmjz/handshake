@@ -22,10 +22,10 @@ import { List, ListRow } from "@/components/ui/list";
 import { Inline, Stack } from "@/components/ui/stack";
 import { useCommit, type Intent } from "@/lib/changes";
 import { useGroupSummary, usePendingPayments } from "@/lib/entries";
+import { groupAccess } from "@/lib/group-access";
 import { useGroup } from "@/lib/groups";
 import { useMembers, useMyMember } from "@/lib/members";
 import { formatAmount } from "@/lib/money";
-import { allowedWhenCompleted, may } from "@/lib/permissions";
 import {
 	countPayments,
 	guestsLosingAccess,
@@ -76,11 +76,10 @@ export function SettleUpPage() {
 	};
 
 	const completed = !!group.completedAt;
-	const allowed = (action: Parameters<typeof may>[0]) =>
-		!!me && may(action, me.role) && (!completed || allowedWhenCompleted(action));
-	const byId = new Map(members.map((m) => [m.id, m]));
-	const name = (id: string) => (id === me?.id ? "You" : (byId.get(id)?.displayName ?? "Someone"));
-	const object = (id: string) => (id === me?.id ? "you" : name(id));
+	const access = groupAccess({ group, members, me });
+	const allowed = access.may;
+	const name = access.names.of;
+	const object = access.names.inSentence;
 
 	const rows = settleRows(members, summary, pending, me?.id ?? null);
 	const settled = rows.filter((r) => r.state === "settled").length;
@@ -272,7 +271,7 @@ function PersonRow({
 			<ListRow
 				asChild
 				leading={<Face seed={id} name="" size={36} faded={!!row.member.deletedAt} />}
-				title={`${name(id)}${row.member.deletedAt ? " (left)" : ""}`}
+				title={name(id)}
 				trailing={
 					<span className="flex items-center gap-control">
 						<span className="flex flex-col items-end gap-0.5">

@@ -6,84 +6,24 @@
 BEGIN;
 CREATE EXTENSION IF NOT EXISTS pgtap WITH SCHEMA extensions;
 SELECT no_plan();
+\ir prelude.psql
 
 -- ---------------------------------------------------------------------------
--- Helpers: act as a signed-in user (a guest when their auth user is anonymous), or signed out
+-- Helpers (the shared ones are in prelude.psql)
 -- ---------------------------------------------------------------------------
-CREATE FUNCTION pg_temp.sign_in(p_user UUID) RETURNS VOID LANGUAGE sql AS $$
-    SELECT set_config('request.jwt.claims', json_build_object(
-        'sub', p_user,
-        'role', 'authenticated',
-        'is_anonymous', COALESCE((SELECT is_anonymous FROM auth.users WHERE id = p_user), FALSE)
-    )::TEXT, true);
-$$;
-CREATE FUNCTION pg_temp.push_signed_in(p_mutations JSONB) RETURNS JSONB LANGUAGE sql SET role = 'authenticated' AS $$
-    SELECT public.push_changes(p_mutations);
-$$;
-CREATE FUNCTION pg_temp.pull_signed_in(p_cursors JSONB) RETURNS JSONB LANGUAGE sql SET role = 'authenticated' AS $$
-    SELECT public.pull_changes(p_cursors);
-$$;
-CREATE FUNCTION pg_temp.join_signed_in(p_token TEXT, p_claim UUID, p_name TEXT) RETURNS UUID LANGUAGE sql SET role = 'authenticated' AS $$
-    SELECT public.join_group(p_token, p_claim, p_name);
-$$;
 CREATE FUNCTION pg_temp.preview_signed_in(p_token TEXT) RETURNS JSONB LANGUAGE sql SET role = 'authenticated' AS $$
     SELECT public.preview_invite(p_token);
 $$;
-CREATE FUNCTION pg_temp.upgrade_signed_in() RETURNS VOID LANGUAGE sql SET role = 'authenticated' AS $$
-    SELECT public.upgrade_guest();
-$$;
-CREATE FUNCTION pg_temp.sqlstate_signed_in(p_sql TEXT) RETURNS TEXT LANGUAGE plpgsql SET role = 'authenticated' AS $$
-BEGIN
-    EXECUTE p_sql;
-    RETURN 'ok';
-EXCEPTION WHEN OTHERS THEN
-    RETURN SQLSTATE;
-END $$;
 CREATE FUNCTION pg_temp.preview_signed_out(p_token TEXT) RETURNS JSONB LANGUAGE plpgsql SET role = 'anon' AS $$
 BEGIN
     PERFORM set_config('request.jwt.claims', '{"role": "anon"}', true);
     RETURN public.preview_invite(p_token);
-END $$;
-CREATE FUNCTION pg_temp.sqlstate_signed_out(p_sql TEXT) RETURNS TEXT LANGUAGE plpgsql SET role = 'anon' AS $$
-BEGIN
-    PERFORM set_config('request.jwt.claims', '{"role": "anon"}', true);
-    EXECUTE p_sql;
-    RETURN 'ok';
-EXCEPTION WHEN OTHERS THEN
-    RETURN SQLSTATE;
-END $$;
-CREATE FUNCTION pg_temp.push(p_user UUID, p_mutation JSONB) RETURNS JSONB LANGUAGE plpgsql AS $$
-BEGIN
-    PERFORM pg_temp.sign_in(p_user);
-    RETURN pg_temp.push_signed_in(jsonb_build_array(jsonb_build_object('id', gen_random_uuid()) || p_mutation));
-END $$;
--- 'applied', or the rejection's code.
-CREATE FUNCTION pg_temp.try(p_user UUID, p_mutation JSONB) RETURNS TEXT LANGUAGE sql AS $$
-    SELECT COALESCE(r#>>'{rejected,0,code}', 'applied') FROM pg_temp.push(p_user, p_mutation) r;
-$$;
-CREATE FUNCTION pg_temp.pull(p_user UUID, p_cursors JSONB DEFAULT '{}') RETURNS JSONB LANGUAGE plpgsql AS $$
-BEGIN
-    PERFORM pg_temp.sign_in(p_user);
-    RETURN pg_temp.pull_signed_in(p_cursors);
-END $$;
-CREATE FUNCTION pg_temp.join(p_user UUID, p_token TEXT, p_claim UUID DEFAULT NULL, p_name TEXT DEFAULT NULL) RETURNS UUID LANGUAGE plpgsql AS $$
-BEGIN
-    PERFORM pg_temp.sign_in(p_user);
-    RETURN pg_temp.join_signed_in(p_token, p_claim, p_name);
 END $$;
 CREATE FUNCTION pg_temp.preview(p_user UUID, p_token TEXT) RETURNS JSONB LANGUAGE plpgsql AS $$
 BEGIN
     PERFORM pg_temp.sign_in(p_user);
     RETURN pg_temp.preview_signed_in(p_token);
 END $$;
-CREATE FUNCTION pg_temp.upgrade(p_user UUID) RETURNS VOID LANGUAGE plpgsql AS $$
-BEGIN
-    PERFORM pg_temp.sign_in(p_user);
-    PERFORM pg_temp.upgrade_signed_in();
-END $$;
-CREATE FUNCTION pg_temp.head(p_group UUID) RETURNS BIGINT LANGUAGE sql AS $$
-    SELECT head_version FROM public.groups WHERE id = p_group;
-$$;
 CREATE FUNCTION pg_temp.invite(p_invite UUID, p_group UUID, p_token TEXT, p_claim UUID, p_expires TIMESTAMPTZ) RETURNS JSONB LANGUAGE sql AS $$
     SELECT jsonb_build_object('type', 'invite.create', 'inviteId', p_invite, 'groupId', p_group, 'token', p_token, 'claimMemberId', p_claim, 'expiresAt', p_expires);
 $$;
@@ -93,14 +33,12 @@ $$;
 -- Users: aaaa… Alex, bbbb… Sam, cccc… Jo, dddd… Kim (anonymous), eeee… Lee, ffff… Ren.
 -- Tokens are 43 characters: invites1test + digits.
 -- ---------------------------------------------------------------------------
-INSERT INTO auth.users (id, email, instance_id, aud, role, is_anonymous, raw_user_meta_data)
-VALUES
-    ('aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa', 'alex@invites.test', '00000000-0000-0000-0000-000000000000', 'authenticated', 'authenticated', FALSE, '{"display_name": "Alex"}'),
-    ('bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb', 'sam@invites.test', '00000000-0000-0000-0000-000000000000', 'authenticated', 'authenticated', FALSE, '{"display_name": "Sam"}'),
-    ('cccccccc-cccc-cccc-cccc-cccccccccccc', 'jo@invites.test', '00000000-0000-0000-0000-000000000000', 'authenticated', 'authenticated', FALSE, '{"display_name": "Jo"}'),
-    ('dddddddd-dddd-dddd-dddd-dddddddddddd', NULL, '00000000-0000-0000-0000-000000000000', 'authenticated', 'authenticated', TRUE, '{}'),
-    ('eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee', 'lee@invites.test', '00000000-0000-0000-0000-000000000000', 'authenticated', 'authenticated', FALSE, '{"display_name": "Lee"}'),
-    ('ffffffff-ffff-ffff-ffff-ffffffffffff', 'ren@invites.test', '00000000-0000-0000-0000-000000000000', 'authenticated', 'authenticated', FALSE, '{"display_name": "Ren"}');
+SELECT pg_temp.add_user('aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa', 'alex@invites.test', 'Alex');
+SELECT pg_temp.add_user('bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb', 'sam@invites.test', 'Sam');
+SELECT pg_temp.add_user('cccccccc-cccc-cccc-cccc-cccccccccccc', 'jo@invites.test', 'Jo');
+SELECT pg_temp.add_guest('dddddddd-dddd-dddd-dddd-dddddddddddd');
+SELECT pg_temp.add_user('eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee', 'lee@invites.test', 'Lee');
+SELECT pg_temp.add_user('ffffffff-ffff-ffff-ffff-ffffffffffff', 'ren@invites.test', 'Ren');
 
 SELECT is(pg_temp.try('aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa', '{"type": "group.create", "groupId": "10000000-0000-0000-0000-000000000001", "memberId": "20000000-0000-0000-0000-0000000000a1", "name": "Banff", "displayName": "Alex"}'), 'applied', 'Alex creates group 1');
 SELECT is(pg_temp.try('aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa', '{"type": "member.add", "groupId": "10000000-0000-0000-0000-000000000001", "memberId": "20000000-0000-0000-0000-0000000000f1", "displayName": "Pat"}'), 'applied', 'Alex adds Pat by name');

@@ -50,10 +50,13 @@ src/
   components/ui/           shadcn/ui primitives (button, card, dialog, tabs, toggle-group, list, field, …)
   lib/
     local-db.ts            Dexie schema; the app reads only from here
-    sync/                  types, local apply/merge, engine, controller, transport
+    sync/                  types, tables (each replica table described once), local apply/merge, engine,
+                           controller, transport
     changes.ts             planChange() and commit(intent): the only way screens change data
     ledger.ts              shares, entry checks, balances and debts (pure)
     permissions.ts         the role matrix (mirrors private.may)
+    group-access.ts        the "may I?" gate, its reason in words, and names ("You", "Jo (left)")
+    payment-rules.ts       pending-payment rules: who answers, who may undo, what counts at once
     groups.ts              read hooks, with members.ts, entries.ts and invites.ts
     auth.tsx, money.ts, ids.ts, supabase.ts
   server/api-v1/           API v1 for Pholio: createApiV1({ store }) and the ApiStore adapters

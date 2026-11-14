@@ -14,13 +14,13 @@ import { Inline, Stack } from "@/components/ui/stack";
 import { CATEGORIES } from "@/lib/categories";
 import { toLedgerMembers, useCommit, type ExpenseDraft } from "@/lib/changes";
 import { useEntry } from "@/lib/entries";
+import { groupAccess } from "@/lib/group-access";
 import { useGroup } from "@/lib/groups";
 import { newId } from "@/lib/ids";
-import { computeShares, validateEntry, type Item, type Share } from "@/lib/ledger";
+import { computeShares, explainRounding, validateEntry, type Item, type Share } from "@/lib/ledger";
 import { useMembers, useMyMember } from "@/lib/members";
 import { parseAmount } from "@/lib/money";
-import { allowedWhenCompleted, may } from "@/lib/permissions";
-import { billItems, roundingNotes } from "@/lib/settle-view";
+import { billItems } from "@/lib/settle-view";
 import type { Category, EntryRow, MemberRow } from "@/lib/sync/types";
 import { byText } from "@/lib/utils";
 
@@ -160,16 +160,10 @@ export function ExpenseEditor({ groupId, entryId, open, onOpenChange }: ExpenseE
 	}, 0);
 	const shares = items ? computeShares(items) : null;
 
-	const action = entryId ? "entry.update" : "entry.create";
-	const blocked = !me
-		? "You're not in this group."
-		: group?.completedAt && !allowedWhenCompleted(action)
-			? "This group is completed."
-			: !may(action, me.role)
-				? "Guests can't edit bills."
-				: entryId && entry?.kind === "payment"
-					? "Payments can't be edited."
-					: null;
+	const access = groupAccess({ group, members, me });
+	const blocked =
+		access.whyNot(entryId ? "entry.update" : "entry.create") ??
+		(entryId && entry?.kind === "payment" ? "Payments can't be edited." : null);
 
 	const valid =
 		!!draft &&
@@ -213,14 +207,16 @@ export function ExpenseEditor({ groupId, entryId, open, onOpenChange }: ExpenseE
 		}
 	};
 
-	const names = new Map((members ?? []).map((m) => [m.id, m]));
-	const label = (id: string) =>
-		id === me?.id ? "You" : `${names.get(id)?.displayName ?? "Someone"}${names.get(id)?.deletedAt ? " (left)" : ""}`;
+	const { names } = access;
+	const label = names.of;
 
 	// Active people, plus anyone who left but is already on this item: you first, then by name.
 	const optionsFor = (item: ItemDraft | undefined): PersonOption[] => {
 		const ids = new Set(active.map((m) => m.id));
-		for (const id of [item?.paidBy, ...(item?.splitAmong ?? [])]) if (id && names.has(id)) ids.add(id);
+		for (const id of [item?.paidBy, ...(item?.splitAmong ?? [])]) {
+			const person = names.member(id);
+			if (person) ids.add(person.id);
+		}
 		const options = [...ids].map((id) => ({ id, label: label(id) })).sort(byText((p) => p.label));
 		return [...options.filter((p) => p.id === me?.id), ...options.filter((p) => p.id !== me?.id)];
 	};
@@ -447,7 +443,7 @@ function ResultsWell({
 		.filter((s) => s.paidCents > 0 || s.owedCents > 0)
 		.sort((a, b) => Number(a.memberId === me) - Number(b.memberId === me) || byText(label)(a.memberId, b.memberId));
 	const possessive = (id: string) => (id === me ? "Your" : `${label(id)}'s`);
-	const notes = roundingNotes(items, shares).map((n) => {
+	const notes = explainRounding(items, shares).map((n) => {
 		const cents = `${Math.abs(n.cents)}¢`;
 		if (n.memberId === n.payerId)
 			return n.memberId === me

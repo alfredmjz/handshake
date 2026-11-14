@@ -48,7 +48,13 @@ function rowIds(m: Mutation): string[] {
 			return [m.inviteId];
 		case "nudge.send":
 			return [m.nudgeId];
-		default:
+		case "entry.create":
+		case "entry.update":
+		case "entry.delete":
+		case "payment.record":
+		case "payment.confirm":
+		case "payment.decline":
+		case "payment.undo":
 			return [m.entryId];
 	}
 }

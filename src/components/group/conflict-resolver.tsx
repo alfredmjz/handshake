@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState, type ReactNode } from "react";
 
 import { EditorDialog } from "@/components/editor-dialog";
-import type { GroupData, Names } from "@/components/group/group-data";
+import type { GroupData } from "@/components/group/group-data";
 import { todayIso } from "@/components/group/today";
 import { useRun } from "@/components/group/use-run";
 import { Amount } from "@/components/money";
@@ -12,6 +12,7 @@ import { Inline, Stack } from "@/components/ui/stack";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { CATEGORIES } from "@/lib/categories";
 import { useConflicts, useEntry } from "@/lib/entries";
+import type { Names } from "@/lib/group-access";
 import {
 	billVersionOf,
 	conflictFields,
@@ -28,8 +29,8 @@ import type { ConflictRow, EntryRow, Item } from "@/lib/sync/types";
 import { cn } from "@/lib/utils";
 
 // "Alex's", "Yours".
-function whose(name: string) {
-	return name === "You" ? "Yours" : `${name}'s`;
+function whose(names: Names, memberId: string | null) {
+	return names.isMe(memberId) ? "Yours" : `${names.of(memberId)}'s`;
 }
 
 // The label mid-sentence: "Use all of Alex's", "Keep yours", "Restore this version".
@@ -195,8 +196,8 @@ export function ConflictResolver({ data, entryId, open, onOpenChange }: Conflict
 	if (!entry || !conflict || !current) return null;
 
 	const { names } = data;
-	const currentName = whose(names.of(entry.updatedByMemberId));
-	const proposedName = whose(names.of(conflict.proposedByMemberId));
+	const currentName = whose(names, entry.updatedByMemberId);
+	const proposedName = whose(names, conflict.proposedByMemberId);
 	const [leftLabel, rightLabel] =
 		currentName === proposedName ? ["This version", "The other version"] : [currentName, proposedName];
 	const groupId = entry.groupId;

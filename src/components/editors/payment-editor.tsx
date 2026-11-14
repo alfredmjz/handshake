@@ -9,13 +9,13 @@ import { Field } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
 import { Stack } from "@/components/ui/stack";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
-import { useCurrentUser } from "@/lib/auth";
-import { paymentCountsAtOnce, pendingPaymentBetween, useCommit, type GroupState } from "@/lib/changes";
+import { useCommit } from "@/lib/changes";
 import { useEntries, useGroupSummary } from "@/lib/entries";
+import { groupAccess } from "@/lib/group-access";
 import { useGroup } from "@/lib/groups";
 import { useMembers, useMyMember } from "@/lib/members";
 import { formatAmount, parseAmount } from "@/lib/money";
-import { allowedWhenCompleted, may } from "@/lib/permissions";
+import { countsAtOnce as paymentCountsAtOnce, pendingPaymentBetween } from "@/lib/payment-rules";
 
 export type PaymentEditorProps = {
 	groupId: string;
@@ -43,7 +43,6 @@ function amountText(cents: number) {
 // "You paid Sam" or "Jo paid you": who and which way are set by the debt it was opened from.
 export function PaymentEditor({ groupId, from, to, amountCents, open, onOpenChange, onCounted }: PaymentEditorProps) {
 	const commit = useCommit();
-	const user = useCurrentUser();
 	const group = useGroup(groupId);
 	const members = useMembers(groupId, { includeLeft: true });
 	const me = useMyMember(groupId);
@@ -72,7 +71,8 @@ export function PaymentEditor({ groupId, from, to, amountCents, open, onOpenChan
 
 	const payer = members?.find((m) => m.id === from);
 	const receiver = members?.find((m) => m.id === to);
-	const name = (id: string) => (id === me?.id ? "You" : (members?.find((m) => m.id === id)?.displayName ?? "Someone"));
+	const access = groupAccess({ group, members, me });
+	const name = access.names.of;
 	const title =
 		me?.id === to
 			? `${name(from)} paid you`
@@ -81,17 +81,7 @@ export function PaymentEditor({ groupId, from, to, amountCents, open, onOpenChan
 				: `${name(from)} paid ${name(to)}`;
 	const other = me?.id === from ? to : from;
 
-	const state: GroupState | null =
-		group && members && entries && me
-			? {
-					group,
-					members,
-					entries,
-					conflicts: [],
-					me: { memberId: me.id, role: me.role, isAnonymous: user.isAnonymous },
-				}
-			: null;
-	const countsAtOnce = state ? paymentCountsAtOnce(state, from, to) : false;
+	const countsAtOnce = group && members && entries && me ? paymentCountsAtOnce(me.id, from, receiver) : false;
 	const waiting = entries ? pendingPaymentBetween(entries, from, to) : undefined;
 	const own = me?.id === from || me?.id === to;
 	const action = own ? "payment.record.own" : "payment.record.others";
@@ -99,15 +89,7 @@ export function PaymentEditor({ groupId, from, to, amountCents, open, onOpenChan
 	const loaded = group !== undefined && members !== undefined && me !== undefined && entries !== undefined && !!summary;
 	const blocked = !loaded
 		? null
-		: !me
-			? "You're not in this group."
-			: group?.completedAt && !allowedWhenCompleted(action)
-				? "This group is completed."
-				: !may(action, me.role)
-					? "Guests can't record this payment."
-					: waiting
-						? `A payment with ${name(other)} is already waiting.`
-						: null;
+		: (access.whyNot(action) ?? (waiting ? `A payment with ${name(other)} is already waiting.` : null));
 
 	const cents = parseAmount(amount);
 	const valid = cents !== null && cents >= 1 && /^\d{4}-\d{2}-\d{2}$/.test(entryDate) && !!payer && !!receiver;

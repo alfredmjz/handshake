@@ -1,7 +1,7 @@
 import { Face } from "@/components/art/face";
 import { Amount } from "@/components/money";
 import { List, ListRow } from "@/components/ui/list";
-import { listNames } from "@/lib/settle-view";
+import { joinNames } from "@/lib/group-view";
 
 export type OwedRow = { key: string; fromId: string; text: string; cents: number };
 
@@ -28,7 +28,7 @@ export function CompleteSummary({ rows, waiting, guests }: { rows: OwedRow[]; wa
 			)}
 			{guests.length > 0 && (
 				<p className="type-label text-muted-foreground">
-					{listNames(guests)} {guests.length === 1 ? "is a guest" : "are guests"} and will lose access.{" "}
+					{joinNames(guests)} {guests.length === 1 ? "is a guest" : "are guests"} and will lose access.{" "}
 					{guests.length === 1 ? "Their name" : "Their names"} and history stay.
 				</p>
 			)}

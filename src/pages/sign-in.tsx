@@ -13,6 +13,7 @@ import { Input } from "@/components/ui/input";
 import { Stack } from "@/components/ui/stack";
 import { takeEndedNotice } from "@/lib/auth";
 import { devLoginAvailable, switchToTestAccount, TEST_ACCOUNTS } from "@/lib/dev-login";
+import { OFFLINE_SIGN_IN } from "@/lib/online-outcome";
 import { supabase } from "@/lib/supabase";
 import { cn } from "@/lib/utils";
 
@@ -48,7 +49,7 @@ export function EmailSignIn({ onBack }: { onBack?: () => void }) {
 	async function sendCode(event: FormEvent) {
 		event.preventDefault();
 		if (!navigator.onLine) {
-			toast.error("You're offline", { description: "Signing in needs a connection." });
+			toast.error(OFFLINE_SIGN_IN.title, { description: OFFLINE_SIGN_IN.description });
 			return;
 		}
 		setBusy(true);

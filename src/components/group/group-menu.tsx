@@ -15,7 +15,7 @@ import {
 	DropdownMenuSeparator,
 	DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { paymentSides } from "@/lib/changes";
+import { counterpart, isPendingPayment } from "@/lib/payment-rules";
 
 // The group's "…" menu: name and note, cover, settle up and complete, reopen, leave, delete.
 export function GroupMenu({ data }: { data: GroupData }) {
@@ -33,14 +33,10 @@ export function GroupMenu({ data }: { data: GroupData }) {
 		.sort((a, b) => (a.joinedAt ?? "").localeCompare(b.joinedAt ?? "") || a.id.localeCompare(b.id))[0];
 
 	// Leaving undoes your payments still waiting for an answer.
-	const pending = data.entries.filter(
-		(e) => e.kind === "payment" && e.paymentStatus === "pending" && e.shares.some((sh) => sh.memberId === me.id)
-	);
+	const pending = data.entries.filter((e) => isPendingPayment(e) && e.shares.some((sh) => sh.memberId === me.id));
 	const pendingLine =
 		pending.length === 1
-			? `Your payment waiting for ${data.names.inSentence(
-					Object.values(paymentSides(pending[0])).find((id) => id !== me.id)
-				)} is undone.`
+			? `Your payment waiting for ${data.names.inSentence(counterpart(pending[0], me.id))} is undone.`
 			: pending.length > 1
 				? `Your ${pending.length} payments waiting for an answer are undone.`
 				: null;

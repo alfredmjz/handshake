@@ -9,8 +9,8 @@ import { Field } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
 import { finishKeepMyData, startKeepMyData } from "@/lib/auth";
 import { useOnline } from "@/lib/online";
+import { isServerError, messageOf, NEEDS_CONNECTION } from "@/lib/online-outcome";
 import { requestSync } from "@/lib/sync/controller";
-import { TransportError } from "@/lib/sync/supabase-transport";
 
 // Shown on every screen for a guest: their data goes when a group completes, unless they add an email; and
 // their personal code, to get back in on another device.
@@ -37,7 +37,7 @@ export function GuestBanner() {
 	}
 
 	function failed(title: string, error: unknown) {
-		toast.error(title, { description: error instanceof Error ? error.message : undefined });
+		toast.error(title, { description: messageOf(error) });
 	}
 
 	async function submit(token = code) {
@@ -54,7 +54,7 @@ export function GuestBanner() {
 			failed(
 				step === "email"
 					? "Couldn't send the code"
-					: error instanceof TransportError
+					: isServerError(error)
 						? "Couldn't keep your data"
 						: "That code didn't work",
 				error
@@ -102,7 +102,7 @@ export function GuestBanner() {
 				}
 			>
 				{step === "email" ? (
-					<Field label="Email" htmlFor="keep-email" error={online ? undefined : "Needs a connection"}>
+					<Field label="Email" htmlFor="keep-email" error={online ? undefined : NEEDS_CONNECTION}>
 						<Input
 							id="keep-email"
 							type="email"
@@ -113,7 +113,7 @@ export function GuestBanner() {
 						/>
 					</Field>
 				) : (
-					<Field label="Code" htmlFor="keep-code" error={online ? undefined : "Needs a connection"}>
+					<Field label="Code" htmlFor="keep-code" error={online ? undefined : NEEDS_CONNECTION}>
 						<CodeInput
 							id="keep-code"
 							value={code}

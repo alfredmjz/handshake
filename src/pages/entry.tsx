@@ -20,10 +20,10 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { List, ListRow } from "@/components/ui/list";
 import { Inline, Stack } from "@/components/ui/stack";
-import { paymentSides } from "@/lib/changes";
 import { useConflicts, useEntry } from "@/lib/entries";
 import { dayLabel, isVisibleTo, joinNames, roundingCents } from "@/lib/group-view";
 import { formatAmount } from "@/lib/money";
+import { paymentSides } from "@/lib/payment-rules";
 import type { EntryRow } from "@/lib/sync/types";
 import { byText } from "@/lib/utils";
 

@@ -2,7 +2,8 @@ import type { Table } from "dexie";
 
 import type { LocalDb } from "@/lib/local-db";
 import type { SyncStore } from "@/lib/sync/engine";
-import { mergePull, type LocalTables, type MovedAwayNotice, type Rows } from "@/lib/sync/local";
+import { mergePull, type LocalTables, type MovedAwayNotice, type ReplicaRows, type Rows } from "@/lib/sync/local";
+import { groupField, TABLE_NAMES } from "@/lib/sync/tables";
 import type { Mutation } from "@/lib/sync/types";
 
 // groupIndex names the field that holds the group id (the primary key itself for groups and cursors).
@@ -18,35 +19,16 @@ function rows<T>(table: Table<T, string, unknown>, groupIndex: string): Rows<T> 
 }
 
 export function dexieTables(db: LocalDb): LocalTables {
-	return {
-		groups: rows(db.groups, "id"),
-		members: rows(db.members, "groupId"),
-		entries: rows(db.entries, "groupId"),
-		conflicts: rows(db.conflicts, "groupId"),
-		invites: rows(db.invites, "groupId"),
-		inviteTokens: rows(db.inviteTokens, "groupId"),
-		nudges: rows(db.nudges, "groupId"),
-		guestCodes: rows(db.guestCodes, "groupId"),
-		cursors: rows(db.cursors, "groupId"),
-		groupIds: () => db.groups.toCollection().primaryKeys(),
-	};
+	const replica = Object.fromEntries(
+		TABLE_NAMES.map((name) => [name, rows(db.table(name), groupField(name))])
+	) as ReplicaRows;
+	return { ...replica, groupIds: () => db.groups.toCollection().primaryKeys() };
 }
 
 // Every table a local write touches: the replica's tables plus the outbox. A read-write transaction over
 // these can run applyMutation or mergePull and queue mutations.
 export function writeTables(db: LocalDb) {
-	return [
-		db.groups,
-		db.members,
-		db.entries,
-		db.conflicts,
-		db.invites,
-		db.inviteTokens,
-		db.nudges,
-		db.guestCodes,
-		db.cursors,
-		db.outbox,
-	];
+	return [...TABLE_NAMES.map((name) => db.table(name)), db.outbox];
 }
 
 // The next pull then sends every group whole, and mergePull drops what the server doesn't have: how the

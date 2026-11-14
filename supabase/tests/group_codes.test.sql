@@ -8,31 +8,13 @@
 BEGIN;
 CREATE EXTENSION IF NOT EXISTS pgtap WITH SCHEMA extensions;
 SELECT no_plan();
+\ir prelude.psql
 
 -- ---------------------------------------------------------------------------
--- Helpers
+-- Helpers (the shared ones are in prelude.psql)
 -- ---------------------------------------------------------------------------
-CREATE FUNCTION pg_temp.sign_in(p_user UUID) RETURNS VOID LANGUAGE sql AS $$
-    SELECT set_config('request.jwt.claims', json_build_object(
-        'sub', p_user,
-        'role', 'authenticated',
-        'is_anonymous', COALESCE((SELECT is_anonymous FROM auth.users WHERE id = p_user), FALSE)
-    )::TEXT, true);
-$$;
-CREATE FUNCTION pg_temp.push_signed_in(p_mutations JSONB) RETURNS JSONB LANGUAGE sql SET role = 'authenticated' AS $$
-    SELECT public.push_changes(p_mutations);
-$$;
-CREATE FUNCTION pg_temp.pull_signed_in(p_cursors JSONB) RETURNS JSONB LANGUAGE sql SET role = 'authenticated' AS $$
-    SELECT public.pull_changes(p_cursors);
-$$;
-CREATE FUNCTION pg_temp.join_signed_in(p_code TEXT, p_claim UUID, p_name TEXT, p_personal TEXT) RETURNS UUID LANGUAGE sql SET role = 'authenticated' AS $$
-    SELECT public.join_with_code(p_code, p_claim, p_name, p_personal);
-$$;
 CREATE FUNCTION pg_temp.preview_signed_in(p_code TEXT) RETURNS JSONB LANGUAGE sql SET role = 'authenticated' AS $$
     SELECT public.preview_group(p_code);
-$$;
-CREATE FUNCTION pg_temp.upgrade_signed_in() RETURNS VOID LANGUAGE sql SET role = 'authenticated' AS $$
-    SELECT public.upgrade_guest();
 $$;
 CREATE FUNCTION pg_temp.codes_signed_in() RETURNS TEXT[] LANGUAGE sql SET role = 'authenticated' AS $$
     SELECT COALESCE(array_agg(member_id::TEXT ORDER BY member_id), '{}') FROM public.guest_codes;
@@ -41,41 +23,6 @@ CREATE FUNCTION pg_temp.preview_signed_out(p_code TEXT) RETURNS JSONB LANGUAGE p
 BEGIN
     PERFORM set_config('request.jwt.claims', '{"role": "anon"}', true);
     RETURN public.preview_group(p_code);
-END $$;
-CREATE FUNCTION pg_temp.sqlstate_signed_out(p_sql TEXT) RETURNS TEXT LANGUAGE plpgsql SET role = 'anon' AS $$
-BEGIN
-    PERFORM set_config('request.jwt.claims', '{"role": "anon"}', true);
-    EXECUTE p_sql;
-    RETURN 'ok';
-EXCEPTION WHEN OTHERS THEN
-    RETURN SQLSTATE;
-END $$;
-CREATE FUNCTION pg_temp.push(p_user UUID, p_mutation JSONB) RETURNS JSONB LANGUAGE plpgsql AS $$
-BEGIN
-    PERFORM pg_temp.sign_in(p_user);
-    RETURN pg_temp.push_signed_in(jsonb_build_array(jsonb_build_object('id', gen_random_uuid()) || p_mutation));
-END $$;
--- 'applied', or the rejection's code and reason.
-CREATE FUNCTION pg_temp.try(p_user UUID, p_mutation JSONB) RETURNS TEXT LANGUAGE sql AS $$
-    SELECT COALESCE((r#>>'{rejected,0,code}') || ' ' || (r#>>'{rejected,0,reason}'), 'applied') FROM pg_temp.push(p_user, p_mutation) r;
-$$;
-CREATE FUNCTION pg_temp.pull(p_user UUID, p_cursors JSONB DEFAULT '{}') RETURNS JSONB LANGUAGE plpgsql AS $$
-BEGIN
-    PERFORM pg_temp.sign_in(p_user);
-    RETURN pg_temp.pull_signed_in(p_cursors);
-END $$;
-CREATE FUNCTION pg_temp.join(p_user UUID, p_code TEXT, p_claim UUID DEFAULT NULL, p_name TEXT DEFAULT NULL, p_personal TEXT DEFAULT NULL) RETURNS UUID LANGUAGE plpgsql AS $$
-BEGIN
-    PERFORM pg_temp.sign_in(p_user);
-    RETURN pg_temp.join_signed_in(p_code, p_claim, p_name, p_personal);
-END $$;
--- 'ok', or the error's SQLSTATE and message.
-CREATE FUNCTION pg_temp.join_error(p_user UUID, p_code TEXT, p_claim UUID DEFAULT NULL, p_name TEXT DEFAULT NULL, p_personal TEXT DEFAULT NULL) RETURNS TEXT LANGUAGE plpgsql AS $$
-BEGIN
-    PERFORM pg_temp.join(p_user, p_code, p_claim, p_name, p_personal);
-    RETURN 'ok';
-EXCEPTION WHEN OTHERS THEN
-    RETURN SQLSTATE || ' ' || SQLERRM;
 END $$;
 CREATE FUNCTION pg_temp.preview(p_user UUID, p_code TEXT) RETURNS JSONB LANGUAGE plpgsql AS $$
 BEGIN
@@ -89,26 +36,12 @@ BEGIN
 EXCEPTION WHEN OTHERS THEN
     RETURN SQLSTATE || ' ' || SQLERRM;
 END $$;
-CREATE FUNCTION pg_temp.upgrade(p_user UUID) RETURNS VOID LANGUAGE plpgsql AS $$
-BEGIN
-    PERFORM pg_temp.sign_in(p_user);
-    PERFORM pg_temp.upgrade_signed_in();
-END $$;
 -- The member ids whose guest codes p_user can SELECT.
 CREATE FUNCTION pg_temp.visible_codes(p_user UUID) RETURNS TEXT[] LANGUAGE plpgsql AS $$
 BEGIN
     PERFORM pg_temp.sign_in(p_user);
     RETURN pg_temp.codes_signed_in();
 END $$;
-CREATE FUNCTION pg_temp.head(p_group UUID) RETURNS BIGINT LANGUAGE sql AS $$
-    SELECT head_version FROM public.groups WHERE id = p_group;
-$$;
-CREATE FUNCTION pg_temp.code(p_group UUID) RETURNS TEXT LANGUAGE sql AS $$
-    SELECT join_code FROM public.groups WHERE id = p_group;
-$$;
-CREATE FUNCTION pg_temp.guest_code(p_member UUID) RETURNS TEXT LANGUAGE sql AS $$
-    SELECT code FROM public.guest_codes WHERE member_id = p_member AND deleted_at IS NULL;
-$$;
 -- As someone types it: lower case, with the dash.
 CREATE FUNCTION pg_temp.typed(p_code TEXT) RETURNS TEXT LANGUAGE sql AS $$
     SELECT lower(substr(p_code, 1, 3)) || '-' || lower(substr(p_code, 4));
@@ -128,22 +61,20 @@ $$;
 -- 1111… Mo, 2222… Bo, 3333… Vi (anonymous).
 -- Alex owns group 1 (Banff, member a1) and group 2 (Jasper, a2), and adds Pat (f1) and Jo (c1) to group 1.
 -- ---------------------------------------------------------------------------
-INSERT INTO auth.users (id, email, instance_id, aud, role, is_anonymous, raw_user_meta_data)
-VALUES
-    ('aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa', 'alex@codes.test', '00000000-0000-0000-0000-000000000000', 'authenticated', 'authenticated', FALSE, '{"display_name": "Alex"}'),
-    ('bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb', 'sam@codes.test', '00000000-0000-0000-0000-000000000000', 'authenticated', 'authenticated', FALSE, '{"display_name": "Sam"}'),
-    ('cccccccc-cccc-cccc-cccc-cccccccccccc', NULL, '00000000-0000-0000-0000-000000000000', 'authenticated', 'authenticated', TRUE, '{}'),
-    ('dddddddd-dddd-dddd-dddd-dddddddddddd', NULL, '00000000-0000-0000-0000-000000000000', 'authenticated', 'authenticated', TRUE, '{}'),
-    ('eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee', 'lee@codes.test', '00000000-0000-0000-0000-000000000000', 'authenticated', 'authenticated', FALSE, '{"display_name": "Lee"}'),
-    ('ffffffff-ffff-ffff-ffff-ffffffffffff', NULL, '00000000-0000-0000-0000-000000000000', 'authenticated', 'authenticated', TRUE, '{}'),
-    ('11111111-1111-1111-1111-111111111111', NULL, '00000000-0000-0000-0000-000000000000', 'authenticated', 'authenticated', TRUE, '{}'),
-    ('22222222-2222-2222-2222-222222222222', NULL, '00000000-0000-0000-0000-000000000000', 'authenticated', 'authenticated', TRUE, '{}'),
-    ('33333333-3333-3333-3333-333333333333', NULL, '00000000-0000-0000-0000-000000000000', 'authenticated', 'authenticated', TRUE, '{}');
+SELECT pg_temp.add_user('aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa', 'alex@codes.test', 'Alex');
+SELECT pg_temp.add_user('bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb', 'sam@codes.test', 'Sam');
+SELECT pg_temp.add_guest('cccccccc-cccc-cccc-cccc-cccccccccccc');
+SELECT pg_temp.add_guest('dddddddd-dddd-dddd-dddd-dddddddddddd');
+SELECT pg_temp.add_user('eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee', 'lee@codes.test', 'Lee');
+SELECT pg_temp.add_guest('ffffffff-ffff-ffff-ffff-ffffffffffff');
+SELECT pg_temp.add_guest('11111111-1111-1111-1111-111111111111');
+SELECT pg_temp.add_guest('22222222-2222-2222-2222-222222222222');
+SELECT pg_temp.add_guest('33333333-3333-3333-3333-333333333333');
 
-SELECT is(pg_temp.try('aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa', '{"type": "group.create", "groupId": "10000000-0000-0000-0000-000000000001", "memberId": "20000000-0000-0000-0000-0000000000a1", "name": "Banff", "displayName": "Alex"}'), 'applied', 'Alex creates group 1');
-SELECT is(pg_temp.try('aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa', '{"type": "member.add", "groupId": "10000000-0000-0000-0000-000000000001", "memberId": "20000000-0000-0000-0000-0000000000f1", "displayName": "Pat"}'), 'applied', 'Alex adds Pat by name');
-SELECT is(pg_temp.try('aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa', '{"type": "member.add", "groupId": "10000000-0000-0000-0000-000000000001", "memberId": "20000000-0000-0000-0000-0000000000c1", "displayName": "Jo"}'), 'applied', 'Alex adds Jo by name');
-SELECT is(pg_temp.try('aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa', '{"type": "group.create", "groupId": "10000000-0000-0000-0000-000000000002", "memberId": "20000000-0000-0000-0000-0000000000a2", "name": "Jasper", "displayName": "Alex"}'), 'applied', 'Alex creates group 2');
+SELECT is(pg_temp.try_reason('aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa', '{"type": "group.create", "groupId": "10000000-0000-0000-0000-000000000001", "memberId": "20000000-0000-0000-0000-0000000000a1", "name": "Banff", "displayName": "Alex"}'), 'applied', 'Alex creates group 1');
+SELECT is(pg_temp.try_reason('aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa', '{"type": "member.add", "groupId": "10000000-0000-0000-0000-000000000001", "memberId": "20000000-0000-0000-0000-0000000000f1", "displayName": "Pat"}'), 'applied', 'Alex adds Pat by name');
+SELECT is(pg_temp.try_reason('aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa', '{"type": "member.add", "groupId": "10000000-0000-0000-0000-000000000001", "memberId": "20000000-0000-0000-0000-0000000000c1", "displayName": "Jo"}'), 'applied', 'Alex adds Jo by name');
+SELECT is(pg_temp.try_reason('aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa', '{"type": "group.create", "groupId": "10000000-0000-0000-0000-000000000002", "memberId": "20000000-0000-0000-0000-0000000000a2", "name": "Jasper", "displayName": "Alex"}'), 'applied', 'Alex creates group 2');
 
 -- ---------------------------------------------------------------------------
 -- Group codes are made on the server
@@ -164,26 +95,26 @@ SELECT throws_ok(
 -- ---------------------------------------------------------------------------
 -- Names are unique per group, ignoring case and spaces
 -- ---------------------------------------------------------------------------
-SELECT is(pg_temp.try('aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa', '{"type": "member.add", "groupId": "10000000-0000-0000-0000-000000000001", "memberId": "20000000-0000-0000-0000-0000000000e1", "displayName": "pat"}'), 'HS409 pat is already in this group', 'adding "pat" next to Pat is refused');
-SELECT is(pg_temp.try('aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa', '{"type": "member.add", "groupId": "10000000-0000-0000-0000-000000000001", "memberId": "20000000-0000-0000-0000-0000000000e1", "displayName": "  ALEX "}'), 'HS409 ALEX is already in this group', 'so is "  ALEX " next to the owner (trimmed in the reason)');
-SELECT is(pg_temp.try('aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa', '{"type": "member.add", "groupId": "10000000-0000-0000-0000-000000000001", "memberId": "20000000-0000-0000-0000-0000000000e1", "displayName": "Kai"}'), 'applied', 'Kai is new');
+SELECT is(pg_temp.try_reason('aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa', '{"type": "member.add", "groupId": "10000000-0000-0000-0000-000000000001", "memberId": "20000000-0000-0000-0000-0000000000e1", "displayName": "pat"}'), 'HS409 pat is already in this group', 'adding "pat" next to Pat is refused');
+SELECT is(pg_temp.try_reason('aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa', '{"type": "member.add", "groupId": "10000000-0000-0000-0000-000000000001", "memberId": "20000000-0000-0000-0000-0000000000e1", "displayName": "  ALEX "}'), 'HS409 ALEX is already in this group', 'so is "  ALEX " next to the owner (trimmed in the reason)');
+SELECT is(pg_temp.try_reason('aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa', '{"type": "member.add", "groupId": "10000000-0000-0000-0000-000000000001", "memberId": "20000000-0000-0000-0000-0000000000e1", "displayName": "Kai"}'), 'applied', 'Kai is new');
 SELECT is(
     (SELECT r#>>'{rejected,0,code}' FROM pg_temp.push('aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa', '{"type": "member.add", "groupId": "10000000-0000-0000-0000-000000000001", "memberId": "20000000-0000-0000-0000-0000000000e1", "displayName": "Kai"}') r),
     '23505',
     'adding Kai again under the same member id is still the duplicate id (23505), not a name clash'
 );
-SELECT is(pg_temp.try('aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa', '{"type": "member.rename", "groupId": "10000000-0000-0000-0000-000000000001", "memberId": "20000000-0000-0000-0000-0000000000e1", "displayName": "JO"}'), 'HS409 JO is already in this group', 'renaming Kai to "JO" is refused');
-SELECT is(pg_temp.try('aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa', '{"type": "member.rename", "groupId": "10000000-0000-0000-0000-000000000001", "memberId": "20000000-0000-0000-0000-0000000000f1", "displayName": "PAT"}'), 'applied', 'Pat can be renamed to "PAT" (the same name)');
-SELECT is(pg_temp.try('aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa', '{"type": "member.rename", "groupId": "10000000-0000-0000-0000-000000000001", "memberId": "20000000-0000-0000-0000-0000000000f1", "displayName": "Pat"}'), 'applied', 'and back to "Pat"');
-SELECT is(pg_temp.try('aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa', '{"type": "member.remove", "groupId": "10000000-0000-0000-0000-000000000001", "memberId": "20000000-0000-0000-0000-0000000000e1"}'), 'applied', 'Alex removes Kai');
-SELECT is(pg_temp.try('aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa', '{"type": "member.add", "groupId": "10000000-0000-0000-0000-000000000001", "memberId": "20000000-0000-0000-0000-0000000000e2", "displayName": "Kai"}'), 'applied', 'someone who left doesn''t hold their name: a new Kai can be added');
+SELECT is(pg_temp.try_reason('aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa', '{"type": "member.rename", "groupId": "10000000-0000-0000-0000-000000000001", "memberId": "20000000-0000-0000-0000-0000000000e1", "displayName": "JO"}'), 'HS409 JO is already in this group', 'renaming Kai to "JO" is refused');
+SELECT is(pg_temp.try_reason('aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa', '{"type": "member.rename", "groupId": "10000000-0000-0000-0000-000000000001", "memberId": "20000000-0000-0000-0000-0000000000f1", "displayName": "PAT"}'), 'applied', 'Pat can be renamed to "PAT" (the same name)');
+SELECT is(pg_temp.try_reason('aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa', '{"type": "member.rename", "groupId": "10000000-0000-0000-0000-000000000001", "memberId": "20000000-0000-0000-0000-0000000000f1", "displayName": "Pat"}'), 'applied', 'and back to "Pat"');
+SELECT is(pg_temp.try_reason('aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa', '{"type": "member.remove", "groupId": "10000000-0000-0000-0000-000000000001", "memberId": "20000000-0000-0000-0000-0000000000e1"}'), 'applied', 'Alex removes Kai');
+SELECT is(pg_temp.try_reason('aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa', '{"type": "member.add", "groupId": "10000000-0000-0000-0000-000000000001", "memberId": "20000000-0000-0000-0000-0000000000e2", "displayName": "Kai"}'), 'applied', 'someone who left doesn''t hold their name: a new Kai can be added');
 
 -- Two people already named Dee (from before 012) stay; renaming either to the same name is not a change.
-SELECT is(pg_temp.try('aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa', '{"type": "member.add", "groupId": "10000000-0000-0000-0000-000000000001", "memberId": "20000000-0000-0000-0000-0000000000d1", "displayName": "Dee"}'), 'applied', 'Alex adds Dee');
-SELECT is(pg_temp.try('aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa', '{"type": "member.add", "groupId": "10000000-0000-0000-0000-000000000001", "memberId": "20000000-0000-0000-0000-0000000000d2", "displayName": "Dot"}'), 'applied', 'Alex adds Dot');
+SELECT is(pg_temp.try_reason('aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa', '{"type": "member.add", "groupId": "10000000-0000-0000-0000-000000000001", "memberId": "20000000-0000-0000-0000-0000000000d1", "displayName": "Dee"}'), 'applied', 'Alex adds Dee');
+SELECT is(pg_temp.try_reason('aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa', '{"type": "member.add", "groupId": "10000000-0000-0000-0000-000000000001", "memberId": "20000000-0000-0000-0000-0000000000d2", "displayName": "Dot"}'), 'applied', 'Alex adds Dot');
 UPDATE public.group_members SET display_name = 'Dee' WHERE id = '20000000-0000-0000-0000-0000000000d2';
-SELECT is(pg_temp.try('aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa', '{"type": "member.rename", "groupId": "10000000-0000-0000-0000-000000000001", "memberId": "20000000-0000-0000-0000-0000000000d2", "displayName": "DEE "}'), 'applied', 'an old duplicate can keep its name (here "DEE ")');
-SELECT is(pg_temp.try('aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa', '{"type": "member.rename", "groupId": "10000000-0000-0000-0000-000000000001", "memberId": "20000000-0000-0000-0000-0000000000d2", "displayName": "Dot"}'), 'applied', 'and can move to a free name');
+SELECT is(pg_temp.try_reason('aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa', '{"type": "member.rename", "groupId": "10000000-0000-0000-0000-000000000001", "memberId": "20000000-0000-0000-0000-0000000000d2", "displayName": "DEE "}'), 'applied', 'an old duplicate can keep its name (here "DEE ")');
+SELECT is(pg_temp.try_reason('aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa', '{"type": "member.rename", "groupId": "10000000-0000-0000-0000-000000000001", "memberId": "20000000-0000-0000-0000-0000000000d2", "displayName": "Dot"}'), 'applied', 'and can move to a free name');
 
 -- ---------------------------------------------------------------------------
 -- preview_group
@@ -209,7 +140,7 @@ SELECT is(pg_temp.sqlstate_signed_out($$ SELECT public.join_with_code('ABCDEF') 
 -- Joining: a name-only person, someone new, a member with an email
 -- ---------------------------------------------------------------------------
 SELECT is(
-    pg_temp.join('cccccccc-cccc-cccc-cccc-cccccccccccc', pg_temp.typed(pg_temp.code('10000000-0000-0000-0000-000000000001')), '20000000-0000-0000-0000-0000000000c1'),
+    pg_temp.join_code('cccccccc-cccc-cccc-cccc-cccccccccccc', pg_temp.typed(pg_temp.code('10000000-0000-0000-0000-000000000001')), '20000000-0000-0000-0000-0000000000c1'),
     '10000000-0000-0000-0000-000000000001'::UUID,
     'Kim (a guest) joins group 1 as Jo and gets the group id back'
 );
@@ -240,7 +171,7 @@ SELECT is(
     'nor Kai who left'
 );
 SELECT is(
-    pg_temp.join('eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee', pg_temp.code('10000000-0000-0000-0000-000000000001'), NULL, 'Lee'),
+    pg_temp.join_code('eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee', pg_temp.code('10000000-0000-0000-0000-000000000001'), NULL, 'Lee'),
     '10000000-0000-0000-0000-000000000001'::UUID,
     'Lee joins as someone new called Lee'
 );
@@ -252,14 +183,14 @@ SELECT results_eq(
 );
 SELECT pg_temp.head('10000000-0000-0000-0000-000000000001') AS before_again \gset
 SELECT is(
-    pg_temp.join('eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee', pg_temp.code('10000000-0000-0000-0000-000000000001'), NULL, 'Someone else'),
+    pg_temp.join_code('eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee', pg_temp.code('10000000-0000-0000-0000-000000000001'), NULL, 'Someone else'),
     '10000000-0000-0000-0000-000000000001'::UUID,
     'joining again returns the group'
 );
 SELECT is(pg_temp.head('10000000-0000-0000-0000-000000000001'), :before_again::BIGINT, 'and changes nothing');
 
 SELECT is(
-    pg_temp.join('ffffffff-ffff-ffff-ffff-ffffffffffff', pg_temp.code('10000000-0000-0000-0000-000000000001'), NULL, ' Ren '),
+    pg_temp.join_code('ffffffff-ffff-ffff-ffff-ffffffffffff', pg_temp.code('10000000-0000-0000-0000-000000000001'), NULL, ' Ren '),
     '10000000-0000-0000-0000-000000000001'::UUID,
     'Ren (a guest) joins as someone new called " Ren "'
 );
@@ -345,7 +276,7 @@ SELECT is(
     'a personal code needs a name picked'
 );
 SELECT is(
-    pg_temp.join('dddddddd-dddd-dddd-dddd-dddddddddddd', pg_temp.code('10000000-0000-0000-0000-000000000001'), '20000000-0000-0000-0000-0000000000c1', NULL, pg_temp.typed(:'jo_code')),
+    pg_temp.join_code('dddddddd-dddd-dddd-dddd-dddddddddddd', pg_temp.code('10000000-0000-0000-0000-000000000001'), '20000000-0000-0000-0000-0000000000c1', NULL, pg_temp.typed(:'jo_code')),
     '10000000-0000-0000-0000-000000000001'::UUID,
     'with Jo''s code (typed in lower case with a dash), Kim''s new phone comes back as Jo'
 );
@@ -366,9 +297,9 @@ SELECT is(pg_temp.pull('eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee')->'moved_away', '[
 -- group.recode: the owner only, not while completed
 -- ---------------------------------------------------------------------------
 SELECT pg_temp.code('10000000-0000-0000-0000-000000000001') AS old_code \gset
-SELECT is(pg_temp.try('eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee', '{"type": "group.recode", "groupId": "10000000-0000-0000-0000-000000000001"}'), 'HS403 Only the group''s owner can do this', 'a member can''t reset the code');
-SELECT is(pg_temp.try('dddddddd-dddd-dddd-dddd-dddddddddddd', '{"type": "group.recode", "groupId": "10000000-0000-0000-0000-000000000001"}'), 'HS403 Only the group''s owner can do this', 'nor can a guest');
-SELECT is(pg_temp.try('aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa', '{"type": "group.recode", "groupId": "10000000-0000-0000-0000-000000000001"}'), 'applied', 'the owner resets it');
+SELECT is(pg_temp.try_reason('eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee', '{"type": "group.recode", "groupId": "10000000-0000-0000-0000-000000000001"}'), 'HS403 Only the group''s owner can do this', 'a member can''t reset the code');
+SELECT is(pg_temp.try_reason('dddddddd-dddd-dddd-dddd-dddddddddddd', '{"type": "group.recode", "groupId": "10000000-0000-0000-0000-000000000001"}'), 'HS403 Only the group''s owner can do this', 'nor can a guest');
+SELECT is(pg_temp.try_reason('aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa', '{"type": "group.recode", "groupId": "10000000-0000-0000-0000-000000000001"}'), 'applied', 'the owner resets it');
 SELECT isnt(pg_temp.code('10000000-0000-0000-0000-000000000001'), :'old_code', 'the group has a new code');
 SELECT is(
     (SELECT row_version FROM public.groups WHERE id = '10000000-0000-0000-0000-000000000001'),
@@ -382,10 +313,10 @@ SELECT is(pg_temp.preview_error(pg_temp.code('10000000-0000-0000-0000-0000000000
 -- ---------------------------------------------------------------------------
 -- Completing: the code stops working and guests' personal codes go; reopening brings the code back
 -- ---------------------------------------------------------------------------
-SELECT is(pg_temp.try('aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa', '{"type": "group.complete", "groupId": "10000000-0000-0000-0000-000000000001"}'), 'applied', 'Alex completes group 1');
+SELECT is(pg_temp.try_reason('aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa', '{"type": "group.complete", "groupId": "10000000-0000-0000-0000-000000000001"}'), 'applied', 'Alex completes group 1');
 SELECT is(pg_temp.preview_error(pg_temp.code('10000000-0000-0000-0000-000000000001')), 'HS404 This code doesn''t work', 'a completed group''s code shows nothing');
 SELECT is(pg_temp.join_error('bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb', pg_temp.code('10000000-0000-0000-0000-000000000001'), NULL, 'Sam'), 'HS404 This code doesn''t work', 'and lets no one join');
-SELECT is(pg_temp.try('aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa', '{"type": "group.recode", "groupId": "10000000-0000-0000-0000-000000000001"}'), 'HS403 This group is completed', 'nor can it be reset');
+SELECT is(pg_temp.try_reason('aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa', '{"type": "group.recode", "groupId": "10000000-0000-0000-0000-000000000001"}'), 'HS403 This group is completed', 'nor can it be reset');
 SELECT results_eq(
     $$ SELECT count(*)::INT, bool_and(c.deleted_at IS NOT NULL), bool_and(c.row_version = pg_temp.head('10000000-0000-0000-0000-000000000001'))
        FROM public.guest_codes c WHERE c.group_id = '10000000-0000-0000-0000-000000000001' $$,
@@ -398,7 +329,7 @@ SELECT is(
     2,
     'the owner''s device pulls both deletions'
 );
-SELECT is(pg_temp.try('aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa', '{"type": "group.reopen", "groupId": "10000000-0000-0000-0000-000000000001"}'), 'applied', 'Alex reopens it');
+SELECT is(pg_temp.try_reason('aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa', '{"type": "group.reopen", "groupId": "10000000-0000-0000-0000-000000000001"}'), 'applied', 'Alex reopens it');
 SELECT is(
     pg_temp.preview('aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa', pg_temp.code('10000000-0000-0000-0000-000000000001'))->'returning',
     '[]'::JSONB,
@@ -413,7 +344,7 @@ SELECT is(
 -- ---------------------------------------------------------------------------
 -- Group 2: adding an email drops the personal code; coming back as a login with an email too
 -- ---------------------------------------------------------------------------
-SELECT is(pg_temp.join('11111111-1111-1111-1111-111111111111', pg_temp.code('10000000-0000-0000-0000-000000000002'), NULL, 'Mo'), '10000000-0000-0000-0000-000000000002'::UUID, 'Mo (a guest) joins group 2');
+SELECT is(pg_temp.join_code('11111111-1111-1111-1111-111111111111', pg_temp.code('10000000-0000-0000-0000-000000000002'), NULL, 'Mo'), '10000000-0000-0000-0000-000000000002'::UUID, 'Mo (a guest) joins group 2');
 UPDATE auth.users SET email = 'mo@codes.test', is_anonymous = FALSE WHERE id = '11111111-1111-1111-1111-111111111111';
 SELECT lives_ok($$ SELECT pg_temp.upgrade('11111111-1111-1111-1111-111111111111') $$, 'Mo adds an email');
 SELECT results_eq(
@@ -423,10 +354,10 @@ SELECT results_eq(
     'Mo is a member and their personal code is deleted in the same version'
 );
 
-SELECT is(pg_temp.join('22222222-2222-2222-2222-222222222222', pg_temp.code('10000000-0000-0000-0000-000000000002'), NULL, 'Bo'), '10000000-0000-0000-0000-000000000002'::UUID, 'Bo (a guest) joins group 2');
+SELECT is(pg_temp.join_code('22222222-2222-2222-2222-222222222222', pg_temp.code('10000000-0000-0000-0000-000000000002'), NULL, 'Bo'), '10000000-0000-0000-0000-000000000002'::UUID, 'Bo (a guest) joins group 2');
 SELECT (SELECT id::TEXT FROM public.group_members WHERE user_id = '22222222-2222-2222-2222-222222222222') AS bo \gset
 SELECT is(
-    pg_temp.join('bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb', pg_temp.code('10000000-0000-0000-0000-000000000002'), :'bo'::UUID, NULL, pg_temp.guest_code(:'bo'::UUID)),
+    pg_temp.join_code('bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb', pg_temp.code('10000000-0000-0000-0000-000000000002'), :'bo'::UUID, NULL, pg_temp.guest_code(:'bo'::UUID)),
     '10000000-0000-0000-0000-000000000002'::UUID,
     'Bo comes back signed in with an email (Sam''s login)'
 );
@@ -438,12 +369,12 @@ SELECT results_eq(
 SELECT is(pg_temp.pull('22222222-2222-2222-2222-222222222222')->'moved_away', '["10000000-0000-0000-0000-000000000002"]'::JSONB, 'Bo''s old guest login is told it moved away');
 
 -- A guest who leaves and joins again keeps their row and their code.
-SELECT is(pg_temp.join('33333333-3333-3333-3333-333333333333', pg_temp.code('10000000-0000-0000-0000-000000000002'), NULL, 'Vi'), '10000000-0000-0000-0000-000000000002'::UUID, 'Vi (a guest) joins group 2');
+SELECT is(pg_temp.join_code('33333333-3333-3333-3333-333333333333', pg_temp.code('10000000-0000-0000-0000-000000000002'), NULL, 'Vi'), '10000000-0000-0000-0000-000000000002'::UUID, 'Vi (a guest) joins group 2');
 SELECT (SELECT id::TEXT FROM public.group_members WHERE user_id = '33333333-3333-3333-3333-333333333333') AS vi \gset
 SELECT pg_temp.guest_code(:'vi'::UUID) AS vi_code \gset
-SELECT is(pg_temp.try('33333333-3333-3333-3333-333333333333', jsonb_build_object('type', 'member.remove', 'groupId', '10000000-0000-0000-0000-000000000002', 'memberId', :'vi')), 'applied', 'Vi leaves');
+SELECT is(pg_temp.try_reason('33333333-3333-3333-3333-333333333333', jsonb_build_object('type', 'member.remove', 'groupId', '10000000-0000-0000-0000-000000000002', 'memberId', :'vi')), 'applied', 'Vi leaves');
 SELECT is(pg_temp.preview('aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa', pg_temp.code('10000000-0000-0000-0000-000000000002'))->'returning', '[]'::JSONB, 'someone who left is not offered for coming back');
-SELECT is(pg_temp.join('33333333-3333-3333-3333-333333333333', pg_temp.code('10000000-0000-0000-0000-000000000002'), NULL, 'Someone'), '10000000-0000-0000-0000-000000000002'::UUID, 'Vi joins again');
+SELECT is(pg_temp.join_code('33333333-3333-3333-3333-333333333333', pg_temp.code('10000000-0000-0000-0000-000000000002'), NULL, 'Someone'), '10000000-0000-0000-0000-000000000002'::UUID, 'Vi joins again');
 SELECT is(
     (SELECT id::TEXT || ' ' || display_name || ' ' || (deleted_at IS NULL) FROM public.group_members WHERE user_id = '33333333-3333-3333-3333-333333333333'),
     :'vi' || ' Vi true',
@@ -454,7 +385,7 @@ SELECT is(pg_temp.guest_code(:'vi'::UUID), :'vi_code', 'with the same personal c
 -- A new owner pulls the guest codes too. Everyone here joined at the same NOW(); Mo is made the first.
 UPDATE public.group_members SET joined_at = NOW() - INTERVAL '1 hour'
 WHERE user_id = '11111111-1111-1111-1111-111111111111' AND group_id = '10000000-0000-0000-0000-000000000002';
-SELECT is(pg_temp.try('aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa', '{"type": "member.remove", "groupId": "10000000-0000-0000-0000-000000000002", "memberId": "20000000-0000-0000-0000-0000000000a2"}'), 'applied', 'Alex leaves group 2');
+SELECT is(pg_temp.try_reason('aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa', '{"type": "member.remove", "groupId": "10000000-0000-0000-0000-000000000002", "memberId": "20000000-0000-0000-0000-0000000000a2"}'), 'applied', 'Alex leaves group 2');
 SELECT is((SELECT role FROM public.group_members WHERE user_id = '11111111-1111-1111-1111-111111111111' AND group_id = '10000000-0000-0000-0000-000000000002'), 'owner', 'Mo, the first full member to join, owns it now');
 SELECT is(
     (SELECT bool_and(row_version = pg_temp.head('10000000-0000-0000-0000-000000000002')) FROM public.guest_codes WHERE group_id = '10000000-0000-0000-0000-000000000002'),

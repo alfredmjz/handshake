@@ -18,10 +18,11 @@ import { square } from "@/components/art/figures/square";
 import { Button } from "@/components/ui/button";
 import { List, ListHeading, ListRow } from "@/components/ui/list";
 import { Stack } from "@/components/ui/stack";
-import { canAnswer, paymentSides } from "@/lib/changes";
 import type { Debt } from "@/lib/ledger";
-import type { EntryRow } from "@/lib/sync/types";
 import { formatAmount } from "@/lib/money";
+import { isPendingPayment, paymentSides, recordableForOthers } from "@/lib/payment-rules";
+import { paymentCards } from "@/lib/settle-view";
+import type { EntryRow } from "@/lib/sync/types";
 import { everOwed } from "@/lib/shell-view";
 import { byText } from "@/lib/utils";
 
@@ -43,18 +44,19 @@ export function BalancesTab({ data }: { data: GroupData }) {
 		setEditorOpen(true);
 	};
 
+	const cards = data.me
+		? paymentCards(debts, data.entries.filter(isPendingPayment), data.members, {
+				memberId: data.me.id,
+				role: data.me.role,
+			})
+		: [];
 	const byOther = new Map<string, Counterpart>();
-	for (const debt of debts) {
-		if (debt.fromMemberId !== me && debt.toMemberId !== me) continue;
-		const otherId = debt.fromMemberId === me ? debt.toMemberId : debt.fromMemberId;
-		byOther.set(otherId, { otherId, debt });
-	}
-	for (const entry of data.entries) {
-		if (entry.kind !== "payment" || entry.paymentStatus !== "pending") continue;
-		const { from, to } = paymentSides(entry);
-		if (!from || !to || (from !== me && to !== me)) continue;
-		const otherId = from === me ? to : from;
-		byOther.set(otherId, { ...byOther.get(otherId), otherId, pending: entry });
+	for (const card of cards) {
+		if (card.from !== me && card.to !== me) continue;
+		const otherId = card.from === me ? card.to : card.from;
+		const pending = card.kind === "record" ? undefined : card.entry;
+		const known = byOther.get(otherId);
+		byOther.set(otherId, { otherId, debt: card.debt ?? known?.debt, pending: pending ?? known?.pending });
 	}
 	const mine = [...byOther.values()].sort(byText((c) => names.of(c.otherId)));
 
@@ -189,9 +191,7 @@ export function BalancesTab({ data }: { data: GroupData }) {
 					<List>
 						{others.map((debt) => {
 							const recordable =
-								mayRecordOthers &&
-								!canAnswer(names.member(debt.fromMemberId)) &&
-								!canAnswer(names.member(debt.toMemberId));
+								mayRecordOthers && recordableForOthers(names.member(debt.fromMemberId), names.member(debt.toMemberId));
 							return (
 								<ListRow
 									key={`${debt.fromMemberId}:${debt.toMemberId}`}

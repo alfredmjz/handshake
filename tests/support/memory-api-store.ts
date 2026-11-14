@@ -1,4 +1,4 @@
-import { computeShares, type Share } from "../../src/lib/ledger";
+import { computeShares, countsTowardsDebts, type Share } from "../../src/lib/ledger";
 import {
 	ApiStoreError,
 	type ApiStore,
@@ -63,8 +63,6 @@ export function emptyFixture(now: () => Date = () => new Date()): MemoryApiFixtu
 
 const WINDOW_MS = 60_000;
 const byText = (a: string, b: string) => (a < b ? -1 : a > b ? 1 : 0);
-const counts = (entry: MemoryEntry) =>
-	entry.kind === "expense" ? entry.deletedAt === null : entry.paymentStatus === "confirmed";
 
 export function createMemoryApiStore(fixture: MemoryApiFixture): ApiStore {
 	// private.api_authenticate: count the call in the token's one-minute window; refused calls don't count.
@@ -101,7 +99,7 @@ export function createMemoryApiStore(fixture: MemoryApiFixture): ApiStore {
 		let paidCents = 0;
 		let owedCents = 0;
 		const owedTo: Record<string, number> = {};
-		for (const entry of entriesOf(groupId).filter(counts)) {
+		for (const entry of entriesOf(groupId).filter(countsTowardsDebts)) {
 			const share = entry.shares.find((s) => s.memberId === memberId);
 			if (!share) continue;
 			paidCents += share.paidCents;
@@ -351,6 +349,17 @@ export function createMemorySeeder(fixture: MemoryApiFixture, newId: () => strin
 				});
 			}
 			return id;
+		},
+		async deleteBill(_by, groupId, entryId) {
+			Object.assign(fixture.entries.get(entryId)!, { deletedAt: now(), rowVersion: stamp(groupId), updatedAt: now() });
+		},
+		async decline(_by, groupId, entryId) {
+			const entry = fixture.entries.get(entryId)!;
+			Object.assign(entry, { paymentStatus: "declined", rowVersion: stamp(groupId), updatedAt: now() });
+		},
+		async undo(_by, groupId, entryId) {
+			const entry = fixture.entries.get(entryId)!;
+			Object.assign(entry, { paymentStatus: "undone", rowVersion: stamp(groupId), updatedAt: now() });
 		},
 		async leave(user, groupId) {
 			const member = memberOf(user, groupId);

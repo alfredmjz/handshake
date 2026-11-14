@@ -15,20 +15,29 @@ import { List, ListRow } from "@/components/ui/list";
 import { Stack } from "@/components/ui/stack";
 import { signInAsGuest, useCurrentUser } from "@/lib/auth";
 import { codeKind, normaliseCode } from "@/lib/code-format";
+import {
+	draftReady,
+	nameClash,
+	personalCode,
+	stashDraft,
+	stashReturn,
+	takeDraft,
+	takeReturn,
+	type Choice,
+	type Draft,
+} from "@/lib/join-draft";
 import { useOnline } from "@/lib/online";
+import { DOESNT_WORK, joinOutcome, previewFailure } from "@/lib/online-outcome";
 import { requestSync } from "@/lib/sync/controller";
 import {
 	joinWithCode,
 	previewCode,
 	returnWithCode,
-	TransportError,
 	type CodePreview,
 	type GroupPreview,
 } from "@/lib/sync/supabase-transport";
 import { byText } from "@/lib/utils";
 import { EmailSignIn } from "@/pages/sign-in";
-
-const DOESNT_WORK = "This code doesn't work";
 
 // Opening the code of a group you're in takes you straight into it; a screen saying so would be a dead end.
 function AlreadyIn({ groupId, groupName }: { groupId: string; groupName: string }) {
@@ -49,60 +58,13 @@ function usePreview(code: string | null, online: boolean) {
 		let cancelled = false;
 		previewCode(code).then(
 			(preview) => !cancelled && setLoaded({ code, preview }),
-			(error) =>
-				!cancelled &&
-				setLoaded({ code, error: error instanceof TransportError && error.code === "HS404" ? "gone" : "failed" })
+			(error) => !cancelled && setLoaded({ code, error: previewFailure(error) })
 		);
 		return () => {
 			cancelled = true;
 		};
 	}, [code, online]);
 	return loaded && loaded.code === code ? loaded : null;
-}
-
-// Which way in: a name-only person, someone new, or a guest coming back with their personal code.
-type Choice = { kind: "claim"; memberId: string } | { kind: "new" } | { kind: "back"; memberId: string | null };
-
-type Draft = { choice: Choice | null; name: string; personalCode: string };
-
-// Signed out, the choice is kept across the account or guest step (the URL stays); back signed in, the
-// join screen finishes it once.
-const stashKey = (code: string) => `handshake.join.${code}`;
-
-function stash(code: string, draft: Draft) {
-	try {
-		sessionStorage.setItem(stashKey(code), JSON.stringify(draft));
-	} catch {
-		// Without storage the choice is simply asked again.
-	}
-}
-
-function takeStash(code: string): Draft | null {
-	try {
-		const raw = sessionStorage.getItem(stashKey(code));
-		sessionStorage.removeItem(stashKey(code));
-		return raw ? (JSON.parse(raw) as Draft) : null;
-	} catch {
-		return null;
-	}
-}
-
-function draftReady(draft: Draft): boolean {
-	const { choice } = draft;
-	if (!choice) return false;
-	if (choice.kind === "new") return draft.name.trim().length > 0;
-	if (choice.kind === "back") return choice.memberId !== null && personalCode(draft.personalCode) !== null;
-	return true;
-}
-
-function personalCode(input: string): string | null {
-	const code = normaliseCode(input);
-	return code && codeKind(code) === "personal" ? code : null;
-}
-
-function nameTaken(preview: GroupPreview, name: string): boolean {
-	const key = name.trim().toLowerCase();
-	return [...preview.unclaimed, ...preview.returning].some((p) => p.displayName.trim().toLowerCase() === key);
 }
 
 function Frame({ signedIn, children }: { signedIn: boolean; children: ReactNode }) {
@@ -209,7 +171,7 @@ function JoinChoice({
 	defaultName = "",
 }: ChoiceProps & { signedIn?: boolean; defaultName?: string }) {
 	const navigate = useNavigate();
-	const [restored] = useState(() => (signedIn ? takeStash(code) : null));
+	const [restored] = useState(() => (signedIn ? takeDraft(() => sessionStorage, code) : null));
 	const [choice, setChoice] = useState<Choice | null>(
 		restored?.choice ?? (preview.unclaimed.length === 0 && preview.returning.length === 0 ? { kind: "new" } : null)
 	);
@@ -222,7 +184,7 @@ function JoinChoice({
 	const unclaimed = [...preview.unclaimed].sort(byText((p) => p.displayName));
 	const returning = [...preview.returning].sort(byText((p) => p.displayName));
 	const draft: Draft = { choice, name, personalCode };
-	const clash = choice?.kind === "new" && name.trim().length > 0 && nameTaken(preview, name);
+	const clash = nameClash(draft, preview);
 	const ready = draftReady(draft) && !clash;
 
 	const pick = (next: Choice) => {
@@ -344,7 +306,7 @@ function JoinChoice({
 						className="w-full"
 						disabled={!ready}
 						onClick={() => {
-							stash(code, draft);
+							stashDraft(() => sessionStorage, code, draft);
 							setAccount(true);
 						}}
 					>
@@ -356,7 +318,7 @@ function JoinChoice({
 						className="w-full"
 						disabled={!ready || busy}
 						onClick={() => {
-							stash(code, draft);
+							stashDraft(() => sessionStorage, code, draft);
 							setBusy(true);
 							signInAsGuest().catch((e: unknown) => {
 								toast.error("Couldn't continue as a guest", {
@@ -418,15 +380,12 @@ function JoinButton({
 			navigate(`/groups/${groupId}`, { replace: true, state });
 		} catch (error) {
 			setBusy(false);
-			const codeOf = error instanceof TransportError ? error.code : null;
-			const message = error instanceof Error ? error.message : "";
-			if (codeOf === "HS404") {
-				toast.error(DOESNT_WORK);
+			const outcome = joinOutcome(error, "join");
+			if (outcome.kind === "gone") {
+				toast.error(outcome.title);
 				onGone();
-			} else if (codeOf === "HS409" || codeOf === "HS422") onError(message);
-			else if (codeOf === "23514") onError("That name is too long");
-			else if (codeOf === "network") onError("Joining needs a connection.");
-			else toast.error("Couldn't join", { description: message || undefined });
+			} else if (outcome.kind === "inline") onError(outcome.message);
+			else toast.error(outcome.title, { description: outcome.description });
 		}
 	}
 
@@ -447,27 +406,6 @@ function JoinButton({
 
 type PersonalPreview = Extract<CodePreview, { kind: "personal" }>;
 
-// Signed out, "Continue as guest" remembers to finish here once the guest login exists.
-const returnKey = (code: string) => `handshake.return.${code}`;
-
-function stashReturn(code: string) {
-	try {
-		sessionStorage.setItem(returnKey(code), "1");
-	} catch {
-		// Without storage the button is simply tapped again.
-	}
-}
-
-function takeReturnStash(code: string): boolean {
-	try {
-		const wanted = sessionStorage.getItem(returnKey(code)) === "1";
-		sessionStorage.removeItem(returnKey(code));
-		return wanted;
-	} catch {
-		return false;
-	}
-}
-
 // A personal code: "Welcome back, Gus" and one button, straight into the group under that name.
 function PersonalReturn({
 	code,
@@ -481,7 +419,7 @@ function PersonalReturn({
 	onGone: () => void;
 }) {
 	const navigate = useNavigate();
-	const [auto] = useState(() => signedIn && takeReturnStash(code));
+	const [auto] = useState(() => signedIn && takeReturn(() => sessionStorage, code));
 	const [busy, setBusy] = useState(false);
 	const [error, setError] = useState<string | null>(null);
 	const started = useRef(false);
@@ -495,13 +433,12 @@ function PersonalReturn({
 			navigate(`/groups/${groupId}`, { replace: true });
 		} catch (e) {
 			setBusy(false);
-			const codeOf = e instanceof TransportError ? e.code : null;
-			if (codeOf === "HS404") {
-				toast.error(DOESNT_WORK);
+			const outcome = joinOutcome(e, "return");
+			if (outcome.kind === "gone") {
+				toast.error(outcome.title);
 				onGone();
-			} else if (codeOf === "HS422") setError(e instanceof Error ? e.message : DOESNT_WORK);
-			else if (codeOf === "network") setError("Joining needs a connection.");
-			else toast.error("Couldn't get back in", { description: e instanceof Error ? e.message : undefined });
+			} else if (outcome.kind === "inline") setError(outcome.message);
+			else toast.error(outcome.title, { description: outcome.description });
 		}
 	}
 
@@ -528,7 +465,7 @@ function PersonalReturn({
 					size="lg"
 					disabled={busy}
 					onClick={() => {
-						stashReturn(code);
+						stashReturn(() => sessionStorage, code);
 						setBusy(true);
 						signInAsGuest().catch((e: unknown) => {
 							toast.error("Couldn't continue as a guest", {

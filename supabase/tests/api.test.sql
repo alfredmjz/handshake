@@ -8,66 +8,20 @@
 BEGIN;
 CREATE EXTENSION IF NOT EXISTS pgtap WITH SCHEMA extensions;
 SELECT no_plan();
+\ir prelude.psql
 
 -- postgres created handshake_api, so it may grant itself the right to act as it (for this test only).
 GRANT handshake_api TO postgres WITH INHERIT FALSE, SET TRUE;
 
 -- ---------------------------------------------------------------------------
--- Helpers: act as a signed-in user, or as the API function (handshake_api)
+-- Helpers: act as the API function (handshake_api); the shared ones are in prelude.psql
 -- ---------------------------------------------------------------------------
-CREATE FUNCTION pg_temp.sign_in(p_user UUID) RETURNS VOID LANGUAGE sql AS $$
-    SELECT set_config('request.jwt.claims', json_build_object(
-        'sub', p_user,
-        'role', 'authenticated',
-        'is_anonymous', COALESCE((SELECT is_anonymous FROM auth.users WHERE id = p_user), FALSE)
-    )::TEXT, true);
-$$;
-CREATE FUNCTION pg_temp.push_signed_in(p_mutations JSONB) RETURNS JSONB LANGUAGE sql SET role = 'authenticated' AS $$
-    SELECT public.push_changes(p_mutations);
-$$;
-CREATE FUNCTION pg_temp.join_signed_in(p_token TEXT, p_claim UUID, p_name TEXT) RETURNS UUID LANGUAGE sql SET role = 'authenticated' AS $$
-    SELECT public.join_group(p_token, p_claim, p_name);
-$$;
-CREATE FUNCTION pg_temp.sqlstate_signed_in(p_sql TEXT) RETURNS TEXT LANGUAGE plpgsql SET role = 'authenticated' AS $$
-BEGIN
-    EXECUTE p_sql;
-    RETURN 'ok';
-EXCEPTION WHEN OTHERS THEN
-    RETURN SQLSTATE;
-END $$;
-CREATE FUNCTION pg_temp.create_token_signed_in(p_name TEXT) RETURNS JSONB LANGUAGE sql SET role = 'authenticated' AS $$
-    SELECT public.create_api_token(p_name);
-$$;
 CREATE FUNCTION pg_temp.list_tokens_signed_in() RETURNS JSONB LANGUAGE sql SET role = 'authenticated' AS $$
     SELECT public.list_api_tokens();
 $$;
 CREATE FUNCTION pg_temp.revoke_token_signed_in(p_id UUID) RETURNS VOID LANGUAGE sql SET role = 'authenticated' AS $$
     SELECT public.revoke_api_token(p_id);
 $$;
-CREATE FUNCTION pg_temp.push(p_user UUID, p_mutation JSONB) RETURNS JSONB LANGUAGE plpgsql AS $$
-BEGIN
-    PERFORM pg_temp.sign_in(p_user);
-    RETURN pg_temp.push_signed_in(jsonb_build_array(jsonb_build_object('id', gen_random_uuid()) || p_mutation));
-END $$;
--- 'applied', or the rejection's code.
-CREATE FUNCTION pg_temp.try(p_user UUID, p_mutation JSONB) RETURNS TEXT LANGUAGE sql AS $$
-    SELECT COALESCE(r#>>'{rejected,0,code}', 'applied') FROM pg_temp.push(p_user, p_mutation) r;
-$$;
-CREATE FUNCTION pg_temp.join(p_user UUID, p_token TEXT, p_claim UUID DEFAULT NULL, p_name TEXT DEFAULT NULL) RETURNS UUID LANGUAGE plpgsql AS $$
-BEGIN
-    PERFORM pg_temp.sign_in(p_user);
-    RETURN pg_temp.join_signed_in(p_token, p_claim, p_name);
-END $$;
-CREATE FUNCTION pg_temp.as_user(p_user UUID, p_sql TEXT) RETURNS TEXT LANGUAGE plpgsql AS $$
-BEGIN
-    PERFORM pg_temp.sign_in(p_user);
-    RETURN pg_temp.sqlstate_signed_in(p_sql);
-END $$;
-CREATE FUNCTION pg_temp.create_token(p_user UUID, p_name TEXT) RETURNS JSONB LANGUAGE plpgsql AS $$
-BEGIN
-    PERFORM pg_temp.sign_in(p_user);
-    RETURN pg_temp.create_token_signed_in(p_name);
-END $$;
 CREATE FUNCTION pg_temp.list_tokens(p_user UUID) RETURNS JSONB LANGUAGE plpgsql AS $$
 BEGIN
     PERFORM pg_temp.sign_in(p_user);
@@ -114,12 +68,6 @@ $$;
 CREATE FUNCTION pg_temp.token_hash(p_name TEXT) RETURNS TEXT LANGUAGE sql AS $$
     SELECT pg_temp.hash(token) FROM tokens WHERE name = p_name;
 $$;
-CREATE FUNCTION pg_temp.head(p_group UUID) RETURNS BIGINT LANGUAGE sql AS $$
-    SELECT head_version FROM public.groups WHERE id = p_group;
-$$;
-CREATE FUNCTION pg_temp.version_of(p_entry UUID) RETURNS BIGINT LANGUAGE sql AS $$
-    SELECT row_version FROM public.ledger_entries WHERE id = p_entry;
-$$;
 -- An expense in p_group; p_shares are { memberId: [paid, owed] }, worked out by hand per use.
 CREATE FUNCTION pg_temp.expense(p_group UUID, p_entry UUID, p_description TEXT, p_amount INT, p_payer UUID, p_shares JSONB) RETURNS JSONB LANGUAGE sql AS $$
     SELECT jsonb_build_object(
@@ -142,13 +90,11 @@ $$;
 -- isn't in it. Canmore (group 3) is Alex's; Sam joins it later. Users: aaaa… Alex, bbbb… Sam,
 -- cccc… Jo, dddd… Kim (anonymous), eeee… Lee. Members 2000…<person><group>; entries 3000…N.
 -- ---------------------------------------------------------------------------
-INSERT INTO auth.users (id, email, instance_id, aud, role, is_anonymous, raw_user_meta_data)
-VALUES
-    ('aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa', 'alex@api.test', '00000000-0000-0000-0000-000000000000', 'authenticated', 'authenticated', FALSE, '{"display_name": "Alex"}'),
-    ('bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb', 'sam@api.test', '00000000-0000-0000-0000-000000000000', 'authenticated', 'authenticated', FALSE, '{"display_name": "Sam"}'),
-    ('cccccccc-cccc-cccc-cccc-cccccccccccc', 'jo@api.test', '00000000-0000-0000-0000-000000000000', 'authenticated', 'authenticated', FALSE, '{"display_name": "Jo"}'),
-    ('dddddddd-dddd-dddd-dddd-dddddddddddd', NULL, '00000000-0000-0000-0000-000000000000', 'authenticated', 'authenticated', TRUE, '{}'),
-    ('eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee', 'lee@api.test', '00000000-0000-0000-0000-000000000000', 'authenticated', 'authenticated', FALSE, '{"display_name": "Lee"}');
+SELECT pg_temp.add_user('aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa', 'alex@api.test', 'Alex');
+SELECT pg_temp.add_user('bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb', 'sam@api.test', 'Sam');
+SELECT pg_temp.add_user('cccccccc-cccc-cccc-cccc-cccccccccccc', 'jo@api.test', 'Jo');
+SELECT pg_temp.add_guest('dddddddd-dddd-dddd-dddd-dddddddddddd');
+SELECT pg_temp.add_user('eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee', 'lee@api.test', 'Lee');
 
 SELECT is(pg_temp.try('aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa', '{"type": "group.create", "groupId": "10000000-0000-0000-0000-000000000001", "memberId": "20000000-0000-0000-0000-0000000000a1", "name": "Banff", "displayName": "Alex"}'), 'applied', 'Alex creates Banff');
 SELECT is(
