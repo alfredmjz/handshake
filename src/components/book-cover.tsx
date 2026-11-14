@@ -29,10 +29,10 @@ type BookCoverProps = {
 // The small cover in the Groups grid. Deep colours take paper-coloured type.
 export function BookCover({ name, note, kind, sticker, cover, className }: BookCoverProps) {
 	return (
-		<div className={cn("relative aspect-[5/6] w-full", className)}>
+		<div className={cn("relative aspect-5/6 w-full", className)}>
 			<PagesBehind />
 			<div
-				className="absolute inset-0 overflow-hidden rounded-book bg-[hsl(var(--cover))] transition-colors duration-settle ease-out [container-type:inline-size]"
+				className="absolute inset-0 overflow-hidden rounded-book bg-[hsl(var(--cover))] transition-colors duration-settle ease-out @container"
 				style={{ "--cover": coverHsl(cover) } as CSSProperties}
 			>
 				<Spine />
@@ -44,12 +44,12 @@ export function BookCover({ name, note, kind, sticker, cover, className }: BookC
 				/>
 				<span
 					className={cn(
-						"absolute inset-x-[1.375rem] bottom-3.5 flex flex-col gap-0.5 pr-0.5",
+						"absolute inset-x-5.5 bottom-3.5 flex flex-col gap-0.5 pr-0.5",
 						coverIsDeep(cover) ? "text-paper" : "text-ink"
 					)}
 				>
-					<span className="type-cover line-clamp-2 break-words">{name}</span>
-					{note && <span className="type-label line-clamp-1 break-words font-display">{note}</span>}
+					<span className="type-cover line-clamp-2 wrap-break-word">{name}</span>
+					{note && <span className="type-label line-clamp-1 wrap-break-word font-display">{note}</span>}
 				</span>
 			</div>
 		</div>
@@ -71,7 +71,7 @@ export function NewBookButton({
 			type="button"
 			onClick={onClick}
 			className={cn(
-				"type-hand flex aspect-[5/6] w-full flex-col items-center justify-center gap-1 rounded-book border-2 border-dashed border-ink/35 bg-paper/60 transition-colors hover:border-ink/60 hover:bg-raised",
+				"type-hand flex aspect-5/6 w-full flex-col items-center justify-center gap-1 rounded-book border-2 border-dashed border-ink/35 bg-paper/60 transition-colors hover:border-ink/60 hover:bg-raised",
 				className
 			)}
 		>

@@ -35,7 +35,7 @@ const DropdownMenuItem = React.forwardRef<React.ElementRef<typeof DropdownMenuPr
 		<DropdownMenuPrimitive.Item
 			ref={ref}
 			className={cn(
-				"type-body-sm relative flex min-h-tap cursor-pointer select-none items-center gap-control rounded-md px-3 outline-none transition-colors focus:bg-sunken data-[disabled]:pointer-events-none data-[disabled]:opacity-40 [&_svg]:size-[1.125rem] [&_svg]:shrink-0",
+				"type-body-sm relative flex min-h-tap cursor-pointer select-none items-center gap-control rounded-md px-3 outline-hidden transition-colors focus:bg-sunken data-disabled:pointer-events-none data-disabled:opacity-40 [&_svg]:size-4.5 [&_svg]:shrink-0",
 				tone === "destructive" && "text-destructive",
 				className
 			)}

@@ -150,7 +150,7 @@ function Shell({ user, commit }: { user: CurrentUser; commit: Commit }) {
 						<Link
 							to="/"
 							aria-label="Handshake, home"
-							className="-ml-1 flex min-h-tap items-center gap-control rounded-full px-1 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+							className="-ml-1 flex min-h-tap items-center gap-control rounded-full px-1 focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-ring"
 						>
 							<SyncMark state={sync.state} waiting={sync.waiting} className="h-7 w-11" />
 							<span className="type-wordmark">handshake</span>

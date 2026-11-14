@@ -171,7 +171,7 @@ export function KitPage() {
 						className="flex w-fit items-center gap-control rounded-lg border border-border bg-paper px-panel py-control"
 					>
 						<Button variant="ghost" size="icon" className="relative rounded-full" aria-label="Nudges, 2 new">
-							<BellDoodle ringing className="!size-[1.625rem]" />
+							<BellDoodle ringing className="size-6.5!" />
 							<span className="type-micro absolute -right-0.5 top-0 flex h-5 min-w-5 rotate-6 items-center justify-center rounded-full border-[1.5px] border-ink bg-owe-mark px-1 font-semibold tabular-nums text-paper">
 								2
 							</span>

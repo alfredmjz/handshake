@@ -12,12 +12,12 @@ Handshake's database (see `docs/shared-ledger-spec.md`).
 | -------- | -------------------------------------------------------------------------------- |
 | Runtime  | **Bun 1.3** for everything (`bun install`, `bun run …`, `bun --bun <tool>`)      |
 | Node.js  | **26 LTS**, only where a host needs it (Vercel's build, API fallback)            |
-| Client   | **Vite 7 + React 19 + React Router 7**, a static single-page app                 |
+| Client   | **Vite 8 + React 19 + React Router 8**, a static single-page app                 |
 | Offline  | **Dexie** (IndexedDB) on the device, `vite-plugin-pwa` service worker on the web |
 | Server   | **Supabase**: Postgres + RLS, Auth with 6-digit email codes                      |
 | Mobile   | **Capacitor 8**, bundling `dist/` (not loading a hosted URL)                     |
-| UI       | **shadcn/ui** on Tailwind 3.4 and Radix, sonner, lucide; Funnel Display + Sans   |
-| Language | TypeScript 5.9, `strict`                                                         |
+| UI       | **shadcn/ui** on Tailwind 4 and Radix, sonner, lucide; Funnel Display + Sans     |
+| Language | TypeScript 7, `strict`                                                           |
 | Format   | Prettier: tabs, width 120, CRLF, double quotes, trailing commas es5              |
 
 ## Commands

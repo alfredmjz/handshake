@@ -32,7 +32,7 @@ function Joined({ names, alone }: { names: string[]; alone: boolean }) {
 			<PopoverTrigger asChild>
 				<button
 					type="button"
-					className="type-body-sm self-start text-left text-muted-foreground underline decoration-dotted underline-offset-4 outline-none focus-visible:ring-2 focus-visible:ring-ring"
+					className="type-body-sm self-start text-left text-muted-foreground underline decoration-dotted underline-offset-4 outline-hidden focus-visible:ring-2 focus-visible:ring-ring"
 					onMouseEnter={() => setOpen(true)}
 					onMouseLeave={() => setOpen(false)}
 				>

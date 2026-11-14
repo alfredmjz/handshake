@@ -82,8 +82,8 @@ export function GroupReceipt({
 			>
 				<div className="flex items-start justify-between gap-stack">
 					<div className="flex min-w-0 flex-col gap-0.5">
-						<h1 className="type-h3 line-clamp-2 break-words uppercase tracking-[0.02em]">{name}</h1>
-						{note && <p className="type-body-sm line-clamp-1 break-words text-muted-foreground">{note}</p>}
+						<h1 className="type-h3 line-clamp-2 wrap-break-word uppercase tracking-[0.02em]">{name}</h1>
+						{note && <p className="type-body-sm line-clamp-1 wrap-break-word text-muted-foreground">{note}</p>}
 					</div>
 					{sticker ? (
 						<CoverSticker sticker={sticker} fallback={kind} size="2.75rem" />
@@ -110,7 +110,7 @@ export function GroupReceipt({
 								key={bill.id}
 								className={cn(
 									!printed.current?.has(bill.id) &&
-										"[animation:land_var(--duration-moment)_var(--ease-bounce)_280ms_both]"
+										"animate-[land_var(--duration-moment)_var(--ease-bounce)_280ms_both]"
 								)}
 							>
 								<Link

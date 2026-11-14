@@ -28,7 +28,7 @@ DialogOverlay.displayName = DialogPrimitive.Overlay.displayName;
 // sheet: rises from the bottom on phones, a centred card from 640px.
 // screen: takes the whole phone screen (editors), a wider centred card from 640px.
 const dialogContentVariants = cva(
-	"fixed z-50 flex flex-col gap-section overflow-y-auto bg-background text-foreground outline-none data-[state=closed]:animate-out data-[state=open]:animate-in data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0 sm:left-1/2 sm:top-1/2 sm:max-h-[min(90dvh,56rem)] sm:-translate-x-1/2 sm:-translate-y-1/2 sm:rounded-xl sm:border sm:border-border sm:shadow-pop sm:data-[state=closed]:zoom-out-95 sm:data-[state=open]:zoom-in-95",
+	"fixed z-50 flex flex-col gap-section overflow-y-auto bg-background text-foreground outline-hidden data-[state=closed]:animate-out data-[state=open]:animate-in data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0 sm:left-1/2 sm:top-1/2 sm:max-h-[min(90dvh,56rem)] sm:-translate-x-1/2 sm:-translate-y-1/2 sm:rounded-xl sm:border sm:border-border sm:shadow-pop sm:data-[state=closed]:zoom-out-95 sm:data-[state=open]:zoom-in-95",
 	{
 		variants: {
 			size: {

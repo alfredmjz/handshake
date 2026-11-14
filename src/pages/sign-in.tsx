@@ -22,18 +22,18 @@ const RING: HandKind[] = ["drinks", "food", "travel", "stay", "fun", "groceries"
 // Six hands around a receipt: everyone in the group, passing the bill.
 function HandsAroundReceipt() {
 	return (
-		<div aria-hidden className="relative mx-auto size-[16.5rem] sm:size-[19rem]">
+		<div aria-hidden className="relative mx-auto size-66 sm:size-76">
 			<div className="absolute left-1/2 top-1/2 size-0 sm:scale-110">
 				{RING.map((kind, i) => (
 					<div
 						key={kind}
-						className="absolute left-[-3.125rem] top-0 size-[6.25rem]"
+						className="absolute -left-12.5 top-0 size-25"
 						style={{ transformOrigin: "50% 0", transform: `rotate(${i * 60}deg) translateY(1rem)` }}
 					>
 						<Hand kind={kind} size={100} blob />
 					</div>
 				))}
-				<ReceiptDoodle className="absolute left-[-1.75rem] top-[-2.2rem] w-14 -rotate-[8deg]" />
+				<ReceiptDoodle className="absolute -left-7 top-[-2.2rem] w-14 rotate-[-8deg]" />
 			</div>
 		</div>
 	);
@@ -182,7 +182,7 @@ export function SignInPage() {
 			</div>
 			<section
 				className={cn(
-					"flex min-h-[22.875rem] flex-col gap-stack rounded-t-sheet px-page pb-section pt-section lg:min-h-0 lg:flex-1 lg:rounded-sheet lg:px-12 lg:py-12",
+					"flex min-h-91.5 flex-col gap-stack rounded-t-sheet px-page pb-section pt-section lg:min-h-0 lg:flex-1 lg:rounded-sheet lg:px-12 lg:py-12",
 					view === "welcome" ? "bg-primary text-primary-foreground" : "bg-raised text-foreground"
 				)}
 			>
@@ -194,7 +194,7 @@ export function SignInPage() {
 								Who owes who?
 							</Underlined>
 						</h1>
-						<p className="type-body-lg max-w-[19rem] text-primary-foreground/85">
+						<p className="type-body-lg max-w-76 text-primary-foreground/85">
 							Split costs with friends, see where everyone stands, and settle up in a tap.
 						</p>
 						<div className="flex-1" />

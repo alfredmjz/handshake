@@ -119,7 +119,7 @@ function Choice({
 			onClick={onSelect}
 			className={cn(
 				"type-body-sm flex min-h-tap min-w-0 flex-col items-start gap-1 rounded-lg border-[1.5px] px-panel py-row text-left transition-colors",
-				selected ? "border-primary bg-primary/[0.08]" : "border-dashed border-ink/30 hover:border-ink/60",
+				selected ? "border-primary bg-primary/8" : "border-dashed border-ink/30 hover:border-ink/60",
 				hiddenOnPhone && "hidden sm:flex"
 			)}
 		>

@@ -33,7 +33,7 @@ const AlertDialogContent = React.forwardRef<
 		<AlertDialogPrimitive.Content
 			ref={ref}
 			className={cn(
-				"fixed inset-x-0 bottom-0 z-50 flex max-h-[92dvh] flex-col gap-section overflow-y-auto rounded-t-sheet bg-background px-page pb-[max(var(--space-page),env(safe-area-inset-bottom))] pt-section text-foreground outline-none data-[state=closed]:animate-out data-[state=open]:animate-in data-[state=closed]:slide-out-to-bottom data-[state=open]:slide-in-from-bottom sm:inset-x-auto sm:bottom-auto sm:left-1/2 sm:top-1/2 sm:w-full sm:max-w-md sm:-translate-x-1/2 sm:-translate-y-1/2 sm:rounded-xl sm:border sm:border-border sm:p-section sm:shadow-pop sm:data-[state=closed]:fade-out-0 sm:data-[state=open]:fade-in-0 sm:data-[state=closed]:slide-out-to-bottom-0 sm:data-[state=open]:slide-in-from-bottom-0",
+				"fixed inset-x-0 bottom-0 z-50 flex max-h-[92dvh] flex-col gap-section overflow-y-auto rounded-t-sheet bg-background px-page pb-[max(var(--space-page),env(safe-area-inset-bottom))] pt-section text-foreground outline-hidden data-[state=closed]:animate-out data-[state=open]:animate-in data-[state=closed]:slide-out-to-bottom data-[state=open]:slide-in-from-bottom sm:inset-x-auto sm:bottom-auto sm:left-1/2 sm:top-1/2 sm:w-full sm:max-w-md sm:-translate-x-1/2 sm:-translate-y-1/2 sm:rounded-xl sm:border sm:border-border sm:p-section sm:shadow-pop sm:data-[state=closed]:fade-out-0 sm:data-[state=open]:fade-in-0 sm:data-[state=closed]:slide-out-to-bottom-0 sm:data-[state=open]:slide-in-from-bottom-0",
 				className
 			)}
 			{...props}

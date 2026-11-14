@@ -31,7 +31,7 @@ export function PaymentArrow({
 					<span
 						className={cn(
 							"type-money absolute left-1/2 top-[-4px] -translate-x-1/2 whitespace-nowrap rounded-md border-[1.5px] border-ink bg-paper px-2.5 py-0.5",
-							tilt === "up" ? "-rotate-[4deg]" : "rotate-[3deg]"
+							tilt === "up" ? "rotate-[-4deg]" : "rotate-3"
 						)}
 					>
 						{formatAmount(amountCents)}

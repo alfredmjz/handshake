@@ -103,7 +103,7 @@ export function StickerPicker({ value, onChange, name, fallback, className }: St
 							tabIndex={on ? 0 : -1}
 							onClick={() => onChange(choice)}
 							className={cn(
-								"flex aspect-square items-center justify-center rounded-md border border-border bg-paper outline-none transition-transform duration-quick ease-out hover:scale-110 focus-visible:ring-2 focus-visible:ring-ring",
+								"flex aspect-square items-center justify-center rounded-md border border-border bg-paper outline-hidden transition-transform duration-quick ease-out hover:scale-110 focus-visible:ring-2 focus-visible:ring-ring",
 								on && "border-ink ring-2 ring-ink ring-offset-1 ring-offset-paper"
 							)}
 						>

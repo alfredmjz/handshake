@@ -93,7 +93,7 @@ export function EntryPage() {
 			<header className="flex items-start gap-stack">
 				<HandDisc kind={isPayment ? "shake" : (entry.category ?? "new")} size={56} />
 				<Stack gap="none" className="min-w-0 flex-1">
-					<h1 className="type-h2 break-words">{isPayment ? paymentTitle(entry, names) : entry.description}</h1>
+					<h1 className="type-h2 wrap-break-word">{isPayment ? paymentTitle(entry, names) : entry.description}</h1>
 					<span className="type-body-sm text-muted-foreground">{dayLabel(entry.entryDate, todayIso())}</span>
 				</Stack>
 				{!isPayment && <Amount cents={entry.amountCents} size="md" />}
@@ -130,7 +130,7 @@ export function EntryPage() {
 			)}
 
 			{isPayment ? (
-				entry.notes && <p className="type-hand-lg whitespace-pre-wrap break-words">{entry.notes}</p>
+				entry.notes && <p className="type-hand-lg whitespace-pre-wrap wrap-break-word">{entry.notes}</p>
 			) : (
 				<EntryNote key={entry.id} entry={entry} mayEdit={mayEdit} />
 			)}
