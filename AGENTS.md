@@ -110,10 +110,10 @@ backend can change later.
 
 ## Money and dates
 
-- Amounts are **integers in the currency's minor unit** (`src/lib/money.ts`); never store or add floats.
-  Splits must add up to the total exactly (`splitEvenly`).
-- Each group has a `base_currency`. Expenses in other currencies will store the original amount, its
-  currency, and the rate used.
+- Amounts are **integers in cents** (`src/lib/money.ts`); never store or add floats. Splits must add up
+  to the total exactly (`computeShares` in `src/lib/ledger.ts`; the payer absorbs the odd cent).
+- **Dollars only.** There are no currency codes, pickers or exchange rates, and none are planned.
+  `groups.base_currency` is an unused leftover column.
 - Calendar dates are `YYYY-MM-DD` strings; timestamps are ISO strings.
 - Balances are computed on the device from local rows (they must work offline), in pure TypeScript
   with unit tests. The server validates what it stores (e.g. splits summing to the amount).
