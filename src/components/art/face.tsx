@@ -7,23 +7,35 @@ import { cn } from "@/lib/utils";
 const LOOKS = ["alex", "jo", "priya", "sam", "mo"] as const;
 const TINTS = ["drinks", "groceries", "fun", "travel", "stay", "food"] as const;
 
-const SlotsContext = createContext<Map<string, number> | null>(null);
+// A group's people: each one's slot, and the pictures of those who have one, by member id.
+type Faces = { slots: Map<string, number>; pictures: Map<string, string> };
 
-// Inside a group, faces are dealt so no two members look alike (see assignSlots).
+const FacesContext = createContext<Faces | null>(null);
+
+// Inside a group, faces are dealt so no two members look alike (see assignSlots), and people with a picture show it.
 export function FaceSlots({
 	members,
 	children,
 }: {
-	members: { id: string; userId: string | null }[] | undefined;
+	members: { id: string; userId: string | null; picture?: string | null }[] | undefined;
 	children: ReactNode;
 }) {
-	const slots = useMemo(() => (members ? assignSlots(members) : null), [members]);
-	return <SlotsContext.Provider value={slots}>{children}</SlotsContext.Provider>;
+	const faces = useMemo(
+		() =>
+			members
+				? {
+						slots: assignSlots(members),
+						pictures: new Map(members.flatMap((m) => (m.picture ? [[m.id, m.picture] as const] : []))),
+					}
+				: null,
+		[members]
+	);
+	return <FacesContext.Provider value={faces}>{children}</FacesContext.Provider>;
 }
 
 // The same person always gets the same drawing and disc colour: from their slot in the group, else from the seed.
 function useLook(seed: string) {
-	const slot = useContext(SlotsContext)?.get(seed) ?? slotOf(seed);
+	const slot = useContext(FacesContext)?.slots.get(seed) ?? slotOf(seed);
 	return { look: LOOKS[slot % LOOKS.length], tint: TINTS[Math.floor(slot / LOOKS.length) % TINTS.length] };
 }
 
@@ -50,11 +62,16 @@ type FaceProps = {
 	className?: string;
 	// Faded, for someone who left or isn't picked.
 	faded?: boolean;
+	// Their picture where FaceSlots doesn't know them (the account menu, Settings); null for the drawing.
+	picture?: string | null;
 };
 
-// A one-line portrait on a colour disc. The colour only tells people apart; it never means money.
-export function Face({ seed, name, size, className, faded = false }: FaceProps) {
+// A one-line portrait on a colour disc, or the person's own picture. The colour only tells people apart; it never
+// means money.
+export function Face({ seed, name, size, className, faded = false, picture }: FaceProps) {
 	const { look, tint } = useLook(seed);
+	const known = useContext(FacesContext)?.pictures.get(seed) ?? null;
+	const src = picture !== undefined ? picture : known;
 	const markup = useMemo(() => faceMarkup(look), [look]);
 	const style = {
 		width: size,
@@ -69,19 +86,23 @@ export function Face({ seed, name, size, className, faded = false }: FaceProps) 
 			className={cn("inline-flex shrink-0 overflow-hidden rounded-full", faded && "opacity-45", className)}
 			style={style}
 		>
-			<svg
-				viewBox="0 0 48 48"
-				// Buttons size every svg inside them as an icon; a face always fills its own disc.
-				className="block size-full!"
-				{...(name ? { role: "img", "aria-label": name } : { "aria-hidden": true })}
-			>
-				<g
-					className="doodle"
-					transform={FACE_FIT}
-					style={{ strokeWidth: (size < 40 ? 2.2 : size < 64 ? 1.8 : 1.5) / FACE_SCALE }}
-					dangerouslySetInnerHTML={{ __html: markup }}
-				/>
-			</svg>
+			{src ? (
+				<img src={src} alt={name} draggable={false} className="block size-full object-cover" />
+			) : (
+				<svg
+					viewBox="0 0 48 48"
+					// Buttons size every svg inside them as an icon; a face always fills its own disc.
+					className="block size-full!"
+					{...(name ? { role: "img", "aria-label": name } : { "aria-hidden": true })}
+				>
+					<g
+						className="doodle"
+						transform={FACE_FIT}
+						style={{ strokeWidth: (size < 40 ? 2.2 : size < 64 ? 1.8 : 1.5) / FACE_SCALE }}
+						dangerouslySetInnerHTML={{ __html: markup }}
+					/>
+				</svg>
+			)}
 		</span>
 	);
 }

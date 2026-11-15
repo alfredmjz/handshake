@@ -88,7 +88,7 @@ SELECT results_eq(
 
 SELECT is(
     (SELECT array_agg(k ORDER BY k) FROM jsonb_object_keys(pg_temp.pull('bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb')#>'{changes,0,members,0}') k),
-    ARRAY['deleted_at', 'display_name', 'group_id', 'id', 'joined_at', 'role', 'row_version', 'user_id'],
+    ARRAY['deleted_at', 'display_name', 'group_id', 'id', 'joined_at', 'picture', 'role', 'row_version', 'user_id'],
     'a pulled member has exactly the keys wire.ts reads'
 );
 

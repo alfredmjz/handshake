@@ -201,6 +201,8 @@ export async function applyMutation(tables: LocalTables, mutation: Mutation, use
 					groupId: m.groupId,
 					userId,
 					displayName: m.displayName.trim(),
+					// The server copies the account's picture on; it arrives with the next pull.
+					picture: null,
 					role: "owner",
 					joinedAt: m.at,
 					deletedAt: null,
@@ -260,6 +262,7 @@ export async function applyMutation(tables: LocalTables, mutation: Mutation, use
 					groupId: m.groupId,
 					userId: null,
 					displayName: m.displayName.trim(),
+					picture: null,
 					role: "member",
 					joinedAt: null,
 					deletedAt: null,

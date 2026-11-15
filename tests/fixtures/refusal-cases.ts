@@ -83,6 +83,7 @@ const member = (id: string, displayName: string, role: MemberRow["role"], userId
 	groupId: GROUP,
 	userId,
 	displayName,
+	picture: null,
 	role,
 	joinedAt: userId ? EARLIER : null,
 	deletedAt: null,

@@ -3,6 +3,9 @@ import Dexie, { type EntityTable } from "dexie";
 import type { KeyOf, RowOf, TableName } from "@/lib/sync/tables";
 import type { Mutation } from "@/lib/sync/types";
 
+// The account's picture as last set on this device ("" for none); see useMyPicture.
+export const MY_PICTURE_KEY = "picture";
+
 export type OutboxEntry = { seq: number; id: string; mutation: Mutation };
 type MetaEntry = { key: string; value: string };
 
@@ -97,6 +100,17 @@ export class LocalDb extends Dexie {
 					});
 				// Groups stored before cover colours and stickers: pull everything again to fill them in.
 				await tx.table("cursors").clear();
+			});
+		// Member rows stored before pictures. Nobody had one then, so there is nothing to pull again.
+		this.version(7)
+			.stores({})
+			.upgrade(async (tx) => {
+				await tx
+					.table("members")
+					.toCollection()
+					.modify((member: Record<string, unknown>) => {
+						member.picture ??= null;
+					});
 			});
 	}
 }

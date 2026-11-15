@@ -56,6 +56,7 @@ export function serverMember(overrides: Partial<MemberRow> & Pick<MemberRow, "id
 	return {
 		userId: "user-1",
 		displayName: "Alex",
+		picture: null,
 		role: "owner",
 		joinedAt: "2026-11-01T12:00:00.000Z",
 		deletedAt: null,

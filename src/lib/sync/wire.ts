@@ -37,6 +37,8 @@ export type RawMember = {
 	group_id: string;
 	user_id: string | null;
 	display_name: string;
+	// Missing from servers before 021.
+	picture?: string | null;
 	role: MemberRow["role"];
 	joined_at: string | null;
 	deleted_at: string | null;
@@ -158,6 +160,7 @@ export function toMemberRow(raw: RawMember): MemberRow {
 		groupId: raw.group_id,
 		userId: raw.user_id,
 		displayName: raw.display_name,
+		picture: raw.picture ?? null,
 		role: raw.role,
 		joinedAt: raw.joined_at,
 		deletedAt: raw.deleted_at,

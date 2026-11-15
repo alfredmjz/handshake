@@ -29,7 +29,7 @@ SELECT is(
 );
 SELECT is(
     ARRAY(SELECT k FROM (SELECT DISTINCT jsonb_object_keys(r) AS k FROM (SELECT x AS r FROM pulled, jsonb_array_elements(body->'changes') c, jsonb_array_elements(c->'members') x) rows) keys ORDER BY k COLLATE "C"),
-    ARRAY['deleted_at', 'display_name', 'group_id', 'id', 'joined_at', 'role', 'row_version', 'user_id']::TEXT[],
+    ARRAY['deleted_at', 'display_name', 'group_id', 'id', 'joined_at', 'picture', 'role', 'row_version', 'user_id']::TEXT[],
     'members: exactly the keys in tests/fixtures/pull-keys.ts'
 );
 SELECT is(
