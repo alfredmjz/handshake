@@ -15,7 +15,7 @@ const inputVariants = cva(
 				boxed:
 					"type-body h-control rounded-full border-[1.5px] border-input px-5 focus-visible:border-ink focus-visible:outline-hidden",
 				amount: "type-stat-xl h-auto border-0 p-0 focus-visible:outline-hidden",
-				code: "type-h2 h-16 rounded-lg border-[1.5px] border-input text-center tracking-[0.4em] focus-visible:border-ink focus-visible:outline-hidden",
+				code: "type-h2 h-16 rounded-lg border-[1.5px] border-input text-center tracking-[0.25em] focus-visible:border-ink focus-visible:outline-hidden",
 			},
 		},
 		defaultVariants: { variant: "default" },

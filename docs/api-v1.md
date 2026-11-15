@@ -28,7 +28,7 @@ handshake). Bills stay in Handshake. Handshake never calls the other app.
 
 Pholio makes the token; Handshake has no screen for tokens. To connect, Pholio:
 
-1. Signs the person in to Handshake's auth with Handshake's public Supabase URL and anon key, by the same 6-digit
+1. Signs the person in to Handshake's auth with Handshake's public Supabase URL and anon key, by the same 8-digit
    email code as Handshake's own sign-in (`signInWithOtp`, then `verifyOtp` with type `email`). Guests have no
    email, so they can't connect.
 2. Calls `create_api_token` with `p_name: "Pholio"` while signed in. The token comes back this once; Pholio keeps

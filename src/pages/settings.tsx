@@ -15,6 +15,7 @@ import { Input } from "@/components/ui/input";
 import { List, ListRow } from "@/components/ui/list";
 import { changeName, deleteMyAccount, finishEmailChange, startEmailChange, useCurrentUser } from "@/lib/auth";
 import { useCommit } from "@/lib/changes";
+import { CODE_LENGTH } from "@/lib/emailed-code";
 import { joinNames } from "@/lib/group-view";
 import { myOpenMemberships } from "@/lib/members";
 import { formatAmount } from "@/lib/money";
@@ -93,7 +94,8 @@ function EmailRow() {
 		setNewCode("");
 	};
 	const valid = /^\S+@\S+\.\S+$/.test(email.trim()) && email.trim().toLowerCase() !== user.email.toLowerCase();
-	const codesIn = /^\d{6}$/.test(currentCode.trim()) && /^\d{6}$/.test(newCode.trim());
+	const codeIn = (code: string) => code.trim().length === CODE_LENGTH && /^\d+$/.test(code.trim());
+	const codesIn = codeIn(currentCode) && codeIn(newCode);
 
 	async function submit() {
 		setBusy(true);
@@ -131,9 +133,7 @@ function EmailRow() {
 				open={open}
 				onOpenChange={reset}
 				title="Your email"
-				description={
-					step === "email" ? "You'll sign in with the new one." : "Each address got a 6-digit code. Enter both."
-				}
+				description={step === "email" ? "You'll sign in with the new one." : "Each address got a code. Enter both."}
 				submitLabel={busy ? "Working…" : step === "email" ? "Send codes" : "Change email"}
 				canSubmit={online && !busy && (step === "email" ? valid : codesIn)}
 				onSubmit={submit}
@@ -156,7 +156,7 @@ function EmailRow() {
 								id="current-code"
 								inputMode="numeric"
 								autoComplete="one-time-code"
-								maxLength={6}
+								maxLength={CODE_LENGTH}
 								autoFocus
 								value={currentCode}
 								onChange={(e) => setCurrentCode(e.target.value)}
@@ -167,7 +167,7 @@ function EmailRow() {
 								id="new-code"
 								inputMode="numeric"
 								autoComplete="one-time-code"
-								maxLength={6}
+								maxLength={CODE_LENGTH}
 								value={newCode}
 								onChange={(e) => setNewCode(e.target.value)}
 							/>

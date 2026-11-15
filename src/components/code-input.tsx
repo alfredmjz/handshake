@@ -4,15 +4,13 @@ import { toast } from "sonner";
 
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { canPaste, emailedCodeIn, readClipboard, useEmailedCodeFromClipboard } from "@/lib/emailed-code";
-
-const LENGTH = 6;
+import { canPaste, CODE_LENGTH, emailedCodeIn, readClipboard, useEmailedCodeFromClipboard } from "@/lib/emailed-code";
 
 type CodeInputProps = {
 	id: string;
 	value: string;
 	onChange: (code: string) => void;
-	// Called once the sixth digit is in, however it got there: typed, pasted, filled in by the phone, or taken from
+	// Called once the last digit is in, however it got there: typed, pasted, filled in by the phone, or taken from
 	// the clipboard on coming back to the app.
 	onComplete: (code: string) => void;
 	// False while the code is being checked or can't be: no taking it from the clipboard then.
@@ -20,21 +18,21 @@ type CodeInputProps = {
 	autoFocus?: boolean;
 };
 
-// The 6-digit code from an email, with a Paste button for browsers that read the clipboard only after a tap.
+// The code from an email, with a Paste button for browsers that read the clipboard only after a tap.
 export function CodeInput({ id, value, onChange, onComplete, ready = true, autoFocus }: CodeInputProps) {
 	const [pasteShown] = useState(canPaste);
 
 	function take(next: string) {
 		onChange(next);
-		if (next.length === LENGTH && ready) onComplete(next);
+		if (next.length === CODE_LENGTH && ready) onComplete(next);
 	}
 
 	useEmailedCodeFromClipboard(ready, take);
 
 	function typed(event: ChangeEvent<HTMLInputElement>) {
 		const raw = event.target.value;
-		const next = (raw.length > LENGTH && emailedCodeIn(raw)) || raw.replace(/\D/g, "").slice(0, LENGTH);
-		if (next.length === LENGTH && value.length < LENGTH) take(next);
+		const next = (raw.length > CODE_LENGTH && emailedCodeIn(raw)) || raw.replace(/\D/g, "").slice(0, CODE_LENGTH);
+		if (next.length === CODE_LENGTH && value.length < CODE_LENGTH) take(next);
 		else onChange(next);
 	}
 
@@ -55,7 +53,7 @@ export function CodeInput({ id, value, onChange, onComplete, ready = true, autoF
 		}
 		const code = emailedCodeIn(text);
 		if (code) take(code);
-		else toast.error("No code to paste", { description: "Copy the 6 digits from the email first." });
+		else toast.error("No code to paste", { description: "Copy the code from the email first." });
 	}
 
 	return (
@@ -66,7 +64,7 @@ export function CodeInput({ id, value, onChange, onComplete, ready = true, autoF
 				className={pasteShown ? "px-12" : undefined}
 				inputMode="numeric"
 				autoComplete="one-time-code"
-				placeholder="000000"
+				placeholder={"0".repeat(CODE_LENGTH)}
 				required
 				autoFocus={autoFocus}
 				value={value}

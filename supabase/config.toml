@@ -230,9 +230,10 @@ enable_confirmations = false
 # If enabled, users will need to reauthenticate or have logged in recently to change their password.
 secure_password_change = false
 # Controls the minimum amount of time that must pass before sending another signup confirmation or password reset email.
-max_frequency = "1s"
+# The sign-in screen counts the same minute down (RESEND_AFTER_MS in src/lib/resend-cooldown.ts).
+max_frequency = "60s"
 # Number of characters used in the email OTP.
-otp_length = 6
+otp_length = 8
 # Number of seconds before the email OTP expires (defaults to 1 hour).
 otp_expiry = 3600
 
@@ -247,7 +248,9 @@ pass = "env(RESEND_API_KEY)"
 admin_email = "onboarding@resend.dev"
 sender_name = "Handshake"
 
-# Sign-in uses a 6-digit code instead of a link, so it works inside the native app without deep links.
+# Sign-in uses an 8-digit code, so it works inside the native app without deep links. The email also has a button
+# to {{ .SiteURL }}/sign-in/link, which signs in the browser that opens it. otp_length above must match
+# CODE_LENGTH in src/lib/emailed-code.ts, and so must the hosted project's Email OTP length.
 # New users get the confirmation template and returning users the magic link one; both carry the code.
 [auth.email.template.confirmation]
 subject = "Your Handshake sign-in code"

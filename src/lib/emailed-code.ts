@@ -2,10 +2,13 @@ import { useEffect, useRef } from "react";
 import { Capacitor } from "@capacitor/core";
 import { Clipboard } from "@capacitor/clipboard";
 
-const CODE = /(?<![\d-])(\d{3})[ -]?(\d{3})(?![\d-])/g;
+// The length the auth server sends (config.toml otp_length, and the hosted project's Email OTP length).
+export const CODE_LENGTH = 8;
 
-// The 6-digit code from a sign-in email in what someone copied: the code alone ("123456", "123 456") or a short
-// line around it ("Your Handshake verification code is 123456."). Null for anything longer or with no single code.
+const CODE = /(?<![\d-])(\d{4})[ -]?(\d{4})(?![\d-])/g;
+
+// The 8-digit code from a sign-in email in what someone copied: the code alone ("12345678", "1234 5678") or a short
+// line around it ("Your Handshake verification code is 12345678."). Null for anything longer or with no single code.
 export function emailedCodeIn(text: string): string | null {
 	const trimmed = text.trim();
 	if (trimmed.length === 0 || trimmed.length > 80) return null;

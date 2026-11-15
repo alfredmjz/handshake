@@ -59,7 +59,7 @@ Copy the **publishable key** from the output (or from `bunx supabase status`) in
 bun run dev
 ```
 
-Open http://localhost:5173. Either sign in with the 6-digit code emailed to you, or skip email with the
+Open http://localhost:5173. Either sign in with the 8-digit code emailed to you, or skip email with the
 **test accounts** on the Welcome screen: **Owner** (`owner@handshake.test`), **Payee**
 (`payee@handshake.test`) and **Guest**. Switch between them under "Test accounts (local)" in the account menu.
 They exist only in `bun run dev` against a local Supabase. Until a sending domain is verified in Resend,

@@ -51,7 +51,7 @@ flowchart LR
 		API["API v1 function<br/>api/v1/[...path].ts, Bun runtime"]
 	end
 	subgraph supabase["Supabase (one project per environment)"]
-		AUTH["Auth<br/>6-digit email codes, anonymous guests"]
+		AUTH["Auth<br/>8-digit email codes, anonymous guests"]
 		REST["PostgREST RPC<br/>push_changes, pull_changes, online functions"]
 		POOL["Supavisor pooler<br/>transaction mode"]
 		PG[("Postgres<br/>public, private, api schemas, RLS")]
@@ -229,7 +229,7 @@ sequenceDiagram
 | From                       | To                            | Credential                                          | Allowed                                                                                                       |
 | -------------------------- | ----------------------------- | --------------------------------------------------- | ------------------------------------------------------------------------------------------------------------- |
 | Browser                    | Vercel static                 | none                                                | Download the app shell                                                                                        |
-| Any device                 | Supabase Auth                 | publishable key; email + 6-digit code, or anonymous | Get a JWT (1 h) and a rotating refresh token                                                                  |
+| Any device                 | Supabase Auth                 | publishable key; email + 8-digit code, or anonymous | Get a JWT (1 h) and a rotating refresh token                                                                  |
 | Signed-out device          | PostgREST (`anon`)            | publishable key                                     | `preview_invite` only                                                                                         |
 | Signed-in device           | PostgREST (`authenticated`)   | publishable key + user JWT                          | `push_changes`, `pull_changes`, online functions; `SELECT` through RLS                                        |
 | Pholio (its server)        | Vercel `/api/v1`              | `Authorization: Bearer hsk_…`                       | `GET` the token owner's data                                                                                  |
@@ -242,8 +242,12 @@ No component uses the Supabase secret (service-role) key at runtime, and it is n
 
 ### 5.2 Authentication
 
-- **People** sign in with a 6-digit email code (Supabase OTP). The JWT's `sub` is the user id that every
-  RLS policy and `push_changes()` uses.
+- **People** sign in with an 8-digit email code (Supabase OTP). The JWT's `sub` is the user id that every
+  RLS policy and `push_changes()` uses. The same email has a **Sign in to Handshake** button:
+  `{{ .SiteURL }}/sign-in/link?token_hash=…&type=email`, which the web app verifies with
+  `verifyOtp({ token_hash })` (`src/lib/email-link.ts`). It signs in whichever browser opens it; the native app
+  still takes the code. The length is `CODE_LENGTH` in `src/lib/emailed-code.ts`, and must match `otp_length`
+  in `config.toml` and the hosted project's Email OTP length.
 - **Guests** use Supabase anonymous sign-in: a real `auth.users` row, role `authenticated`, with
   `is_anonymous: true` in the JWT. `private.is_anonymous()` reads that claim. Anonymous callers cannot
   create groups or API tokens; their member rows have role `guest`, which limits what `push_changes()`

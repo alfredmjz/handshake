@@ -74,7 +74,7 @@ const SWATCHES = [
 ];
 
 function KitCode() {
-	const [code, setCode] = useState("482913");
+	const [code, setCode] = useState("22549805");
 	return (
 		<CodeInput id="kit-code" value={code} onChange={setCode} onComplete={(done) => toast(`Code ${done} complete`)} />
 	);
