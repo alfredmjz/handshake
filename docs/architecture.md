@@ -438,15 +438,18 @@ Nothing from Pholio is stored in Handshake, and none of Pholio's keys or URLs ap
   - `package.json` pins `"packageManager": "bun@1.4.4"`, which CI reads (`bun-version-file`).
   - The API function runs on Vercel's **Bun runtime** (`"bunVersion": "1.4.x"` in `vercel.json`). It talks
     to Postgres through `Bun.sql` with `prepare: false`, so it needs no driver package.
-  - Node stays only where a host brings it: Vercel's build machine, and the fallback runtime if Bun's has to
-    go. `"engines": { "node": "26.x" }` pins both to Node 26 LTS. Nothing in the repo runs Node directly,
-    so a developer machine doesn't need it for Handshake.
+  - Node stays only where a host brings it: Vercel's build machine. Its version is the Vercel project's
+    Node.js Version setting (26.x), not `engines`. Vercel lets `"engines": { "node" }` in `package.json`
+    override `bunVersion` and then builds the function for Node. A preview build log showed this on
+    2026-11-14 ("package.json takes precedence, using node"), so `package.json` has no `engines`. Nothing
+    in the repo runs Node directly, so a developer machine doesn't need it for Handshake.
   - CI actions use their current majors (`actions/checkout@v7`, `supabase/setup-cli@v3`,
     `oven-sh/setup-bun@v2`), which run on the runner's Node 24 instead of the deprecated Node 20.
 - **Trade-offs:**
   - Vercel's Bun runtime is in **public beta**. It has no automatic source maps and no request metrics on
-    `node:http`, neither of which this function uses. The way back is one line: remove `bunVersion`, and
-    the same handler runs on Node 26.
+    `node:http`, neither of which this function uses. The way back is to remove `bunVersion`. The handler
+    (`createApiV1`) runs unchanged on Node, but `api/v1/[...path].ts` imports `SQL` from `"bun"`, so it
+    must also switch to a Node Postgres driver behind the `ApiStore` seam.
   - `Bun.sql` is younger than `postgres`. The `ApiStore` seam keeps the choice local to
     `postgres-store.ts`, and the store contract suite (§9.11) proves whichever one is used.
   - Bun 1.4 is a rewrite with breaking changes. Tried on 2026-11-14 before adopting it: Bun 1.4.4 ran in
@@ -457,8 +460,8 @@ Nothing from Pholio is stored in Handshake, and none of Pholio's keys or URLs ap
     Postgres. Not tried: a Vercel deployment on `"1.4.x"`; check a preview deployment before production.
     The way back is the two version strings above.
 - **Rejected:** keeping the Node runtime for the function (works, but goes against the owner's rule and
-  adds a second runtime to test against); `.nvmrc` or `.node-version` files (nothing local needs Node,
-  and `engines` is what Vercel reads).
+  adds a second runtime to test against); `.nvmrc`, `.node-version` or `engines` (nothing local needs
+  Node, and `engines` would turn the function into a Node function on Vercel).
 - **Revisit:** when Vercel's Bun runtime leaves beta, and when Bun 1.5 arrives.
 
 ### ADR-007: One permission matrix, mirrored in TypeScript and SQL, held in step by a case table
