@@ -232,7 +232,7 @@ function TestAccountLinks() {
 
 // The signed-out front door: hands passing a receipt, and a cobalt sheet that asks for an email or a group code.
 export function SignInPage() {
-	const [view, setView] = useState<"welcome" | "email" | "code">("welcome");
+	const [view, setView] = useState<"welcome" | "email" | "join">("welcome");
 	const [ended] = useState(takeEndedNotice);
 
 	return (
@@ -271,9 +271,9 @@ export function SignInPage() {
 							variant="link"
 							size="inline"
 							className="self-center text-primary-foreground hover:text-primary-foreground/80"
-							onClick={() => setView("code")}
+							onClick={() => setView("join")}
 						>
-							Have a code?
+							Join a group
 						</Button>
 						{import.meta.env.DEV && devLoginAvailable() && <TestAccountLinks />}
 					</>

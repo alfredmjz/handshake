@@ -10,10 +10,14 @@ import "@fontsource-variable/shantell-sans/full.css";
 import "sonner/dist/styles.css";
 import "@/styles/globals.css";
 import { App } from "@/app";
+import { tidyPath } from "@/lib/tidy-path";
 
 // Windows draws no flag emoji, only their letters ("JP"); there, stickers take the flags from this font, served
 // with the app so it works offline.
 polyfillCountryFlagEmojis("Twemoji Country Flags", flagFont);
+
+const tidy = tidyPath(location.pathname);
+if (tidy) history.replaceState(history.state, "", tidy + location.search + location.hash);
 
 createRoot(document.getElementById("root")!).render(
 	<StrictMode>

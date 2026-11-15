@@ -22,8 +22,9 @@ export default defineConfig({
 			},
 			workbox: {
 				navigateFallback: "/index.html",
-				// The API is served by the Vercel function, never by the app shell.
-				navigateFallbackDenylist: [/^\/api\//],
+				// The API is served by the Vercel function, never by the app shell. The sign-in email's link
+				// (EMAIL_LINK_PATH) loads the newest app from the network, not a shell cached before a deploy.
+				navigateFallbackDenylist: [/^\/api\//, /^\/+sign-in\/+link/],
 				globPatterns: ["**/*.{js,css,html,svg,woff2}"],
 			},
 		}),
