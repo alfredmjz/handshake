@@ -1,0 +1,96 @@
+-- ============================================================================
+-- The group every refusal case starts from (refusal_cases.test.sql), the twin of WORLD in
+-- tests/fixtures/refusal-cases.ts. Needs prelude.psql. Ids: users aaaa… Alex, bbbb… Sam, cccc… Kim
+-- (anonymous), dddd… Out (in no group), eeee… Lee; members 2000…a1 Alex (owner), b1 Sam, c1 Kim (guest),
+-- f1 Pat (name-only), e1 Lee (left); bills 3000…01 (Alex's) and 02 (Sam's); 3000…03 Sam's pending payment to
+-- Alex; conflict 5000…01 on bill 01; Sam's invite 4000…01; Sam's nudge to Kim 6000…01.
+-- ============================================================================
+
+SELECT pg_temp.add_user('aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa', 'alex@refusals.test', 'Alex');
+SELECT pg_temp.add_user('bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb', 'sam@refusals.test', 'Sam');
+SELECT pg_temp.add_guest('cccccccc-cccc-cccc-cccc-cccccccccccc');
+SELECT pg_temp.add_user('dddddddd-dddd-dddd-dddd-dddddddddddd', 'out@refusals.test', 'Out');
+SELECT pg_temp.add_user('eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee', 'lee@refusals.test', 'Lee');
+
+-- Fails the file at once when a step of the world isn't applied.
+CREATE FUNCTION pg_temp.world(p_user UUID, p_mutation JSONB) RETURNS VOID LANGUAGE plpgsql AS $$
+DECLARE
+    v_result TEXT := pg_temp.try_reason(p_user, p_mutation);
+BEGIN
+    IF v_result <> 'applied' THEN
+        RAISE EXCEPTION 'The refusal world could not be built: % gave %', p_mutation->>'type', v_result;
+    END IF;
+END $$;
+-- Joins group 1 with its code as the person p_claim.
+CREATE FUNCTION pg_temp.world_join(p_user UUID, p_claim UUID) RETURNS VOID LANGUAGE plpgsql AS $$
+BEGIN
+    PERFORM pg_temp.join_code(p_user, pg_temp.code('10000000-0000-0000-0000-000000000001'), p_claim);
+END $$;
+CREATE FUNCTION pg_temp.world_bill(p_entry UUID, p_description TEXT, p_payer UUID, p_among UUID[], p_amount INT) RETURNS JSONB LANGUAGE sql AS $$
+    SELECT jsonb_build_object(
+        'type', 'entry.create', 'groupId', '10000000-0000-0000-0000-000000000001', 'entryId', p_entry,
+        'description', p_description, 'amountCents', p_amount, 'entryDate', '2026-11-02', 'notes', NULL, 'category', NULL,
+        'items', jsonb_build_array(jsonb_build_object('id', 'i1', 'amountCents', p_amount, 'paidBy', p_payer, 'splitAmong', to_jsonb(p_among))),
+        'shares', (
+            SELECT jsonb_agg(jsonb_build_object(
+                'memberId', m,
+                'paidCents', CASE WHEN m = p_payer THEN p_amount ELSE 0 END,
+                'owedCents', p_amount / cardinality(p_among),
+                'owedTo', jsonb_build_object(p_payer::TEXT, p_amount / cardinality(p_among))
+            ))
+            FROM unnest(p_among) m
+        )
+    );
+$$;
+
+SELECT pg_temp.world('aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa', '{"type": "group.create", "groupId": "10000000-0000-0000-0000-000000000001", "memberId": "20000000-0000-0000-0000-0000000000a1", "name": "Banff", "displayName": "Alex"}');
+SELECT pg_temp.world('aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa', '{"type": "member.add", "groupId": "10000000-0000-0000-0000-000000000001", "memberId": "20000000-0000-0000-0000-0000000000b1", "displayName": "Sam"}');
+SELECT pg_temp.world('aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa', '{"type": "member.add", "groupId": "10000000-0000-0000-0000-000000000001", "memberId": "20000000-0000-0000-0000-0000000000c1", "displayName": "Kim"}');
+SELECT pg_temp.world('aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa', '{"type": "member.add", "groupId": "10000000-0000-0000-0000-000000000001", "memberId": "20000000-0000-0000-0000-0000000000f1", "displayName": "Pat"}');
+SELECT pg_temp.world('aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa', '{"type": "member.add", "groupId": "10000000-0000-0000-0000-000000000001", "memberId": "20000000-0000-0000-0000-0000000000e1", "displayName": "Lee"}');
+SELECT pg_temp.world_join('bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb', '20000000-0000-0000-0000-0000000000b1');
+SELECT pg_temp.world_join('cccccccc-cccc-cccc-cccc-cccccccccccc', '20000000-0000-0000-0000-0000000000c1');
+SELECT pg_temp.world_join('eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee', '20000000-0000-0000-0000-0000000000e1');
+SELECT pg_temp.world('eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee', '{"type": "member.remove", "groupId": "10000000-0000-0000-0000-000000000001", "memberId": "20000000-0000-0000-0000-0000000000e1"}');
+
+-- Alex's bill: 900 that Alex paid, split by Alex, Sam and Pat (300 each). Sam's: 600 Sam paid, split by Sam and
+-- Kim (300 each).
+SELECT pg_temp.world('aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa', pg_temp.world_bill('30000000-0000-0000-0000-000000000001', 'Dinner', '20000000-0000-0000-0000-0000000000a1',
+    ARRAY['20000000-0000-0000-0000-0000000000a1', '20000000-0000-0000-0000-0000000000b1', '20000000-0000-0000-0000-0000000000f1']::UUID[], 900));
+SELECT pg_temp.world('bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb', pg_temp.world_bill('30000000-0000-0000-0000-000000000002', 'Groceries', '20000000-0000-0000-0000-0000000000b1',
+    ARRAY['20000000-0000-0000-0000-0000000000b1', '20000000-0000-0000-0000-0000000000c1']::UUID[], 600));
+
+-- Alex renames the bill; Sam's rename from the same version becomes the open conflict.
+CREATE TEMP TABLE world_first_version AS SELECT pg_temp.version_of('30000000-0000-0000-0000-000000000001') AS v;
+SELECT pg_temp.world('aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa', pg_temp.world_bill('30000000-0000-0000-0000-000000000001', 'Ramen dinner', '20000000-0000-0000-0000-0000000000a1',
+    ARRAY['20000000-0000-0000-0000-0000000000a1', '20000000-0000-0000-0000-0000000000b1', '20000000-0000-0000-0000-0000000000f1']::UUID[], 900)
+    || jsonb_build_object('type', 'entry.update', 'baseVersion', (SELECT v FROM world_first_version)));
+SELECT pg_temp.world('bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb', pg_temp.world_bill('30000000-0000-0000-0000-000000000001', 'Sushi dinner', '20000000-0000-0000-0000-0000000000a1',
+    ARRAY['20000000-0000-0000-0000-0000000000a1', '20000000-0000-0000-0000-0000000000b1', '20000000-0000-0000-0000-0000000000f1']::UUID[], 900)
+    || jsonb_build_object('type', 'entry.update', 'baseVersion', (SELECT v FROM world_first_version)));
+-- The server picks a conflict's id; the cases name it.
+UPDATE public.entry_conflicts SET id = '50000000-0000-0000-0000-000000000001' WHERE entry_id = '30000000-0000-0000-0000-000000000001';
+
+-- Sam records paying Alex back 100: Alex must answer it.
+SELECT pg_temp.world('bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb', '{"type": "payment.record", "groupId": "10000000-0000-0000-0000-000000000001", "entryId": "30000000-0000-0000-0000-000000000003", "fromMemberId": "20000000-0000-0000-0000-0000000000b1", "toMemberId": "20000000-0000-0000-0000-0000000000a1", "amountCents": 100, "entryDate": "2026-11-04", "notes": null}');
+SELECT pg_temp.world('bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb', '{"type": "invite.create", "groupId": "10000000-0000-0000-0000-000000000001", "inviteId": "40000000-0000-0000-0000-000000000001", "token": "refusalcasesinvitetoken00000000000000000001", "claimMemberId": null, "expiresAt": null}');
+-- Kim owes Sam 300; Sam nudges Kim today.
+SELECT pg_temp.world('bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb', '{"type": "nudge.send", "groupId": "10000000-0000-0000-0000-000000000001", "nudgeId": "60000000-0000-0000-0000-000000000001", "toMemberId": "20000000-0000-0000-0000-0000000000c1", "amountCents": 300}');
+
+-- A case's outcome: 'applied' or the rejection's code, after p_setup (pushed by Alex) if any. Everything it
+-- did is then undone, so each case starts from the world. Raising and catching rolls back the inner block,
+-- which a savepoint can't do here: it would roll back pgTAP's results too.
+CREATE FUNCTION pg_temp.outcome(p_setup JSONB, p_user UUID, p_mutation JSONB) RETURNS TEXT LANGUAGE plpgsql AS $$
+DECLARE
+    v_result TEXT;
+BEGIN
+    BEGIN
+        IF p_setup IS NOT NULL THEN
+            PERFORM pg_temp.world('aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa', p_setup);
+        END IF;
+        v_result := pg_temp.try(p_user, p_mutation);
+        RAISE EXCEPTION 'undo the case' USING ERRCODE = 'HSUND';
+    EXCEPTION WHEN SQLSTATE 'HSUND' THEN
+        RETURN v_result;
+    END;
+END $$;

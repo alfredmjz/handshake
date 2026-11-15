@@ -1,15 +1,7 @@
 import { describe, expect, test } from "bun:test";
 
 import { computeShares, summarizeGroup, type Item } from "@/lib/ledger";
-import {
-	billItems,
-	countPayments,
-	guestsLosingAccess,
-	listNames,
-	paymentCards,
-	roundingNotes,
-	settleRows,
-} from "@/lib/settle-view";
+import { billItems, countPayments, guestsLosingAccess, paymentCards, settleRows } from "@/lib/settle-view";
 import type { EntryRow, MemberRow } from "@/lib/sync/types";
 import { serverBill, serverMember } from "../support/memory-tables";
 
@@ -50,34 +42,6 @@ const payment = (id: string, from: string, to: string, amountCents: number, over
 
 const ledger = (members: MemberRow[]) =>
 	members.map((m) => ({ id: m.id, displayName: m.displayName, hasLogin: m.userId !== null }));
-
-describe("roundingNotes", () => {
-	test("$23.00 paid by Alex split three ways: Alex's part takes 1¢ less", () => {
-		const items = [item("i1", 2300, "alex", ["alex", "jo", "sam"])];
-		expect(roundingNotes(items, computeShares(items))).toEqual([{ memberId: "alex", payerId: "alex", cents: -1 }]);
-	});
-
-	test("$10.00 paid by Sam split three ways: Sam covers the missing 1¢", () => {
-		const items = [item("i1", 1000, "sam", ["alex", "jo", "sam"])];
-		expect(roundingNotes(items, computeShares(items))).toEqual([{ memberId: "sam", payerId: "sam", cents: 1 }]);
-	});
-
-	test("an even split has no notes", () => {
-		const items = [item("i1", 5000, "alex", ["alex", "jo", "sam", "kim", "lee"])];
-		expect(roundingNotes(items, computeShares(items))).toEqual([]);
-	});
-
-	test("a payer outside a $20.00 split: 1¢ comes off the first person's part", () => {
-		const items = [item("i1", 2000, "sam", ["alex", "jo", "kim"])];
-		// 6.666… rounds to 6.67 each (20.01); Sam's own part can't go below 0, so Alex (listed first) drops to 6.66.
-		expect(roundingNotes(items, computeShares(items))).toEqual([{ memberId: "alex", payerId: "sam", cents: -1 }]);
-	});
-
-	test("two payers: each payer's rounding is noted on its own", () => {
-		const items = [item("i1", 1000, "p1", ["p1", "p2", "p3"]), item("i2", 2000, "p2", ["p1", "p2", "p3", "p4", "p5"])];
-		expect(roundingNotes(items, computeShares(items))).toEqual([{ memberId: "p1", payerId: "p1", cents: 1 }]);
-	});
-});
 
 describe("billItems", () => {
 	test("returns the stored items", () => {
@@ -156,15 +120,15 @@ describe("paymentCards", () => {
 
 	test("your debts, then debts between two name-only people for full members", () => {
 		expect(paymentCards(debts, [], members, { memberId: "alex", role: "owner" })).toEqual([
-			{ kind: "record", from: "jo", to: "alex", amountCents: 5000 },
-			{ kind: "record", from: "kim", to: "lee", amountCents: 700 },
+			{ kind: "record", from: "jo", to: "alex", amountCents: 5000, debt: debts[0] },
+			{ kind: "record", from: "kim", to: "lee", amountCents: 700, debt: debts[1] },
 		]);
 	});
 
 	test("guests get only their own", () => {
 		expect(paymentCards(debts, [], members, { memberId: "jo", role: "guest" })).toEqual([
-			{ kind: "record", from: "jo", to: "alex", amountCents: 5000 },
-			{ kind: "record", from: "kim", to: "jo", amountCents: 300 },
+			{ kind: "record", from: "jo", to: "alex", amountCents: 5000, debt: debts[0] },
+			{ kind: "record", from: "kim", to: "jo", amountCents: 300, debt: debts[2] },
 		]);
 	});
 
@@ -172,18 +136,22 @@ describe("paymentCards", () => {
 		const pending = [payment("p1", "jo", "alex", 2000)];
 		expect(paymentCards(debts, pending, members, { memberId: "alex", role: "owner" })[0]).toEqual({
 			kind: "answer",
+			entry: pending[0],
 			entryId: "p1",
 			from: "jo",
 			to: "alex",
 			amountCents: 2000,
+			debt: debts[0],
 		});
 		expect(paymentCards(debts, pending, members, { memberId: "jo", role: "member" })[0]).toEqual({
 			kind: "waiting",
+			entry: pending[0],
 			entryId: "p1",
 			from: "jo",
 			to: "alex",
 			amountCents: 2000,
 			canUndo: true,
+			debt: debts[0],
 		});
 	});
 
@@ -196,7 +164,7 @@ describe("paymentCards", () => {
 			}),
 		];
 		expect(paymentCards([], pending, members, { memberId: "alex", role: "owner" })).toEqual([
-			{ kind: "answer", entryId: "p1", from: "alex", to: "jo", amountCents: 1000 },
+			{ kind: "answer", entry: pending[0], entryId: "p1", from: "alex", to: "jo", amountCents: 1000, debt: undefined },
 		]);
 		expect(paymentCards([], pending, members, { memberId: "kim", role: "member" })).toEqual([]);
 	});
@@ -212,15 +180,6 @@ describe("small helpers", () => {
 			member("e", "Jo"),
 		];
 		expect(guestsLosingAccess(members).map((m) => m.displayName)).toEqual(["Kim", "lee"]);
-	});
-
-	test("listNames", () => {
-		expect([listNames([]), listNames(["Kim"]), listNames(["Kim", "Lee"]), listNames(["Kim", "Lee", "Mo"])]).toEqual([
-			"",
-			"Kim",
-			"Kim and Lee",
-			"Kim, Lee and Mo",
-		]);
 	});
 
 	test("countPayments", () => {

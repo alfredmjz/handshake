@@ -56,13 +56,12 @@ export function GroupPage() {
 	const [resolving, setResolving] = useState<string | null>(null);
 	const [search, setSearch] = useSearchParams();
 	const tab = TABS.find((t) => t === search.get("tab")) ?? "entries";
-	const { group, me, names } = data;
 	// Opened from the shelf: the receipt prints on the way in. A reload or a deep link lands on it printed.
 	const fromShelf = (useLocation().state as { fromShelf?: boolean } | null)?.fromShelf === true;
 
-	if (data.loading) return null;
+	if (data === undefined) return null;
 
-	if (!group || group.deletedAt || !me) {
+	if (!data?.me) {
 		return (
 			<Screen>
 				<EmptyState
@@ -78,11 +77,13 @@ export function GroupPage() {
 		);
 	}
 
+	const { group, names } = data;
 	const completed = !!group.completedAt;
+
 	const kind = data.category ?? "new";
 	const unsynced = data.unsynced.has(group.id);
 	const openConflicts = data.conflicts.length;
-	const mayAdd = data.can("entry.create");
+	const mayAdd = data.may("entry.create");
 
 	const aside = (
 		<>

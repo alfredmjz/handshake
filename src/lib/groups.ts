@@ -2,8 +2,7 @@ import { useLiveQuery } from "dexie-react-hooks";
 
 import { db } from "@/lib/local-db";
 import type { Mutation } from "@/lib/sync/types";
-
-export const byLabel = (a: string, b: string) => a.localeCompare(b, undefined, { sensitivity: "base" });
+import { byLabel } from "@/lib/utils";
 
 // Groups this device has, not deleted, by name.
 export function useGroups() {
@@ -12,11 +11,6 @@ export function useGroups() {
 			(a, b) => byLabel(a.name, b.name) || byLabel(a.id, b.id)
 		)
 	);
-}
-
-// undefined while loading, null when this device doesn't have the group.
-export function useGroup(groupId: string) {
-	return useLiveQuery(async () => (await db.groups.get(groupId)) ?? null, [groupId]);
 }
 
 export function useWaitingChanges() {
@@ -48,7 +42,13 @@ function rowIds(m: Mutation): string[] {
 			return [m.inviteId];
 		case "nudge.send":
 			return [m.nudgeId];
-		default:
+		case "entry.create":
+		case "entry.update":
+		case "entry.delete":
+		case "payment.record":
+		case "payment.confirm":
+		case "payment.decline":
+		case "payment.undo":
 			return [m.entryId];
 	}
 }

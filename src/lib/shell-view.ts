@@ -1,6 +1,8 @@
+import { byLabel } from "@/lib/utils";
+
 // Who joined, for "3 joined · Ann, Jo and Sam": everyone up to three, else "Ann, Bo, Jo and 2 more".
 export function joinedSummary(names: string[]): string {
-	const sorted = [...names].sort((a, b) => a.localeCompare(b, undefined, { sensitivity: "base" }));
+	const sorted = [...names].sort(byLabel);
 	if (sorted.length <= 1) return sorted[0] ?? "";
 	if (sorted.length <= 3) return `${sorted.slice(0, -1).join(", ")} and ${sorted.at(-1)}`;
 	return `${sorted.slice(0, 3).join(", ")} and ${sorted.length - 3} more`;

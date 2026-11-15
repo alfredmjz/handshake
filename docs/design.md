@@ -34,7 +34,7 @@ it prints as you open the group and feeds on a line when a bill is added. Who ow
    bill landing, amounts rolling to their new value, hands shaking when a payment counts.
    `prefers-reduced-motion` turns all of it off.
 
-## Tokens (`src/styles/globals.css`, `tailwind.config.ts`)
+## Tokens (`src/styles/globals.css`: `:root` values and the `@theme` block)
 
 | Role       | Class                                                                                                                               | Value                                             |
 | ---------- | ----------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------- |

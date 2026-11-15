@@ -15,25 +15,12 @@ import { Input } from "@/components/ui/input";
 import { List, ListRow } from "@/components/ui/list";
 import { changeName, deleteMyAccount, finishEmailChange, startEmailChange, useCurrentUser } from "@/lib/auth";
 import { useCommit } from "@/lib/changes";
+import { joinNames } from "@/lib/group-view";
 import { myOpenMemberships } from "@/lib/members";
 import { formatAmount } from "@/lib/money";
 import { useOnline } from "@/lib/online";
+import { failureNotice, NEEDS_CONNECTION } from "@/lib/online-outcome";
 import { describeDebt } from "@/lib/shell-view";
-import { TransportError } from "@/lib/sync/supabase-transport";
-
-const NEEDS_CONNECTION = "Needs a connection";
-
-function problem(error: unknown) {
-	return error instanceof TransportError && error.code === "network"
-		? NEEDS_CONNECTION
-		: error instanceof Error
-			? error.message
-			: undefined;
-}
-
-function listOf(names: string[]) {
-	return names.length < 2 ? names.join("") : `${names.slice(0, -1).join(", ")} and ${names[names.length - 1]}`;
-}
 
 // Your name, kept on the account for groups from now on, and changed in each open group you're in.
 function NameRow() {
@@ -46,7 +33,7 @@ function NameRow() {
 		try {
 			await changeName(name);
 		} catch (error) {
-			toast.error("Couldn't change your name", { description: problem(error) });
+			toast.error(...failureNotice(error, "Couldn't change your name"));
 			return false;
 		}
 		const kept: string[] = [];
@@ -57,7 +44,7 @@ function NameRow() {
 		}
 		if (kept.length > 0)
 			toast.success("Name changed", {
-				description: `${listOf(kept)} kept your old name: someone there already goes by ${name}.`,
+				description: `${joinNames(kept)} kept your old name: someone there already goes by ${name}.`,
 			});
 		else toast.success("Name changed");
 		return true;
@@ -123,7 +110,7 @@ function EmailRow() {
 				reset(false);
 			}
 		} catch (error) {
-			toast.error(step === "email" ? "Couldn't send the codes" : "That didn't work", { description: problem(error) });
+			toast.error(...failureNotice(error, step === "email" ? "Couldn't send the codes" : "That didn't work"));
 		} finally {
 			setBusy(false);
 		}
@@ -202,7 +189,7 @@ function DeleteAccount() {
 			await deleteMyAccount();
 		} catch (error) {
 			setOpen(false);
-			toast.error("Couldn't delete your account", { description: problem(error) });
+			toast.error(...failureNotice(error, "Couldn't delete your account"));
 		}
 	}
 

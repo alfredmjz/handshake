@@ -24,6 +24,10 @@ export interface ApiSeeder {
 		amountCents: number,
 		confirmBy?: string
 	): Promise<string>;
+	// Each as `by` would do it in the app: delete a bill, decline a payment waiting for them, undo their own.
+	deleteBill(by: string, groupId: string, entryId: string): Promise<void>;
+	decline(by: string, groupId: string, entryId: string): Promise<void>;
+	undo(by: string, groupId: string, entryId: string): Promise<void>;
 	leave(user: string, groupId: string): Promise<void>;
 	deleteGroup(owner: string, groupId: string): Promise<void>;
 	// A new token for the user; returns its hash, as the handler would send it.
@@ -65,11 +69,14 @@ export function describeApiStore(name: string, makeWorld: () => Promise<ApiWorld
 			| "alexPaid"
 			| "joPending"
 			| "samPaidLee"
-			| "lee",
+			| "lee"
+			| "cabin"
+			| "cabinConfirmed",
 			string
 		>;
-		const member = {} as Record<"samBanff" | "alexBanff" | "joBanff" | "samFlat", string>;
+		const member = {} as Record<"samBanff" | "alexBanff" | "joBanff" | "samFlat" | "kimCabin" | "joCabin", string>;
 		let sam: string;
+		let kim: string;
 
 		beforeAll(async () => {
 			world = await makeWorld();
@@ -106,7 +113,25 @@ export function describeApiStore(name: string, makeWorld: () => Promise<ApiWorld
 			ids.gone = await seed.group("Sam", "Gone");
 			await seed.deleteGroup("Sam", ids.gone);
 
+			// Cabin (Kim owns, Sam isn't in it): one entry of each kind that counts or doesn't. Kim paid the $40.00
+			// lunch for Kim and Jo; Jo's $10.00 taxi was deleted; Jo's payments to Kim: 500 declined by Kim, 700
+			// undone by Jo, 1200 confirmed by Kim, 900 still waiting.
+			ids.cabin = await seed.group("Kim", "Cabin");
+			member.kimCabin = await seed.memberId("Kim", ids.cabin);
+			member.joCabin = await seed.join("Jo", ids.cabin);
+			const both = [member.kimCabin, member.joCabin];
+			await seed.bill("Kim", ids.cabin, { amountCents: 4000, paidBy: member.kimCabin, splitAmong: both });
+			const taxi = await seed.bill("Jo", ids.cabin, { amountCents: 1000, paidBy: member.joCabin, splitAmong: both });
+			await seed.deleteBill("Jo", ids.cabin, taxi);
+			const declined = await seed.payment("Jo", ids.cabin, member.joCabin, member.kimCabin, 500);
+			await seed.decline("Kim", ids.cabin, declined);
+			const undone = await seed.payment("Jo", ids.cabin, member.joCabin, member.kimCabin, 700);
+			await seed.undo("Jo", ids.cabin, undone);
+			ids.cabinConfirmed = await seed.payment("Jo", ids.cabin, member.joCabin, member.kimCabin, 1200, "Kim");
+			await seed.payment("Jo", ids.cabin, member.joCabin, member.kimCabin, 900);
+
 			sam = (await seed.token("Sam")).hash;
+			kim = (await seed.token("Kim")).hash;
 		});
 
 		test("an unknown or revoked token is HS401", async () => {
@@ -182,6 +207,38 @@ export function describeApiStore(name: string, makeWorld: () => Promise<ApiWorld
 					owedCents: 667,
 					owedTo: { [member.samBanff]: 334, [member.alexBanff]: 333 },
 				},
+			]);
+		});
+
+		test("what counts: a deleted bill and declined, undone and pending payments don't; a confirmed one does", async () => {
+			const cabin = await store.group(kim, ids.cabin);
+			// Kim: paid the 4000 lunch; owes 2000 of it, plus the 1200 Jo paid back.
+			expect(cabin).toMatchObject({ memberId: member.kimCabin, paidCents: 4000, owedCents: 3200 });
+			expect(cabin.members).toEqual([
+				{
+					memberId: member.joCabin,
+					displayName: "Jo",
+					active: true,
+					paidCents: 1200,
+					owedCents: 2000,
+					owedTo: { [member.kimCabin]: 2000 },
+				},
+				{
+					memberId: member.kimCabin,
+					displayName: "Kim",
+					active: true,
+					paidCents: 4000,
+					owedCents: 3200,
+					owedTo: { [member.kimCabin]: 2000, [member.joCabin]: 1200 },
+				},
+			]);
+			expect((await store.groups(kim)).find((g) => g.id === ids.cabin)).toMatchObject({
+				paidCents: 4000,
+				owedCents: 3200,
+			});
+			const page = await store.payments(kim, { groupId: ids.cabin, cursor: {}, limit: 100 });
+			expect(page.payments.map((p) => [p.id, p.direction, p.amountCents])).toEqual([
+				[ids.cabinConfirmed, "received", 1200],
 			]);
 		});
 

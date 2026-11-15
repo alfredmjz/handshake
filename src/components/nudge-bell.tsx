@@ -54,7 +54,7 @@ export function NudgeBell() {
 					title="Nudges"
 					className="relative rounded-full"
 				>
-					<BellDoodle ringing={unseen > 0} className="!size-[1.625rem]" />
+					<BellDoodle ringing={unseen > 0} className="size-6.5!" />
 					{unseen > 0 && (
 						<span
 							aria-hidden
@@ -65,10 +65,7 @@ export function NudgeBell() {
 					)}
 				</Button>
 			</DropdownMenuTrigger>
-			<DropdownMenuContent
-				collisionPadding={16}
-				className="w-80 max-w-[var(--radix-dropdown-menu-content-available-width)]"
-			>
+			<DropdownMenuContent collisionPadding={16} className="w-80 max-w-(--radix-dropdown-menu-content-available-width)">
 				<DropdownMenuLabel>Nudges</DropdownMenuLabel>
 				{nudges && nudges.length === 0 && <p className="type-body-sm px-3 py-row text-muted-foreground">No nudges</p>}
 				{nudges?.map((nudge) => (

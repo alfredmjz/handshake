@@ -62,7 +62,7 @@ export function SyncMark({
 				state !== "synced" && (
 					<span
 						aria-hidden
-						className="type-micro absolute -right-2.5 -top-1.5 flex h-[1.125rem] min-w-[1.125rem] rotate-6 animate-land items-center justify-center rounded-full border-[1.5px] border-ink bg-waiting px-1 font-semibold tabular-nums text-ink"
+						className="type-micro absolute -right-2.5 -top-1.5 flex h-4.5 min-w-4.5 animate-land items-center justify-center rounded-full border-[1.5px] border-ink bg-waiting px-1 font-semibold tabular-nums text-ink"
 					>
 						{waiting > 9 ? "9+" : waiting}
 					</span>

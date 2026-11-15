@@ -57,7 +57,7 @@ export function ScreenHeader({ title, eyebrow, lead, back, actions, className }:
 				</div>
 			)}
 			{eyebrow && <div className="type-body-sm text-muted-foreground">{eyebrow}</div>}
-			{title && <h1 className="type-h1 text-balance break-words">{title}</h1>}
+			{title && <h1 className="type-h1 text-balance wrap-break-word">{title}</h1>}
 			{lead && <p className="type-body">{lead}</p>}
 		</header>
 	);
@@ -69,7 +69,7 @@ export function BackLink({ to, children }: { to: string; children: ReactNode }) 
 			to={to}
 			className="type-body-sm inline-flex min-h-tap items-center gap-1 rounded-full pl-1 pr-3 font-medium transition-colors hover:bg-ink/5"
 		>
-			<ChevronLeft className="size-[1.375rem]" aria-hidden />
+			<ChevronLeft className="size-5.5" aria-hidden />
 			{children}
 		</Link>
 	);

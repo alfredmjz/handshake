@@ -70,7 +70,7 @@ function GroupCell({
 		<Link
 			to={`/groups/${group.id}`}
 			state={{ fromShelf: true }}
-			className="flex flex-col gap-control rounded-book outline-none transition-transform duration-settle ease-spring hover:-translate-y-1 focus-visible:ring-2 focus-visible:ring-ring active:scale-[0.97]"
+			className="flex flex-col gap-control rounded-book outline-hidden transition-transform duration-settle ease-spring hover:-translate-y-1 focus-visible:ring-2 focus-visible:ring-ring active:scale-[0.97]"
 		>
 			<BookCover name={group.name} note={group.note} kind={kind ?? "new"} sticker={group.coverSticker} cover={cover} />
 			<Standing standing={standing} />
@@ -266,8 +266,8 @@ export function GroupsPage() {
 
 			{groups === undefined ? (
 				<div className={GRID}>
-					<Skeleton className="aspect-[5/6] w-full" />
-					<Skeleton className="aspect-[5/6] w-full" />
+					<Skeleton className="aspect-5/6 w-full" />
+					<Skeleton className="aspect-5/6 w-full" />
 				</div>
 			) : groups.length === 0 ? (
 				<EmptyState

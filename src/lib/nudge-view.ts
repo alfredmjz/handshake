@@ -1,5 +1,7 @@
+import { makeNames } from "@/lib/group-access";
 import { shortDate } from "@/lib/group-view";
 import { summarizeGroup, type LedgerEntry, type LedgerMember } from "@/lib/ledger";
+import { readPayment } from "@/lib/payment-rules";
 import type { EntryRow, GroupRow, MemberRow, NudgeRow } from "@/lib/sync/types";
 
 // One nudge per sender and person per this long (the server's rule).
@@ -50,7 +52,7 @@ export function receivedNudges(
 	seenIds: ReadonlySet<string>
 ): ReceivedNudge[] {
 	const liveGroups = new Map(groups.filter((g) => !g.deletedAt).map((g) => [g.id, g]));
-	const byId = new Map(members.map((m) => [m.id, m]));
+	const names = makeNames(members, null);
 	const mine = new Set(
 		members.filter((m) => m.userId === userId && !m.deletedAt && liveGroups.has(m.groupId)).map((m) => m.id)
 	);
@@ -60,7 +62,7 @@ export function receivedNudges(
 		.map((n) => ({
 			...n,
 			groupName: liveGroups.get(n.groupId)!.name,
-			fromName: byId.get(n.fromMemberId)?.displayName ?? "Someone",
+			fromName: names.signed(n.fromMemberId),
 			unseen: !seenIds.has(n.id),
 		}));
 }
@@ -87,14 +89,15 @@ export function sentWhen(createdAt: string, now: Date): string {
 // nudge does not come back with a later debt.
 export function openNudge(nudge: NudgeRow | null, entries: EntryRow[], from: string, to: string): NudgeRow | null {
 	if (!nudge) return null;
-	const answered = entries.some(
-		(e) =>
-			e.kind === "payment" &&
-			e.paymentStatus === "confirmed" &&
+	const answered = entries.some((e) => {
+		const payment = readPayment(e);
+		return (
 			!e.deletedAt &&
-			e.shares.some((s) => s.memberId === to && s.paidCents > 0) &&
-			e.shares.some((s) => s.memberId === from && s.owedCents > 0) &&
-			Date.parse(e.confirmedAt ?? e.updatedAt) > Date.parse(nudge.createdAt)
-	);
+			!!payment?.countedAt &&
+			payment.from === to &&
+			payment.to === from &&
+			Date.parse(payment.countedAt) > Date.parse(nudge.createdAt)
+		);
+	});
 	return answered ? null : nudge;
 }

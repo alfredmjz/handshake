@@ -1,10 +1,6 @@
 import { describe, expect, test } from "bun:test";
 
 import {
-	canAnswer,
-	isNameTaken,
-	paymentCountsAtOnce,
-	pendingPaymentBetween,
 	planChange,
 	type ExpenseDraft,
 	type GroupIntent,
@@ -497,7 +493,7 @@ describe("planChange: mutations", () => {
 			plan(state("alex"), { type: "resolveConflict", conflictId: "c9", resolution: "merged", final: "deleted" })
 		).toEqual({
 			ok: false,
-			code: "HS422",
+			code: "HS404",
 			reason: "That conflict doesn't exist in this group",
 		});
 		expect(
@@ -588,25 +584,6 @@ describe("planChange: payments", () => {
 			code: "HS422",
 			reason: "Notes must be text of at most 1000 characters",
 		});
-	});
-
-	test("counts at once when the other side can't answer, or when you are the one paid", () => {
-		const alex = state("alex");
-		expect(canAnswer(MEMBERS.find((m) => m.id === "sam"))).toBe(true);
-		expect(canAnswer(MEMBERS.find((m) => m.id === "jo"))).toBe(false); // no login
-		expect(canAnswer(MEMBERS.find((m) => m.id === "kim"))).toBe(false); // left
-		expect(paymentCountsAtOnce(alex, "alex", "sam")).toBe(false);
-		expect(paymentCountsAtOnce(alex, "sam", "alex")).toBe(true);
-		expect(paymentCountsAtOnce(alex, "alex", "jo")).toBe(true);
-		expect(paymentCountsAtOnce(alex, "kim", "alex")).toBe(true);
-		expect(paymentCountsAtOnce(alex, "jo", "nina")).toBe(true);
-	});
-
-	test("pendingPaymentBetween finds it either way round", () => {
-		const entries = state("alex").entries;
-		expect(pendingPaymentBetween(entries, "alex", "sam")?.id).toBe("p-sam-alex");
-		expect(pendingPaymentBetween(entries, "sam", "alex")?.id).toBe("p-sam-alex");
-		expect(pendingPaymentBetween(entries, "jo", "alex")).toBeUndefined();
 	});
 
 	test("confirm, decline and undo", () => {
@@ -1045,13 +1022,6 @@ describe("group codes and unique names", () => {
 			code: "HS403",
 			reason: "Only the group's owner can do this",
 		});
-	});
-
-	test("isNameTaken compares active people's names ignoring case and outer spaces", () => {
-		expect(isNameTaken(MEMBERS, " jo ")).toBe(true);
-		expect(isNameTaken(MEMBERS, "KIM")).toBe(false);
-		expect(isNameTaken(MEMBERS, "Jo", "jo")).toBe(false);
-		expect(isNameTaken(MEMBERS, "Lee")).toBe(false);
 	});
 
 	test("addPerson refuses a name already in the group (HS409), not one of someone who left", () => {

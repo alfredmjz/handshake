@@ -1,4 +1,5 @@
 import type { ExpenseDraft } from "@/lib/changes";
+import { explainRounding } from "@/lib/ledger";
 import type { Category, ConflictResolution, EntryRow, Item, Share } from "@/lib/sync/types";
 
 // Pure helpers for the group and entry screens: how entries are grouped, who sees what, and conflicts.
@@ -49,11 +50,6 @@ export function joinNames(names: readonly string[]): string {
 	return `${names.slice(0, -1).join(", ")} and ${names.at(-1)}`;
 }
 
-// A list of names that starts a sentence: "You and Sam", "Alex and you".
-export function sentenceList(names: readonly string[]): string {
-	return joinNames(names.map((name, i) => (i > 0 && name === "You" ? "you" : name)));
-}
-
 type PaymentLike = Pick<EntryRow, "kind" | "paymentStatus" | "shares">;
 
 // Everyone sees bills and payments that count; a pending, declined or undone payment only its two people.
@@ -79,35 +75,17 @@ export function payerIds(entry: Pick<EntryRow, "shares">): string[] {
 	return entry.shares.filter((s) => s.paidCents > 0).map((s) => s.memberId);
 }
 
-// Cents each person's owed amount differs from rounding each payer's part normally: the cent a payer
-// covers (+1) or has taken off (−1). Only non-zero differences are returned.
+// Each person's net rounding cents across payers, from explainRounding: the cent a payer covers (+1) or
+// has taken off (-1). Only people in the shares with a non-zero net are returned.
 export function roundingCents(items: readonly Item[], shares: readonly Share[]): Map<string, number> {
-	const normal = new Map<string, bigint>();
-	for (const payer of new Set(items.map((i) => i.paidBy))) {
-		const payerItems = items.filter((i) => i.paidBy === payer && i.splitAmong.length > 0);
-		let d = 1n;
-		for (const item of payerItems) d = lcm(d, BigInt(item.splitAmong.length));
-		const num = new Map<string, bigint>();
-		for (const item of payerItems) {
-			const each = BigInt(item.amountCents) * (d / BigInt(item.splitAmong.length));
-			for (const who of item.splitAmong) num.set(who, (num.get(who) ?? 0n) + each);
-		}
-		for (const [who, n] of num) normal.set(who, (normal.get(who) ?? 0n) + (2n * n + d) / (2n * d));
-	}
+	const net = new Map<string, number>();
+	for (const move of explainRounding(items, shares)) net.set(move.memberId, (net.get(move.memberId) ?? 0) + move.cents);
 	const result = new Map<string, number>();
 	for (const share of shares) {
-		const diff = share.owedCents - Number(normal.get(share.memberId) ?? 0n);
-		if (diff !== 0) result.set(share.memberId, diff);
+		const cents = net.get(share.memberId) ?? 0;
+		if (cents !== 0) result.set(share.memberId, cents);
 	}
 	return result;
-}
-
-function gcd(a: bigint, b: bigint): bigint {
-	return b === 0n ? a : gcd(b, a % b);
-}
-
-function lcm(a: bigint, b: bigint): bigint {
-	return (a / gcd(a, b)) * b;
 }
 
 // The parts of a bill a conflict can differ in.

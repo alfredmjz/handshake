@@ -7,48 +7,11 @@
 BEGIN;
 CREATE EXTENSION IF NOT EXISTS pgtap WITH SCHEMA extensions;
 SELECT no_plan();
+\ir prelude.psql
 
 -- ---------------------------------------------------------------------------
--- Helpers: act as a signed-in user
+-- Helpers (the shared ones are in prelude.psql)
 -- ---------------------------------------------------------------------------
-CREATE FUNCTION pg_temp.sign_in(p_user UUID) RETURNS VOID LANGUAGE sql AS $$
-    SELECT set_config('request.jwt.claims', json_build_object(
-        'sub', p_user,
-        'role', 'authenticated',
-        'is_anonymous', COALESCE((SELECT is_anonymous FROM auth.users WHERE id = p_user), FALSE)
-    )::TEXT, true);
-$$;
-CREATE FUNCTION pg_temp.push_signed_in(p_mutations JSONB) RETURNS JSONB LANGUAGE sql SET role = 'authenticated' AS $$
-    SELECT public.push_changes(p_mutations);
-$$;
-CREATE FUNCTION pg_temp.pull_signed_in(p_cursors JSONB) RETURNS JSONB LANGUAGE sql SET role = 'authenticated' AS $$
-    SELECT public.pull_changes(p_cursors);
-$$;
-CREATE FUNCTION pg_temp.join_signed_in(p_token TEXT, p_claim UUID, p_name TEXT) RETURNS UUID LANGUAGE sql SET role = 'authenticated' AS $$
-    SELECT public.join_group(p_token, p_claim, p_name);
-$$;
-CREATE FUNCTION pg_temp.push(p_user UUID, p_mutation JSONB) RETURNS JSONB LANGUAGE plpgsql AS $$
-BEGIN
-    PERFORM pg_temp.sign_in(p_user);
-    RETURN pg_temp.push_signed_in(jsonb_build_array(jsonb_build_object('id', gen_random_uuid()) || p_mutation));
-END $$;
--- 'applied', or the rejection's code.
-CREATE FUNCTION pg_temp.try(p_user UUID, p_mutation JSONB) RETURNS TEXT LANGUAGE sql AS $$
-    SELECT COALESCE(r#>>'{rejected,0,code}', 'applied') FROM pg_temp.push(p_user, p_mutation) r;
-$$;
-CREATE FUNCTION pg_temp.pull(p_user UUID, p_cursors JSONB DEFAULT '{}') RETURNS JSONB LANGUAGE plpgsql AS $$
-BEGIN
-    PERFORM pg_temp.sign_in(p_user);
-    RETURN pg_temp.pull_signed_in(p_cursors);
-END $$;
-CREATE FUNCTION pg_temp.join(p_user UUID, p_token TEXT, p_claim UUID DEFAULT NULL) RETURNS UUID LANGUAGE plpgsql AS $$
-BEGIN
-    PERFORM pg_temp.sign_in(p_user);
-    RETURN pg_temp.join_signed_in(p_token, p_claim, NULL);
-END $$;
-CREATE FUNCTION pg_temp.version_of(p_entry UUID) RETURNS BIGINT LANGUAGE sql AS $$
-    SELECT row_version FROM public.ledger_entries WHERE id = p_entry;
-$$;
 CREATE FUNCTION pg_temp.category_of(p_entry UUID) RETURNS TEXT LANGUAGE sql AS $$
     SELECT category FROM public.ledger_entries WHERE id = p_entry;
 $$;
@@ -90,10 +53,8 @@ $$;
 -- Group 1: Alex (owner), Sam (member). Users aaaa… Alex, bbbb… Sam; members 2000…a1 Alex, …b1 Sam;
 -- entries 3000…N; conflicts 4000…N.
 -- ---------------------------------------------------------------------------
-INSERT INTO auth.users (id, email, instance_id, aud, role, is_anonymous, raw_user_meta_data)
-VALUES
-    ('aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa', 'alex@categories.test', '00000000-0000-0000-0000-000000000000', 'authenticated', 'authenticated', FALSE, '{"display_name": "Alex"}'),
-    ('bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb', 'sam@categories.test', '00000000-0000-0000-0000-000000000000', 'authenticated', 'authenticated', FALSE, '{"display_name": "Sam"}');
+SELECT pg_temp.add_user('aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa', 'alex@categories.test', 'Alex');
+SELECT pg_temp.add_user('bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb', 'sam@categories.test', 'Sam');
 
 -- ---------------------------------------------------------------------------
 -- group.create with a note

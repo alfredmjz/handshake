@@ -9,6 +9,7 @@ import { PaymentArrow } from "@/components/editors/payment-arrow";
 import { PaymentEditor } from "@/components/editors/payment-editor";
 import { ShakeConfirmation } from "@/components/editors/shake-confirmation";
 import { CompleteSummary } from "@/components/group/complete-summary";
+import { useGroupView } from "@/components/group/group-data";
 import { Amount } from "@/components/money";
 import { EmptyState, Notice } from "@/components/notices";
 import { BackLink, Screen, ScreenHeader, Section } from "@/components/screen";
@@ -22,10 +23,7 @@ import { List, ListRow } from "@/components/ui/list";
 import { Inline, Stack } from "@/components/ui/stack";
 import { useCommit, type Intent } from "@/lib/changes";
 import { useGroupSummary, usePendingPayments } from "@/lib/entries";
-import { useGroup } from "@/lib/groups";
-import { useMembers, useMyMember } from "@/lib/members";
 import { formatAmount } from "@/lib/money";
-import { allowedWhenCompleted, may } from "@/lib/permissions";
 import {
 	countPayments,
 	guestsLosingAccess,
@@ -34,6 +32,7 @@ import {
 	type PaymentCard,
 	type SettleRow,
 } from "@/lib/settle-view";
+import { byLabel } from "@/lib/utils";
 
 type PaymentDraft = { from: string; to: string; amountCents: number };
 
@@ -41,9 +40,7 @@ export function SettleUpPage() {
 	const { groupId = "" } = useParams();
 	const commit = useCommit();
 	const navigate = useNavigate();
-	const group = useGroup(groupId);
-	const members = useMembers(groupId, { includeLeft: true });
-	const me = useMyMember(groupId);
+	const view = useGroupView(groupId);
 	const summary = useGroupSummary(groupId);
 	const pending = usePendingPayments(groupId);
 
@@ -55,8 +52,8 @@ export function SettleUpPage() {
 	const [declineNote, setDeclineNote] = useState("");
 	const [completing, setCompleting] = useState(false);
 
-	if (group === undefined || members === undefined || me === undefined || !summary || !pending) return null;
-	if (group === null || group.deletedAt) {
+	if (view === undefined || !summary || !pending) return null;
+	if (view === null) {
 		return (
 			<Screen>
 				<BackLink to="/">Groups</BackLink>
@@ -75,12 +72,11 @@ export function SettleUpPage() {
 		}
 	};
 
+	const { group, members, me } = view;
 	const completed = !!group.completedAt;
-	const allowed = (action: Parameters<typeof may>[0]) =>
-		!!me && may(action, me.role) && (!completed || allowedWhenCompleted(action));
-	const byId = new Map(members.map((m) => [m.id, m]));
-	const name = (id: string) => (id === me?.id ? "You" : (byId.get(id)?.displayName ?? "Someone"));
-	const object = (id: string) => (id === me?.id ? "you" : name(id));
+	const allowed = view.may;
+	const name = view.names.of;
+	const object = view.names.inSentence;
 
 	const rows = settleRows(members, summary, pending, me?.id ?? null);
 	const settled = rows.filter((r) => r.state === "settled").length;
@@ -108,9 +104,7 @@ export function SettleUpPage() {
 
 	const guests = guestsLosingAccess(members);
 	const owing = [...summary.debts].sort(
-		(x, y) =>
-			name(x.fromMemberId).localeCompare(name(y.fromMemberId), undefined, { sensitivity: "base" }) ||
-			name(x.toMemberId).localeCompare(name(y.toMemberId), undefined, { sensitivity: "base" })
+		(x, y) => byLabel(name(x.fromMemberId), name(y.fromMemberId)) || byLabel(name(x.toMemberId), name(y.toMemberId))
 	);
 	const debtors = [...new Set(summary.debts.map((d) => d.fromMemberId))];
 	const totalOwed = summary.debts.reduce((sum, d) => sum + d.amountCents, 0);
@@ -272,7 +266,7 @@ function PersonRow({
 			<ListRow
 				asChild
 				leading={<Face seed={id} name="" size={36} faded={!!row.member.deletedAt} />}
-				title={`${name(id)}${row.member.deletedAt ? " (left)" : ""}`}
+				title={name(id)}
 				trailing={
 					<span className="flex items-center gap-control">
 						<span className="flex flex-col items-end gap-0.5">

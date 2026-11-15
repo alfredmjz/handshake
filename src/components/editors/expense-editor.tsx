@@ -1,7 +1,8 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useState } from "react";
 import { Plus, X } from "lucide-react";
 
 import { EditorDialog } from "@/components/editor-dialog";
+import { useGroupView } from "@/components/group/group-data";
 import { Amount } from "@/components/money";
 import { Notice } from "@/components/notices";
 import { CategoryPicker, PeoplePicker, PersonPicker, type PersonOption } from "@/components/pickers";
@@ -12,15 +13,13 @@ import { Field, FieldSet } from "@/components/ui/field";
 import { Input, Textarea } from "@/components/ui/input";
 import { Inline, Stack } from "@/components/ui/stack";
 import { CATEGORIES } from "@/lib/categories";
-import { toLedgerMembers, useCommit, type ExpenseDraft } from "@/lib/changes";
+import { useCommit, type ExpenseDraft } from "@/lib/changes";
 import { useEntry } from "@/lib/entries";
-import { useGroup } from "@/lib/groups";
+import { makeNames, NOT_IN_GROUP, toLedgerMembers } from "@/lib/group-access";
 import { newId } from "@/lib/ids";
-import { computeShares, validateEntry, type Item, type Share } from "@/lib/ledger";
-import { useMembers, useMyMember } from "@/lib/members";
+import { computeShares, explainRounding, validateEntry, type Item, type Share } from "@/lib/ledger";
 import { parseAmount } from "@/lib/money";
-import { allowedWhenCompleted, may } from "@/lib/permissions";
-import { billItems, roundingNotes } from "@/lib/settle-view";
+import { billItems } from "@/lib/settle-view";
 import type { Category, EntryRow, MemberRow } from "@/lib/sync/types";
 import { byText } from "@/lib/utils";
 
@@ -112,17 +111,19 @@ function toItems(draft: Draft): Item[] | null {
 	return items;
 }
 
+const NO_ONE: MemberRow[] = [];
+
 export function ExpenseEditor({ groupId, entryId, open, onOpenChange }: ExpenseEditorProps) {
 	const commit = useCommit();
-	const group = useGroup(groupId);
-	const members = useMembers(groupId, { includeLeft: true });
-	const me = useMyMember(groupId);
+	const view = useGroupView(groupId);
 	const entry = useEntry(entryId ?? "");
 	const [draft, setDraft] = useState<Draft | null>(null);
 	const [saving, setSaving] = useState(false);
 
-	const active = useMemo(() => (members ?? []).filter((m) => !m.deletedAt), [members]);
-	const ready = group !== undefined && members !== undefined && me !== undefined && (!entryId || entry !== undefined);
+	// A missing or deleted group reads as not being in it.
+	const me = view?.me ?? null;
+	const active = view?.active ?? NO_ONE;
+	const ready = view !== undefined && (!entryId || entry !== undefined);
 
 	// A fresh draft each time the editor opens.
 	useEffect(() => {
@@ -160,16 +161,9 @@ export function ExpenseEditor({ groupId, entryId, open, onOpenChange }: ExpenseE
 	}, 0);
 	const shares = items ? computeShares(items) : null;
 
-	const action = entryId ? "entry.update" : "entry.create";
-	const blocked = !me
-		? "You're not in this group."
-		: group?.completedAt && !allowedWhenCompleted(action)
-			? "This group is completed."
-			: !may(action, me.role)
-				? "Guests can't edit bills."
-				: entryId && entry?.kind === "payment"
-					? "Payments can't be edited."
-					: null;
+	const blocked =
+		(view ? view.whyNot(entryId ? "entry.update" : "entry.create") : NOT_IN_GROUP) ??
+		(entryId && entry?.kind === "payment" ? "Payments can't be edited." : null);
 
 	const valid =
 		!!draft &&
@@ -185,7 +179,7 @@ export function ExpenseEditor({ groupId, entryId, open, onOpenChange }: ExpenseE
 				items,
 				shares,
 			},
-			toLedgerMembers(members ?? [])
+			toLedgerMembers(view?.members ?? NO_ONE)
 		).length === 0;
 
 	const save = async () => {
@@ -213,14 +207,17 @@ export function ExpenseEditor({ groupId, entryId, open, onOpenChange }: ExpenseE
 		}
 	};
 
-	const names = new Map((members ?? []).map((m) => [m.id, m]));
-	const label = (id: string) =>
-		id === me?.id ? "You" : `${names.get(id)?.displayName ?? "Someone"}${names.get(id)?.deletedAt ? " (left)" : ""}`;
+	// Names show only with a draft, which waits for the group.
+	const names = view?.names ?? makeNames(NO_ONE, null);
+	const label = names.of;
 
 	// Active people, plus anyone who left but is already on this item: you first, then by name.
 	const optionsFor = (item: ItemDraft | undefined): PersonOption[] => {
 		const ids = new Set(active.map((m) => m.id));
-		for (const id of [item?.paidBy, ...(item?.splitAmong ?? [])]) if (id && names.has(id)) ids.add(id);
+		for (const id of [item?.paidBy, ...(item?.splitAmong ?? [])]) {
+			const person = names.member(id);
+			if (person) ids.add(person.id);
+		}
 		const options = [...ids].map((id) => ({ id, label: label(id) })).sort(byText((p) => p.label));
 		return [...options.filter((p) => p.id === me?.id), ...options.filter((p) => p.id !== me?.id)];
 	};
@@ -269,7 +266,7 @@ export function ExpenseEditor({ groupId, entryId, open, onOpenChange }: ExpenseE
 			canSubmit={valid && !blocked && !saving}
 			onSubmit={save}
 		>
-			{ready && !me && <Notice>You're not in this group.</Notice>}
+			{ready && !me && <Notice>{NOT_IN_GROUP}</Notice>}
 			{draft && first && (
 				<>
 					{blocked && <Notice>{blocked}</Notice>}
@@ -447,7 +444,7 @@ function ResultsWell({
 		.filter((s) => s.paidCents > 0 || s.owedCents > 0)
 		.sort((a, b) => Number(a.memberId === me) - Number(b.memberId === me) || byText(label)(a.memberId, b.memberId));
 	const possessive = (id: string) => (id === me ? "Your" : `${label(id)}'s`);
-	const notes = roundingNotes(items, shares).map((n) => {
+	const notes = explainRounding(items, shares).map((n) => {
 		const cents = `${Math.abs(n.cents)}¢`;
 		if (n.memberId === n.payerId)
 			return n.memberId === me

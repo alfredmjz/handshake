@@ -1,42 +1,7 @@
-import { canAnswer, paymentSides } from "@/lib/changes";
-import { byLabel } from "@/lib/groups";
-import type { Debt, GroupSummary, Item, Share } from "@/lib/ledger";
+import type { Debt, GroupSummary, Item } from "@/lib/ledger";
+import { pendingPaymentBetween, readPayment, recordingRule } from "@/lib/payment-rules";
 import type { EntryRow, MemberRow, Role } from "@/lib/sync/types";
-
-// A part of a bill that rounding moved off its exact share: `cents` is what was stored minus the share
-// rounded on its own (the payer covering the odd cent, or a cent taken off someone else's part).
-export type RoundingNote = { memberId: string; payerId: string; cents: number };
-
-function gcd(a: bigint, b: bigint): bigint {
-	return b === 0n ? a : gcd(b, a % b);
-}
-
-// Where computeShares had to move cents so a payer's parts add up, per person and payer.
-export function roundingNotes(items: Item[], shares: Share[]): RoundingNote[] {
-	const notes: RoundingNote[] = [];
-	const shareOf = new Map(shares.map((s) => [s.memberId, s]));
-	for (const payer of new Set(items.map((i) => i.paidBy))) {
-		const payerItems = items.filter((i) => i.paidBy === payer);
-		let d = 1n;
-		for (const item of payerItems) {
-			const n = BigInt(item.splitAmong.length);
-			d = (d / gcd(d, n)) * n;
-		}
-		const exact = new Map<string, bigint>();
-		for (const item of payerItems) {
-			const each = BigInt(item.amountCents) * (d / BigInt(item.splitAmong.length));
-			for (const who of item.splitAmong) exact.set(who, (exact.get(who) ?? 0n) + each);
-		}
-		const people = new Set([...exact.keys(), payer]);
-		for (const who of people) {
-			const num = exact.get(who) ?? 0n;
-			const rounded = Number((2n * num + d) / (2n * d));
-			const stored = shareOf.get(who)?.owedTo[payer] ?? 0;
-			if (stored !== rounded) notes.push({ memberId: who, payerId: payer, cents: stored - rounded });
-		}
-	}
-	return notes;
-}
+import { byLabel } from "@/lib/utils";
 
 // A bill's items, or one item rebuilt from its shares for a bill stored without them.
 export function billItems(entry: EntryRow): Item[] {
@@ -103,11 +68,20 @@ export function settleRows(
 
 export type PaymentCard =
 	// A debt to settle: Shake on it opens the payment editor.
-	| { kind: "record"; from: string; to: string; amountCents: number }
-	// A pending payment this person answers: Shake on it confirms it.
-	| { kind: "answer"; entryId: string; from: string; to: string; amountCents: number }
+	| { kind: "record"; from: string; to: string; amountCents: number; debt: Debt }
+	// A pending payment this person answers: Shake on it confirms it. `debt` is the debt it pays, if any.
+	| { kind: "answer"; entry: EntryRow; entryId: string; from: string; to: string; amountCents: number; debt?: Debt }
 	// A pending payment waiting for the other side; `canUndo` when this person recorded it.
-	| { kind: "waiting"; entryId: string; from: string; to: string; amountCents: number; canUndo: boolean };
+	| {
+			kind: "waiting";
+			entry: EntryRow;
+			entryId: string;
+			from: string;
+			to: string;
+			amountCents: number;
+			canUndo: boolean;
+			debt?: Debt;
+	  };
 
 // The payment cards for one person: their debts either way (or the pending payment between the pair
 // in its place), their other pending payments, and, for owners and members, debts between two people who
@@ -122,39 +96,40 @@ export function paymentCards(
 	const cards: PaymentCard[] = [];
 	const used = new Set<string>();
 
-	const pendingCard = (entry: EntryRow): PaymentCard | null => {
-		const { from, to } = paymentSides(entry);
-		if (!from || !to) return null;
-		const mayAnswer =
-			(me.memberId === from && !entry.payerConfirmedAt) || (me.memberId === to && !entry.receiverConfirmedAt);
-		return mayAnswer
-			? { kind: "answer", entryId: entry.id, from, to, amountCents: entry.amountCents }
-			: {
-					kind: "waiting",
-					entryId: entry.id,
-					from,
-					to,
-					amountCents: entry.amountCents,
-					canUndo: entry.createdByMemberId === me.memberId,
-				};
+	const pendingCard = (entry: EntryRow, debt?: Debt): PaymentCard | null => {
+		const payment = readPayment(entry, me.memberId);
+		if (!payment) return null;
+		const sides = {
+			entry,
+			entryId: entry.id,
+			from: payment.from,
+			to: payment.to,
+			amountCents: entry.amountCents,
+			debt,
+		};
+		return payment.answeringAs ? { kind: "answer", ...sides } : { kind: "waiting", ...sides, canUndo: payment.mayUndo };
 	};
 	const pendingBetween = (a: string, b: string) =>
-		pending.find(
-			(e) => !used.has(e.id) && e.shares.some((s) => s.memberId === a) && e.shares.some((s) => s.memberId === b)
+		pendingPaymentBetween(
+			pending.filter((e) => !used.has(e.id)),
+			a,
+			b
 		);
 
 	for (const debt of debts) {
 		const mine = debt.fromMemberId === me.memberId || debt.toMemberId === me.memberId;
 		const forOthers =
-			!mine && me.role !== "guest" && !canAnswer(byId.get(debt.fromMemberId)) && !canAnswer(byId.get(debt.toMemberId));
+			!mine &&
+			me.role !== "guest" &&
+			recordingRule(me.memberId, byId.get(debt.fromMemberId), byId.get(debt.toMemberId)).mayRecord;
 		if (!mine && !forOthers) continue;
 		const waiting = mine ? pendingBetween(debt.fromMemberId, debt.toMemberId) : undefined;
-		const card = waiting ? pendingCard(waiting) : null;
+		const card = waiting ? pendingCard(waiting, debt) : null;
 		if (waiting && card) {
 			used.add(waiting.id);
 			cards.push(card);
 		} else {
-			cards.push({ kind: "record", from: debt.fromMemberId, to: debt.toMemberId, amountCents: debt.amountCents });
+			cards.push({ kind: "record", from: debt.fromMemberId, to: debt.toMemberId, amountCents: debt.amountCents, debt });
 		}
 	}
 	for (const entry of pending) {
@@ -170,12 +145,6 @@ export function guestsLosingAccess(members: MemberRow[]): MemberRow[] {
 	return members
 		.filter((m) => m.role === "guest" && m.userId !== null && !m.deletedAt)
 		.sort((a, b) => byLabel(a.displayName, b.displayName));
-}
-
-// "Kim", "Kim and Lee", "Kim, Lee and Mo".
-export function listNames(names: string[]): string {
-	if (names.length <= 1) return names.join("");
-	return `${names.slice(0, -1).join(", ")} and ${names[names.length - 1]}`;
 }
 
 const WORDS = ["No", "One", "Two", "Three", "Four", "Five", "Six", "Seven", "Eight", "Nine", "Ten"];

@@ -47,6 +47,8 @@ export function cn(...inputs: ClassValue[]) {
 }
 
 // Lists and pickers sort by the label people read, case-insensitive.
+export const byLabel = (a: string, b: string) => a.localeCompare(b, undefined, { sensitivity: "base" });
+
 export function byText<T>(label: (item: T) => string) {
-	return (a: T, b: T) => label(a).localeCompare(label(b), undefined, { sensitivity: "base" });
+	return (a: T, b: T) => byLabel(label(a), label(b));
 }

@@ -20,7 +20,7 @@ import {
 
 const T = "2026-11-02T09:30:00.123456+00:00";
 
-// Each raw row has exactly the keys pull_changes() emits (supabase/migrations/012_group_codes.sql).
+// Each raw row has exactly the keys pull_changes() emits (supabase/migrations/020_baseline.sql).
 const rawGroup: RawGroup = {
 	id: "g1",
 	name: "Japan 2027",

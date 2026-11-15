@@ -35,6 +35,37 @@ function hasRepeats(ids: string[]): boolean {
 	return new Set(ids).size !== ids.length;
 }
 
+// computeShares' precondition.
+function computable(items: readonly Item[]): boolean {
+	return (
+		items.length > 0 &&
+		items.every(
+			(item) =>
+				Number.isSafeInteger(item.amountCents) &&
+				item.amountCents > 0 &&
+				item.splitAmong.length > 0 &&
+				!hasRepeats(item.splitAmong)
+		)
+	);
+}
+
+// One payer's items as exact parts over a common denominator d: person -> numerator, in split order.
+function exactParts(payerItems: readonly Item[]): { d: bigint; num: Map<string, bigint> } {
+	let d = 1n;
+	for (const item of payerItems) {
+		const n = BigInt(item.splitAmong.length);
+		d = (d / gcd(d, n)) * n;
+	}
+	const num = new Map<string, bigint>();
+	for (const item of payerItems) {
+		const each = BigInt(item.amountCents) * (d / BigInt(item.splitAmong.length));
+		for (const who of item.splitAmong) num.set(who, (num.get(who) ?? 0n) + each);
+	}
+	return { d, num };
+}
+
+const roundHalfUp = (num: bigint, d: bigint) => (2n * num + d) / (2n * d);
+
 export function computeShares(items: Item[]): Share[] {
 	if (items.length === 0) throw new RangeError("A bill needs at least one item");
 	for (const item of items) {
@@ -64,21 +95,12 @@ export function computeShares(items: Item[]): Share[] {
 
 	for (const payer of new Set(items.map((item) => item.paidBy))) {
 		const payerItems = items.filter((item) => item.paidBy === payer);
-		let d = 1n;
-		for (const item of payerItems) {
-			const n = BigInt(item.splitAmong.length);
-			d = (d / gcd(d, n)) * n;
-		}
+		const exact = exactParts(payerItems);
+		const d = exact.d;
+		const num = order.map((id) => exact.num.get(id) ?? 0n);
+		const total = payerItems.reduce((sum, item) => sum + BigInt(item.amountCents), 0n);
 
-		const num = order.map(() => 0n);
-		let total = 0n;
-		for (const item of payerItems) {
-			const each = BigInt(item.amountCents) * (d / BigInt(item.splitAmong.length));
-			for (const who of item.splitAmong) num[position.get(who)!] += each;
-			total += BigInt(item.amountCents);
-		}
-
-		const part = num.map((n) => (2n * n + d) / (2n * d));
+		const part = num.map((n) => roundHalfUp(n, d));
 		const p = position.get(payer)!;
 		const diff = total - part.reduce((sum, x) => sum + x, 0n);
 		if (part[p] + diff >= 0n) {
@@ -108,6 +130,27 @@ export function computeShares(items: Item[]): Share[] {
 	}
 
 	return order.map((memberId, k) => ({ memberId, paidCents: paid[k], owedCents: owed[k], owedTo: owedTo[k] }));
+}
+
+// A part of a bill that rounding moved: `cents` is what memberId owes payerId in the shares minus that part
+// rounded on its own (+1: the payer covers the odd cent; -1: a cent taken off).
+export type RoundingMove = { memberId: string; payerId: string; cents: number };
+
+// Where computeShares moved cents so each payer's parts add up, by payer then person in split order. Items
+// computeShares refuses (none, an empty or repeated split, a bad amount) have no rounding to explain: [].
+export function explainRounding(items: readonly Item[], shares: readonly Share[]): RoundingMove[] {
+	if (!computable(items)) return [];
+	const moves: RoundingMove[] = [];
+	const shareOf = new Map(shares.map((s) => [s.memberId, s]));
+	for (const payer of new Set(items.map((i) => i.paidBy))) {
+		const { d, num } = exactParts(items.filter((i) => i.paidBy === payer));
+		for (const who of new Set([...num.keys(), payer])) {
+			const rounded = Number(roundHalfUp(num.get(who) ?? 0n, d));
+			const stored = shareOf.get(who)?.owedTo[payer] ?? 0;
+			if (stored !== rounded) moves.push({ memberId: who, payerId: payer, cents: stored - rounded });
+		}
+	}
+	return moves;
 }
 
 // Order-independent, like the server's EXCEPT comparison; zero parts don't count.
@@ -259,6 +302,12 @@ export function validateEntry(entry: EntryDraft, members: LedgerMember[]): Entry
 	return problems;
 }
 
+// Whether an entry counts in debts, balances and API totals, as SQL's private.entry_counts: a bill that
+// isn't deleted, or a payment that is confirmed.
+export function countsTowardsDebts(entry: Pick<LedgerEntry, "kind" | "deletedAt" | "paymentStatus">): boolean {
+	return entry.kind === "expense" ? entry.deletedAt === null : entry.paymentStatus === "confirmed";
+}
+
 export function summarizeGroup(entries: Iterable<LedgerEntry>, members: LedgerMember[]): GroupSummary {
 	const byId = new Map(members.map((member) => [member.id, member]));
 	const known = (id: string) => {
@@ -269,8 +318,7 @@ export function summarizeGroup(entries: Iterable<LedgerEntry>, members: LedgerMe
 	const owes = new Map<string, Map<string, number>>();
 
 	for (const entry of entries) {
-		if (entry.deletedAt !== null) continue;
-		if (entry.kind === "payment" && entry.paymentStatus !== "confirmed") continue;
+		if (!countsTowardsDebts(entry)) continue;
 		for (const share of entry.shares) {
 			known(share.memberId);
 			balance.set(share.memberId, (balance.get(share.memberId) ?? 0) + share.paidCents - share.owedCents);

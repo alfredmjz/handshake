@@ -1,16 +1,6 @@
 import type { LocalTables, Rows } from "@/lib/sync/local";
-import type {
-	ConflictRow,
-	CursorRow,
-	EntryRow,
-	GroupRow,
-	GuestCodeRow,
-	InviteRow,
-	InviteTokenRow,
-	MemberRow,
-	NudgeRow,
-	Share,
-} from "@/lib/sync/types";
+import { rowGroup, rowKey, TABLE_NAMES, type RowOf, type TableName } from "@/lib/sync/tables";
+import type { EntryRow, GroupRow, MemberRow, Share } from "@/lib/sync/types";
 
 export type MemoryRows<T> = Rows<T> & { map: Map<string, T> };
 
@@ -29,58 +19,20 @@ export function memoryRows<T>(key: (row: T) => string, groupOf: (row: T) => stri
 	};
 }
 
+type MemoryReplica = { [K in TableName]: MemoryRows<RowOf<K>> };
+
 export function createMemoryTables() {
-	const groups = memoryRows<GroupRow>(
-		(r) => r.id,
-		(r) => r.id
-	);
-	const members = memoryRows<MemberRow>(
-		(r) => r.id,
-		(r) => r.groupId
-	);
-	const entries = memoryRows<EntryRow>(
-		(r) => r.id,
-		(r) => r.groupId
-	);
-	const conflicts = memoryRows<ConflictRow>(
-		(r) => r.id,
-		(r) => r.groupId
-	);
-	const invites = memoryRows<InviteRow>(
-		(r) => r.id,
-		(r) => r.groupId
-	);
-	const inviteTokens = memoryRows<InviteTokenRow>(
-		(r) => r.inviteId,
-		(r) => r.groupId
-	);
-	const nudges = memoryRows<NudgeRow>(
-		(r) => r.id,
-		(r) => r.groupId
-	);
-	const guestCodes = memoryRows<GuestCodeRow>(
-		(r) => r.memberId,
-		(r) => r.groupId
-	);
-	const cursors = memoryRows<CursorRow>(
-		(r) => r.groupId,
-		(r) => r.groupId
-	);
-
-	const tables: LocalTables = {
-		groups,
-		members,
-		entries,
-		conflicts,
-		invites,
-		inviteTokens,
-		nudges,
-		guestCodes,
-		cursors,
-		groupIds: async () => [...groups.map.keys()],
-	};
-
-	return { tables, groups, members, entries, conflicts, invites, inviteTokens, nudges, guestCodes, cursors };
+	const replica = Object.fromEntries(
+		TABLE_NAMES.map((name) => [
+			name,
+			memoryRows<RowOf<typeof name>>(
+				(row) => rowKey(name, row),
+				(row) => rowGroup(name, row)
+			),
+		])
+	) as MemoryReplica;
+	const tables: LocalTables = { ...replica, groupIds: async () => [...replica.groups.map.keys()] };
+	return { tables, ...replica };
 }
 
 export function serverGroup(overrides: Partial<GroupRow> & Pick<GroupRow, "id">): GroupRow {

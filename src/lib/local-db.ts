@@ -1,33 +1,18 @@
 import Dexie, { type EntityTable } from "dexie";
 
-import type {
-	ConflictRow,
-	CursorRow,
-	EntryRow,
-	GroupRow,
-	GuestCodeRow,
-	InviteRow,
-	InviteTokenRow,
-	MemberRow,
-	Mutation,
-	NudgeRow,
-} from "@/lib/sync/types";
+import type { KeyOf, RowOf, TableName } from "@/lib/sync/tables";
+import type { Mutation } from "@/lib/sync/types";
 
 export type OutboxEntry = { seq: number; id: string; mutation: Mutation };
-export type CursorEntry = CursorRow;
 type MetaEntry = { key: string; value: string };
 
+type ReplicaTables = { [K in TableName]: EntityTable<RowOf<K>, Extract<KeyOf<K>, keyof RowOf<K>>> };
+
+// The replica's tables come from tables.ts; a new one still needs a version below that creates it.
+export interface LocalDb extends ReplicaTables {}
+
 export class LocalDb extends Dexie {
-	groups!: EntityTable<GroupRow, "id">;
-	members!: EntityTable<MemberRow, "id">;
-	entries!: EntityTable<EntryRow, "id">;
-	conflicts!: EntityTable<ConflictRow, "id">;
-	invites!: EntityTable<InviteRow, "id">;
-	inviteTokens!: EntityTable<InviteTokenRow, "inviteId">;
-	nudges!: EntityTable<NudgeRow, "id">;
-	guestCodes!: EntityTable<GuestCodeRow, "memberId">;
 	outbox!: EntityTable<OutboxEntry, "seq">;
-	cursors!: EntityTable<CursorEntry, "groupId">;
 	meta!: EntityTable<MetaEntry, "key">;
 
 	constructor(name = "handshake") {

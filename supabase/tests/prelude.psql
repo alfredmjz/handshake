@@ -1,0 +1,143 @@
+-- ============================================================================
+-- The shared pgTAP prelude: each test file pulls it in with `\ir prelude.psql` after its plan, then states
+-- only its own scenario. pg_prove runs *.sql and *.pg only, so this file is never run on its own.
+-- Helpers named *_signed_in run as `authenticated` with the claims sign_in() set; the plain ones sign in
+-- first, so a test reads as "who does what".
+-- ============================================================================
+
+-- ---------------------------------------------------------------------------
+-- People: an email user, or a guest (an anonymous auth user)
+-- ---------------------------------------------------------------------------
+CREATE FUNCTION pg_temp.add_user(p_user UUID, p_email TEXT, p_display_name TEXT) RETURNS VOID LANGUAGE sql AS $$
+    INSERT INTO auth.users (id, email, instance_id, aud, role, is_anonymous, raw_user_meta_data)
+    VALUES (p_user, p_email, '00000000-0000-0000-0000-000000000000', 'authenticated', 'authenticated', FALSE,
+        jsonb_build_object('display_name', p_display_name));
+$$;
+CREATE FUNCTION pg_temp.add_guest(p_user UUID) RETURNS VOID LANGUAGE sql AS $$
+    INSERT INTO auth.users (id, email, instance_id, aud, role, is_anonymous, raw_user_meta_data)
+    VALUES (p_user, NULL, '00000000-0000-0000-0000-000000000000', 'authenticated', 'authenticated', TRUE, '{}');
+$$;
+
+-- ---------------------------------------------------------------------------
+-- Act as a signed-in user (a guest when their auth user is anonymous), or signed out
+-- ---------------------------------------------------------------------------
+CREATE FUNCTION pg_temp.sign_in(p_user UUID) RETURNS VOID LANGUAGE sql AS $$
+    SELECT set_config('request.jwt.claims', json_build_object(
+        'sub', p_user,
+        'role', 'authenticated',
+        'is_anonymous', COALESCE((SELECT is_anonymous FROM auth.users WHERE id = p_user), FALSE)
+    )::TEXT, true);
+$$;
+CREATE FUNCTION pg_temp.push_signed_in(p_mutations JSONB) RETURNS JSONB LANGUAGE sql SET role = 'authenticated' AS $$
+    SELECT public.push_changes(p_mutations);
+$$;
+CREATE FUNCTION pg_temp.pull_signed_in(p_cursors JSONB) RETURNS JSONB LANGUAGE sql SET role = 'authenticated' AS $$
+    SELECT public.pull_changes(p_cursors);
+$$;
+CREATE FUNCTION pg_temp.join_signed_in(p_token TEXT, p_claim UUID, p_name TEXT) RETURNS UUID LANGUAGE sql SET role = 'authenticated' AS $$
+    SELECT public.join_group(p_token, p_claim, p_name);
+$$;
+CREATE FUNCTION pg_temp.join_code_signed_in(p_code TEXT, p_claim UUID, p_name TEXT, p_personal TEXT) RETURNS UUID LANGUAGE sql SET role = 'authenticated' AS $$
+    SELECT public.join_with_code(p_code, p_claim, p_name, p_personal);
+$$;
+CREATE FUNCTION pg_temp.upgrade_signed_in() RETURNS VOID LANGUAGE sql SET role = 'authenticated' AS $$
+    SELECT public.upgrade_guest();
+$$;
+CREATE FUNCTION pg_temp.create_token_signed_in(p_name TEXT) RETURNS JSONB LANGUAGE sql SET role = 'authenticated' AS $$
+    SELECT public.create_api_token(p_name);
+$$;
+-- 'ok', or the SQLSTATE of what failed.
+CREATE FUNCTION pg_temp.sqlstate_signed_in(p_sql TEXT) RETURNS TEXT LANGUAGE plpgsql SET role = 'authenticated' AS $$
+BEGIN
+    EXECUTE p_sql;
+    RETURN 'ok';
+EXCEPTION WHEN OTHERS THEN
+    RETURN SQLSTATE;
+END $$;
+CREATE FUNCTION pg_temp.sqlstate_signed_out(p_sql TEXT) RETURNS TEXT LANGUAGE plpgsql SET role = 'anon' AS $$
+BEGIN
+    PERFORM set_config('request.jwt.claims', '{"role": "anon"}', true);
+    EXECUTE p_sql;
+    RETURN 'ok';
+EXCEPTION WHEN OTHERS THEN
+    RETURN SQLSTATE;
+END $$;
+
+-- ---------------------------------------------------------------------------
+-- Who does what
+-- ---------------------------------------------------------------------------
+-- One mutation, under a fresh mutation id.
+CREATE FUNCTION pg_temp.push(p_user UUID, p_mutation JSONB) RETURNS JSONB LANGUAGE plpgsql AS $$
+BEGIN
+    PERFORM pg_temp.sign_in(p_user);
+    RETURN pg_temp.push_signed_in(jsonb_build_array(jsonb_build_object('id', gen_random_uuid()) || p_mutation));
+END $$;
+-- 'applied', or the rejection's code.
+CREATE FUNCTION pg_temp.try(p_user UUID, p_mutation JSONB) RETURNS TEXT LANGUAGE sql AS $$
+    SELECT COALESCE(r#>>'{rejected,0,code}', 'applied') FROM pg_temp.push(p_user, p_mutation) r;
+$$;
+-- 'applied', or the rejection's code and reason.
+CREATE FUNCTION pg_temp.try_reason(p_user UUID, p_mutation JSONB) RETURNS TEXT LANGUAGE sql AS $$
+    SELECT COALESCE((r#>>'{rejected,0,code}') || ' ' || (r#>>'{rejected,0,reason}'), 'applied') FROM pg_temp.push(p_user, p_mutation) r;
+$$;
+-- The rejection's reason (NULL when applied).
+CREATE FUNCTION pg_temp.reason(p_user UUID, p_mutation JSONB) RETURNS TEXT LANGUAGE sql AS $$
+    SELECT r#>>'{rejected,0,reason}' FROM pg_temp.push(p_user, p_mutation) r;
+$$;
+CREATE FUNCTION pg_temp.pull(p_user UUID, p_cursors JSONB DEFAULT '{}') RETURNS JSONB LANGUAGE plpgsql AS $$
+BEGIN
+    PERFORM pg_temp.sign_in(p_user);
+    RETURN pg_temp.pull_signed_in(p_cursors);
+END $$;
+-- Join with an invite token.
+CREATE FUNCTION pg_temp.join(p_user UUID, p_token TEXT, p_claim UUID DEFAULT NULL, p_name TEXT DEFAULT NULL) RETURNS UUID LANGUAGE plpgsql AS $$
+BEGIN
+    PERFORM pg_temp.sign_in(p_user);
+    RETURN pg_temp.join_signed_in(p_token, p_claim, p_name);
+END $$;
+-- Join with a group code (and a guest's personal code to come back as them).
+CREATE FUNCTION pg_temp.join_code(p_user UUID, p_code TEXT, p_claim UUID DEFAULT NULL, p_name TEXT DEFAULT NULL, p_personal TEXT DEFAULT NULL) RETURNS UUID LANGUAGE plpgsql AS $$
+BEGIN
+    PERFORM pg_temp.sign_in(p_user);
+    RETURN pg_temp.join_code_signed_in(p_code, p_claim, p_name, p_personal);
+END $$;
+-- 'ok', or the error's SQLSTATE and message.
+CREATE FUNCTION pg_temp.join_error(p_user UUID, p_code TEXT, p_claim UUID DEFAULT NULL, p_name TEXT DEFAULT NULL, p_personal TEXT DEFAULT NULL) RETURNS TEXT LANGUAGE plpgsql AS $$
+BEGIN
+    PERFORM pg_temp.join_code(p_user, p_code, p_claim, p_name, p_personal);
+    RETURN 'ok';
+EXCEPTION WHEN OTHERS THEN
+    RETURN SQLSTATE || ' ' || SQLERRM;
+END $$;
+CREATE FUNCTION pg_temp.upgrade(p_user UUID) RETURNS VOID LANGUAGE plpgsql AS $$
+BEGIN
+    PERFORM pg_temp.sign_in(p_user);
+    PERFORM pg_temp.upgrade_signed_in();
+END $$;
+CREATE FUNCTION pg_temp.create_token(p_user UUID, p_name TEXT) RETURNS JSONB LANGUAGE plpgsql AS $$
+BEGIN
+    PERFORM pg_temp.sign_in(p_user);
+    RETURN pg_temp.create_token_signed_in(p_name);
+END $$;
+-- Run p_sql as p_user: 'ok', or its SQLSTATE.
+CREATE FUNCTION pg_temp.as_user(p_user UUID, p_sql TEXT) RETURNS TEXT LANGUAGE plpgsql AS $$
+BEGIN
+    PERFORM pg_temp.sign_in(p_user);
+    RETURN pg_temp.sqlstate_signed_in(p_sql);
+END $$;
+
+-- ---------------------------------------------------------------------------
+-- What is stored
+-- ---------------------------------------------------------------------------
+CREATE FUNCTION pg_temp.head(p_group UUID) RETURNS BIGINT LANGUAGE sql AS $$
+    SELECT head_version FROM public.groups WHERE id = p_group;
+$$;
+CREATE FUNCTION pg_temp.version_of(p_entry UUID) RETURNS BIGINT LANGUAGE sql AS $$
+    SELECT row_version FROM public.ledger_entries WHERE id = p_entry;
+$$;
+CREATE FUNCTION pg_temp.code(p_group UUID) RETURNS TEXT LANGUAGE sql AS $$
+    SELECT join_code FROM public.groups WHERE id = p_group;
+$$;
+CREATE FUNCTION pg_temp.guest_code(p_member UUID) RETURNS TEXT LANGUAGE sql AS $$
+    SELECT code FROM public.guest_codes WHERE member_id = p_member AND deleted_at IS NULL;
+$$;

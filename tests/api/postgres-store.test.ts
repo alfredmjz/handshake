@@ -118,6 +118,16 @@ async function makeWorld(): Promise<ApiWorld> {
 			if (confirmBy) await push(confirmBy, { type: "payment.confirm", groupId, entryId });
 			return entryId;
 		},
+		async deleteBill(by, groupId, entryId) {
+			const [row] = await admin`SELECT row_version FROM public.ledger_entries WHERE id = ${entryId}`;
+			await push(by, { type: "entry.delete", groupId, entryId, baseVersion: Number(row.row_version) });
+		},
+		async decline(by, groupId, entryId) {
+			await push(by, { type: "payment.decline", groupId, entryId, note: null });
+		},
+		async undo(by, groupId, entryId) {
+			await push(by, { type: "payment.undo", groupId, entryId });
+		},
 		async leave(user, groupId) {
 			await push(user, { type: "member.remove", groupId, memberId: await memberId(user, groupId) });
 		},

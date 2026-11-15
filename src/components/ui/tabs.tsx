@@ -66,7 +66,7 @@ const TabsTrigger = React.forwardRef<
 	<TabsPrimitive.Trigger
 		ref={ref}
 		className={cn(
-			"type-body-sm relative inline-flex h-[2.375rem] flex-1 items-center justify-center gap-1.5 whitespace-nowrap rounded-full px-3 font-medium text-ink transition-colors duration-quick ease-out hover:bg-ink/5 data-[state=active]:font-semibold data-[state=active]:text-paper data-[state=active]:hover:bg-transparent",
+			"type-body-sm relative inline-flex h-9.5 flex-1 items-center justify-center gap-1.5 whitespace-nowrap rounded-full px-3 font-medium text-ink transition-colors duration-quick ease-out hover:bg-ink/5 data-[state=active]:font-semibold data-[state=active]:text-paper data-[state=active]:hover:bg-transparent",
 			className
 		)}
 		{...props}
@@ -78,7 +78,7 @@ const TabsContent = React.forwardRef<
 	React.ElementRef<typeof TabsPrimitive.Content>,
 	React.ComponentPropsWithoutRef<typeof TabsPrimitive.Content>
 >(({ className, ...props }, ref) => (
-	<TabsPrimitive.Content ref={ref} className={cn("outline-none", className)} {...props} />
+	<TabsPrimitive.Content ref={ref} className={cn("outline-hidden", className)} {...props} />
 ));
 TabsContent.displayName = TabsPrimitive.Content.displayName;
 

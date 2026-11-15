@@ -30,7 +30,7 @@ function writeShown(ids: Set<string>) {
 // Members only; guests see the badge and wait.
 export function ConflictPopup({ data, onResolve }: { data: GroupData; onResolve: (entryId: string) => void }) {
 	const [shown, setShown] = useState(readShown);
-	const mayResolve = data.can("conflict.resolve");
+	const mayResolve = data.may("conflict.resolve");
 	const next = mayResolve ? data.conflicts.find((c) => !shown.has(c.id)) : undefined;
 	// Deleted bills aren't in the group's list, and a conflict can be about one.
 	const entry = useEntry(next?.entryId ?? "");

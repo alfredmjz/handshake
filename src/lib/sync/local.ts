@@ -1,23 +1,11 @@
 import { isCoverKey } from "@/lib/cover-colors";
 import { isSticker } from "@/lib/cover-stickers";
+import { nextOwner } from "@/lib/group-access";
 import { computeShares } from "@/lib/ledger";
-import type {
-	BillFields,
-	ConflictRow,
-	CursorRow,
-	EntryRow,
-	GroupChanges,
-	GroupRow,
-	GuestCodeRow,
-	InviteRow,
-	InviteTokenRow,
-	MemberRow,
-	Mutation,
-	MutationOf,
-	NudgeRow,
-	PullResult,
-	Share,
-} from "@/lib/sync/types";
+import { readPayment, recordingRule } from "@/lib/payment-rules";
+import { storedNote } from "@/lib/stored-text";
+import { keptAfterFullPull, pulledRows, rowKey, TABLE_NAMES, type RowOf, type TableName } from "@/lib/sync/tables";
+import type { BillFields, EntryRow, GroupChanges, Mutation, MutationOf, PullResult, Share } from "@/lib/sync/types";
 
 export interface Rows<T> {
 	get(id: string): Promise<T | undefined>;
@@ -26,17 +14,10 @@ export interface Rows<T> {
 	delete(ids: string[]): Promise<void>;
 }
 
-// The local tables sync reads and writes: Dexie in the app, plain maps in tests.
-export interface LocalTables {
-	groups: Rows<GroupRow>;
-	members: Rows<MemberRow>;
-	entries: Rows<EntryRow>;
-	conflicts: Rows<ConflictRow>;
-	invites: Rows<InviteRow>;
-	inviteTokens: Rows<InviteTokenRow>;
-	nudges: Rows<NudgeRow>;
-	guestCodes: Rows<GuestCodeRow>;
-	cursors: Rows<CursorRow>;
+export type ReplicaRows = { [K in TableName]: Rows<RowOf<K>> };
+
+// The local tables sync reads and writes (described in tables.ts): Dexie in the app, plain maps in tests.
+export interface LocalTables extends ReplicaRows {
 	groupIds(): Promise<string[]>;
 }
 
@@ -48,19 +29,6 @@ const INVITE_LIFETIME_MS = 14 * 24 * 60 * 60 * 1000;
 // The caller's active member row in the group, as private.caller_member finds it.
 async function callerMember(tables: LocalTables, groupId: string, userId: string) {
 	return (await tables.members.byGroup(groupId)).find((m) => m.userId === userId && !m.deletedAt);
-}
-
-// private.can_answer: still in the group, with a login.
-function canAnswer(member: MemberRow | undefined) {
-	return !!member && member.userId !== null && !member.deletedAt;
-}
-
-// private.payment_sides: the payer has paid cents, the receiver owed cents.
-function paymentSides(entry: EntryRow) {
-	return {
-		from: entry.shares.find((s) => s.paidCents > 0)?.memberId,
-		to: entry.shares.find((s) => s.owedCents > 0)?.memberId,
-	};
 }
 
 // A payment's shares are one item paid by `from`, split to `to` (architecture §9.3).
@@ -80,25 +48,15 @@ function billFields(fields: BillFields) {
 	};
 }
 
-// private.group_note: SQL's btrim trims spaces only; blank is no note.
-function groupNote(note: string | null | undefined) {
-	return note?.replace(/^ +| +$/g, "") || null;
-}
-
 async function pendingPayment(tables: LocalTables, groupId: string, entryId: string) {
 	const entry = await tables.entries.get(entryId);
-	return entry && entry.groupId === groupId && entry.kind === "payment" && entry.paymentStatus === "pending"
-		? entry
-		: undefined;
+	return entry && entry.groupId === groupId && readPayment(entry)?.status === "pending" ? entry : undefined;
 }
 
-// private.hand_over: the full member who joined first becomes owner, or the group goes.
-async function handOver(tables: LocalTables, groupId: string, at: string) {
-	const heirs = (await tables.members.byGroup(groupId))
-		.filter((m) => m.role === "member" && m.userId !== null && !m.deletedAt)
-		.sort((a, b) => (a.joinedAt ?? "￿").localeCompare(b.joinedAt ?? "￿") || a.id.localeCompare(b.id));
-	if (heirs.length > 0) {
-		await tables.members.put([{ ...heirs[0], role: "owner" }]);
+async function handOver(tables: LocalTables, groupId: string, leavingId: string, at: string) {
+	const heir = nextOwner(await tables.members.byGroup(groupId), leavingId);
+	if (heir) {
+		await tables.members.put([{ ...heir, role: "owner" }]);
 		return;
 	}
 	const group = await tables.groups.get(groupId);
@@ -114,8 +72,7 @@ async function recordPayment(tables: LocalTables, m: MutationOf<"payment.record"
 	// The server refuses amounts computeShares can't split.
 	if (!me || !from || !to || from.id === to.id || !Number.isSafeInteger(m.amountCents) || m.amountCents <= 0) return;
 
-	// Only the payer needs the other side to agree; the receiver saying they were paid is enough.
-	const otherCanAnswer = me.id === from.id ? canAnswer(to) : false;
+	const counts = recordingRule(me.id, from, to).countsAtOnce;
 	await tables.entries.put([
 		{
 			id: m.entryId,
@@ -127,10 +84,10 @@ async function recordPayment(tables: LocalTables, m: MutationOf<"payment.record"
 			entryDate: m.entryDate,
 			notes: m.notes,
 			category: null,
-			paymentStatus: otherCanAnswer ? "pending" : "confirmed",
+			paymentStatus: counts ? "confirmed" : "pending",
 			payerConfirmedAt: me.id === from.id ? m.at : null,
 			receiverConfirmedAt: me.id === to.id ? m.at : null,
-			confirmedAt: otherCanAnswer ? null : m.at,
+			confirmedAt: counts ? m.at : null,
 			closedAt: null,
 			closeNote: null,
 			createdByMemberId: me.id,
@@ -153,10 +110,8 @@ async function answerPayment(
 	const me = await callerMember(tables, m.groupId, userId);
 	if (!entry || !me) return;
 
-	const sides = paymentSides(entry);
-	const asPayer = me.id === sides.from && !entry.payerConfirmedAt;
-	const asReceiver = !asPayer && me.id === sides.to && !entry.receiverConfirmedAt;
-	if (!asPayer && !asReceiver) return;
+	const side = readPayment(entry, me.id)?.answeringAs;
+	if (!side) return;
 
 	const answered = { ...entry, updatedByMemberId: me.id, updatedAt: m.at };
 	if (m.type === "payment.confirm") {
@@ -164,8 +119,8 @@ async function answerPayment(
 			{
 				...answered,
 				paymentStatus: "confirmed",
-				payerConfirmedAt: asPayer ? m.at : entry.payerConfirmedAt,
-				receiverConfirmedAt: asReceiver ? m.at : entry.receiverConfirmedAt,
+				payerConfirmedAt: side === "payer" ? m.at : entry.payerConfirmedAt,
+				receiverConfirmedAt: side === "receiver" ? m.at : entry.receiverConfirmedAt,
 				confirmedAt: m.at,
 			},
 		]);
@@ -182,7 +137,10 @@ async function removeMember(tables: LocalTables, m: MutationOf<"member.remove">)
 
 	// private.undo_pending_payments: nobody would be left to answer them.
 	const undone = (await tables.entries.byGroup(m.groupId))
-		.filter((e) => e.paymentStatus === "pending" && e.shares.some((s) => s.memberId === target.id))
+		.filter((e) => {
+			const payment = readPayment(e, target.id);
+			return payment?.status === "pending" && payment.side !== null;
+		})
 		.map((e) => ({
 			...e,
 			paymentStatus: "undone" as const,
@@ -192,7 +150,7 @@ async function removeMember(tables: LocalTables, m: MutationOf<"member.remove">)
 		}));
 	if (undone.length > 0) await tables.entries.put(undone);
 
-	if (target.role === "owner") await handOver(tables, m.groupId, m.at);
+	if (target.role === "owner") await handOver(tables, m.groupId, target.id, m.at);
 }
 
 async function saveBill(tables: LocalTables, entry: EntryRow, fields: BillFields, memberId: string, at: string) {
@@ -225,7 +183,7 @@ export async function applyMutation(tables: LocalTables, mutation: Mutation, use
 				{
 					id: m.groupId,
 					name: m.name.trim(),
-					note: groupNote(m.note),
+					note: storedNote(m.note),
 					coverColor: null,
 					coverSticker: null,
 					createdBy: userId,
@@ -258,7 +216,7 @@ export async function applyMutation(tables: LocalTables, mutation: Mutation, use
 		}
 		case "group.describe": {
 			const group = await tables.groups.get(m.groupId);
-			if (group) await tables.groups.put([{ ...group, note: groupNote(m.note) }]);
+			if (group) await tables.groups.put([{ ...group, note: storedNote(m.note) }]);
 			return;
 		}
 		case "group.recolor": {
@@ -425,7 +383,7 @@ export async function applyMutation(tables: LocalTables, mutation: Mutation, use
 		case "payment.undo": {
 			const entry = await pendingPayment(tables, m.groupId, m.entryId);
 			const me = await callerMember(tables, m.groupId, userId);
-			if (entry && me && entry.createdByMemberId === me.id)
+			if (entry && me && readPayment(entry, me.id)?.mayUndo)
 				await tables.entries.put([
 					{ ...entry, paymentStatus: "undone", closedAt: m.at, updatedByMemberId: me.id, updatedAt: m.at },
 				]);
@@ -445,39 +403,35 @@ async function isStale(tables: LocalTables, mutation: Mutation, userId: string) 
 	return entry.updatedByMemberId !== me?.id;
 }
 
-async function dropGroup(tables: LocalTables, groupId: string) {
-	const ids = async <T>(rows: Rows<T>, key: (row: T) => string) => (await rows.byGroup(groupId)).map(key);
-	await tables.members.delete(await ids(tables.members, (r) => r.id));
-	await tables.entries.delete(await ids(tables.entries, (r) => r.id));
-	await tables.conflicts.delete(await ids(tables.conflicts, (r) => r.id));
-	await tables.invites.delete(await ids(tables.invites, (r) => r.id));
-	await tables.inviteTokens.delete(await ids(tables.inviteTokens, (r) => r.inviteId));
-	await tables.nudges.delete(await ids(tables.nudges, (r) => r.id));
-	await tables.guestCodes.delete(await ids(tables.guestCodes, (r) => r.memberId));
-	await tables.cursors.delete([groupId]);
-	await tables.groups.delete([groupId]);
+async function dropGroup(tables: ReplicaRows, groupId: string) {
+	const drop = async <K extends TableName>(name: K) => {
+		const rows: Rows<RowOf<K>> = tables[name];
+		await rows.delete((await rows.byGroup(groupId)).map((row) => rowKey(name, row)));
+	};
+	for (const name of TABLE_NAMES) await drop(name);
 }
 
 // A pull from version 0 holds every row of the group, so it is the whole truth: local rows it lacks are the
 // effects of changes the server never applied (rejected ones included). Unsent changes are replayed after.
-async function keepOnlyPulled(tables: LocalTables, change: GroupChanges) {
-	const drop = async <T extends { id: string }>(rows: Rows<T>, pulled: T[]) => {
-		const keep = new Set(pulled.map((row) => row.id));
-		await rows.delete((await rows.byGroup(change.groupId)).filter((row) => !keep.has(row.id)).map((row) => row.id));
+async function keepOnlyPulled(tables: ReplicaRows, change: GroupChanges) {
+	const drop = async <K extends TableName>(name: K) => {
+		const keep = keptAfterFullPull(name, change);
+		if (!keep) return;
+		const rows: Rows<RowOf<K>> = tables[name];
+		const local = (await rows.byGroup(change.groupId)).map((row) => rowKey(name, row));
+		await rows.delete(local.filter((key) => !keep.has(key)));
 	};
-	await drop(tables.members, change.members);
-	await drop(tables.entries, change.entries);
-	await drop(tables.conflicts, change.conflicts);
-	await drop(tables.invites, change.invites);
-	await drop(tables.nudges, change.nudges);
-	const codes = new Set(change.guestCodes.map((c) => c.memberId));
-	await tables.guestCodes.delete(
-		(await tables.guestCodes.byGroup(change.groupId)).filter((c) => !codes.has(c.memberId)).map((c) => c.memberId)
-	);
-	const invites = new Set(change.invites.map((invite) => invite.id));
-	await tables.inviteTokens.delete(
-		(await tables.inviteTokens.byGroup(change.groupId)).filter((t) => !invites.has(t.inviteId)).map((t) => t.inviteId)
-	);
+	for (const name of TABLE_NAMES) await drop(name);
+}
+
+// Each row arrives whole (an entry with its items and shares) and replaces the local copy.
+async function putPulled(tables: ReplicaRows, change: GroupChanges) {
+	const put = async <K extends TableName>(name: K) => {
+		const rows: Rows<RowOf<K>> = tables[name];
+		await rows.put(pulledRows(name, change));
+	};
+	for (const name of TABLE_NAMES) await put(name);
+	await tables.cursors.put([{ groupId: change.groupId, version: change.version }]);
 }
 
 // `pending` must be read in the same transaction as this merge, so changes made while the pull was
@@ -506,15 +460,7 @@ export async function mergePull(
 	for (const change of pull.changes) {
 		const cursor = await tables.cursors.get(change.groupId);
 		if (!cursor || cursor.version === 0) await keepOnlyPulled(tables, change);
-		await tables.groups.put(change.groups);
-		await tables.members.put(change.members);
-		// Each entry arrives whole, items and shares included, and replaces the local copy.
-		await tables.entries.put(change.entries);
-		await tables.conflicts.put(change.conflicts);
-		await tables.invites.put(change.invites);
-		await tables.nudges.put(change.nudges);
-		await tables.guestCodes.put(change.guestCodes);
-		await tables.cursors.put([{ groupId: change.groupId, version: change.version }]);
+		await putPulled(tables, change);
 	}
 
 	// Server rows just replaced the local copies; put this device's unsent changes back on top.

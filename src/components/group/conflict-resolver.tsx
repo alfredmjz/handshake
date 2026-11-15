@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState, type ReactNode } from "react";
 
 import { EditorDialog } from "@/components/editor-dialog";
-import type { GroupData, Names } from "@/components/group/group-data";
+import type { GroupData } from "@/components/group/group-data";
 import { todayIso } from "@/components/group/today";
 import { useRun } from "@/components/group/use-run";
 import { Amount } from "@/components/money";
@@ -12,6 +12,7 @@ import { Inline, Stack } from "@/components/ui/stack";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { CATEGORIES } from "@/lib/categories";
 import { useConflicts, useEntry } from "@/lib/entries";
+import type { Names } from "@/lib/group-access";
 import {
 	billVersionOf,
 	conflictFields,
@@ -25,11 +26,11 @@ import {
 } from "@/lib/group-view";
 import { computeShares } from "@/lib/ledger";
 import type { ConflictRow, EntryRow, Item } from "@/lib/sync/types";
-import { cn } from "@/lib/utils";
+import { byText, cn } from "@/lib/utils";
 
 // "Alex's", "Yours".
-function whose(name: string) {
-	return name === "You" ? "Yours" : `${name}'s`;
+function whose(names: Names, memberId: string | null) {
+	return names.isMe(memberId) ? "Yours" : `${names.of(memberId)}'s`;
 }
 
 // The label mid-sentence: "Use all of Alex's", "Keep yours", "Restore this version".
@@ -48,7 +49,8 @@ export function conflictSentence(entry: EntryRow, conflict: ConflictRow, names: 
 	const who =
 		current === proposed
 			? names.inSentence(entry.updatedByMemberId)
-			: joinNames([names.inSentence(entry.updatedByMemberId), names.inSentence(conflict.proposedByMemberId)]);
+			: names.list([entry.updatedByMemberId, conflict.proposedByMemberId], "middle");
+
 	return `${entry.description} was changed by ${who} at the same time`;
 }
 
@@ -117,7 +119,7 @@ function Choice({
 			onClick={onSelect}
 			className={cn(
 				"type-body-sm flex min-h-tap min-w-0 flex-col items-start gap-1 rounded-lg border-[1.5px] px-panel py-row text-left transition-colors",
-				selected ? "border-primary bg-primary/[0.08]" : "border-dashed border-ink/30 hover:border-ink/60",
+				selected ? "border-primary bg-primary/8" : "border-dashed border-ink/30 hover:border-ink/60",
 				hiddenOnPhone && "hidden sm:flex"
 			)}
 		>
@@ -136,21 +138,19 @@ function SplitPreview({ items, names }: { items: Item[]; names: Names }) {
 	}
 	return (
 		<Card variant="well">
-			{[...shares]
-				.sort((a, b) => names.of(a.memberId).localeCompare(names.of(b.memberId)))
-				.map((s) => (
-					<Inline key={s.memberId} justify="between" wrap={false}>
-						<span className="type-body-sm truncate">{names.of(s.memberId)}</span>
-						<span className="type-label text-right text-muted-foreground">
-							{s.paidCents > 0 && (
-								<>
-									paid <Amount cents={s.paidCents} />,{" "}
-								</>
-							)}
-							owes <Amount cents={s.owedCents} />
-						</span>
-					</Inline>
-				))}
+			{[...shares].sort(byText((s) => names.of(s.memberId))).map((s) => (
+				<Inline key={s.memberId} justify="between" wrap={false}>
+					<span className="type-body-sm truncate">{names.of(s.memberId)}</span>
+					<span className="type-label text-right text-muted-foreground">
+						{s.paidCents > 0 && (
+							<>
+								paid <Amount cents={s.paidCents} />,{" "}
+							</>
+						)}
+						owes <Amount cents={s.owedCents} />
+					</span>
+				</Inline>
+			))}
 		</Card>
 	);
 }
@@ -195,8 +195,8 @@ export function ConflictResolver({ data, entryId, open, onOpenChange }: Conflict
 	if (!entry || !conflict || !current) return null;
 
 	const { names } = data;
-	const currentName = whose(names.of(entry.updatedByMemberId));
-	const proposedName = whose(names.of(conflict.proposedByMemberId));
+	const currentName = whose(names, entry.updatedByMemberId);
+	const proposedName = whose(names, conflict.proposedByMemberId);
 	const [leftLabel, rightLabel] =
 		currentName === proposedName ? ["This version", "The other version"] : [currentName, proposedName];
 	const groupId = entry.groupId;

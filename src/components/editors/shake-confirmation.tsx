@@ -1,12 +1,12 @@
 import { useFaceTint } from "@/components/art/face";
 import { ShakeScene } from "@/components/art/shake-scene";
 import { Signatures } from "@/components/art/signatures";
+import { useGroupView } from "@/components/group/group-data";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from "@/components/ui/dialog";
-import { paymentSides } from "@/lib/changes";
 import { useEntry, useGroupSummary } from "@/lib/entries";
-import { useMembers, useMyMember } from "@/lib/members";
 import { formatAmount } from "@/lib/money";
+import { readPayment } from "@/lib/payment-rules";
 
 export type ShakeConfirmationProps = {
 	groupId: string;
@@ -21,19 +21,16 @@ const SIGNING = 1.9;
 // The cobalt moment when a payment counts: two hands shake, "Jo paid you $50.00", then "Settled".
 export function ShakeConfirmation({ groupId, entryId, onClose }: ShakeConfirmationProps) {
 	const entry = useEntry(entryId ?? "");
-	const members = useMembers(groupId, { includeLeft: true });
-	const me = useMyMember(groupId);
+	const names = useGroupView(groupId)?.names;
 	const summary = useGroupSummary(groupId);
 
-	const payment = entryId && entry && entry.kind === "payment" ? entry : null;
-	const { from, to } = payment ? paymentSides(payment) : { from: undefined, to: undefined };
-	// Names as people typed them; only "you" changes case at the start.
-	const name = (id: string | undefined, start = false) =>
-		id && id === me?.id ? (start ? "You" : "you") : (members?.find((m) => m.id === id)?.displayName ?? "Someone");
-	// People sign with their own name, you included.
-	const signedName = (id: string | undefined) => members?.find((m) => m.id === id)?.displayName ?? "Someone";
+	// It stays mounted on its screen, so the group has long loaded by the time a payment counts.
+	const payment = entryId && entry && entry.kind === "payment" && names ? entry : null;
+	const reading = payment ? readPayment(payment) : null;
+	const { from, to } = reading ?? { from: undefined, to: undefined };
 	const payerTint = useFaceTint(from ?? "");
-	const line = payment ? `${name(from, true)} paid ${name(to)} ${formatAmount(payment.amountCents)}` : "";
+	const line =
+		payment && names ? `${names.of(from)} paid ${names.inSentence(to)} ${formatAmount(payment.amountCents)}` : "";
 	const square = !summary?.debts.some(
 		(d) => (d.fromMemberId === from && d.toMemberId === to) || (d.fromMemberId === to && d.toMemberId === from)
 	);
@@ -45,7 +42,7 @@ export function ShakeConfirmation({ groupId, entryId, onClose }: ShakeConfirmati
 				hideClose
 				className="items-center bg-primary text-center text-primary-foreground sm:max-w-md"
 			>
-				{payment && (
+				{payment && names && (
 					<>
 						<ShakeScene
 							key={payment.id}
@@ -57,12 +54,13 @@ export function ShakeConfirmation({ groupId, entryId, onClose }: ShakeConfirmati
 						<DialogTitle className="mt-section">
 							<span className="type-h2 block animate-rise text-balance [animation-delay:0.1s]">{line}</span>
 						</DialogTitle>
+						{/* People sign with their own name, you included. */}
 						<Signatures
 							tone="paper"
 							signedOnly
 							delay={0.5}
-							payer={{ name: signedName(from), role: "paid", signed: !!payment.payerConfirmedAt }}
-							receiver={{ name: signedName(to), role: "received", signed: !!payment.receiverConfirmedAt }}
+							payer={{ name: names.signed(from), role: "paid", signed: !!reading?.signed.payer }}
+							receiver={{ name: names.signed(to), role: "received", signed: !!reading?.signed.receiver }}
 							className="mx-auto mt-stack max-w-xs"
 						/>
 						<DialogDescription>

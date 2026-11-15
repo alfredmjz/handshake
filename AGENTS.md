@@ -10,14 +10,14 @@ Handshake's database (see `docs/shared-ledger-spec.md`).
 
 | Area     | Technology                                                                       |
 | -------- | -------------------------------------------------------------------------------- |
-| Runtime  | **Bun 1.3** for everything (`bun install`, `bun run …`, `bun --bun <tool>`)      |
-| Node.js  | **26 LTS**, only where a host needs it (Vercel's build, API fallback)            |
-| Client   | **Vite 7 + React 19 + React Router 7**, a static single-page app                 |
+| Runtime  | **Bun 1.4** for everything (`bun install`, `bun run …`, `bun --bun <tool>`)      |
+| Node.js  | **26 LTS** on Vercel's build machine only (project setting, no `engines`)        |
+| Client   | **Vite 8 + React 19 + React Router 8**, a static single-page app                 |
 | Offline  | **Dexie** (IndexedDB) on the device, `vite-plugin-pwa` service worker on the web |
 | Server   | **Supabase**: Postgres + RLS, Auth with 6-digit email codes                      |
 | Mobile   | **Capacitor 8**, bundling `dist/` (not loading a hosted URL)                     |
-| UI       | **shadcn/ui** on Tailwind 3.4 and Radix, sonner, lucide; Funnel Display + Sans   |
-| Language | TypeScript 5.9, `strict`                                                         |
+| UI       | **shadcn/ui** on Tailwind 4 and Radix, sonner, lucide; Funnel Display + Sans     |
+| Language | TypeScript 7, `strict`                                                           |
 | Format   | Prettier: tabs, width 120, CRLF, double quotes, trailing commas es5              |
 
 ## Commands
@@ -50,16 +50,20 @@ src/
   components/ui/           shadcn/ui primitives (button, card, dialog, tabs, toggle-group, list, field, …)
   lib/
     local-db.ts            Dexie schema; the app reads only from here
-    sync/                  types, local apply/merge, engine, controller, transport
+    sync/                  types, tables (each replica table described once), local apply/merge, engine,
+                           controller, transport
     changes.ts             planChange() and commit(intent): the only way screens change data
     ledger.ts              shares, entry checks, balances and debts (pure)
     permissions.ts         the role matrix (mirrors private.may)
-    groups.ts              read hooks, with members.ts, entries.ts and invites.ts
+    group-access.ts        a group as one person sees it: groupView (may, whyNot, names), next owner
+    payment-rules.ts       one reading of a payment: who answers, who may undo, what counts at once
+    join-flow.ts           join or return with a code, as one flow behind ports (stash, go, guest)
+    groups.ts              read hooks, with members.ts and entries.ts
     auth.tsx, money.ts, ids.ts, supabase.ts
   server/api-v1/           API v1 for Pholio: createApiV1({ store }) and the ApiStore adapters
 api/v1/[...path].ts        the Vercel function (composition root); runtime imports are relative
 supabase/
-  migrations/              numbered SQL, applied in filename order
+  migrations/              020_baseline.sql (001–020 squashed: the whole schema), then numbered SQL from 021
   tests/                   pgTAP
 tests/                     bun unit tests, mirroring src/ paths; fakes in tests/support/
 ```
@@ -94,12 +98,15 @@ backend can change later.
 ## Database rules
 
 - Migrations are additive and safe to re-run: `IF NOT EXISTS`, `CREATE OR REPLACE`, `DROP POLICY IF EXISTS`.
-  Version prefixes are unique.
+  Version prefixes are unique. `020_baseline.sql` rebuilds the whole schema on an empty project; new changes
+  go in new files from `021`, never into the baseline.
 - Internal functions live in the `private` schema with no grants. Public functions get explicit
   `REVOKE … FROM PUBLIC, anon` and `GRANT … TO authenticated`.
 - Group data is visible to members only, through `public.is_group_member()` (SECURITY DEFINER so policies
   don't recurse).
 - Add a pgTAP test for every change to the sync functions or permissions, with expected values worked out by hand.
+- Checks live in private helpers; apply functions call the checks, then write. To change a check, replace its
+  helper. Extract an inline rule in the same migration that changes it.
 
 ## Money and dates
 

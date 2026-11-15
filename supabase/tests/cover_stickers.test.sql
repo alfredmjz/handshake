@@ -7,40 +7,15 @@
 BEGIN;
 CREATE EXTENSION IF NOT EXISTS pgtap WITH SCHEMA extensions;
 SELECT no_plan();
+\ir prelude.psql
 
 -- ---------------------------------------------------------------------------
--- Helpers: act as a signed-in user
+-- Helpers (the shared ones are in prelude.psql)
 -- ---------------------------------------------------------------------------
-CREATE FUNCTION pg_temp.sign_in(p_user UUID) RETURNS VOID LANGUAGE sql AS $$
-    SELECT set_config('request.jwt.claims', json_build_object(
-        'sub', p_user,
-        'role', 'authenticated',
-        'is_anonymous', COALESCE((SELECT is_anonymous FROM auth.users WHERE id = p_user), FALSE)
-    )::TEXT, true);
+-- Join group 1 with its group code.
+CREATE FUNCTION pg_temp.join_group_1(p_user UUID, p_claim UUID) RETURNS UUID LANGUAGE sql AS $$
+    SELECT pg_temp.join_code(p_user, pg_temp.code('10000000-0000-0000-0000-000000000001'), p_claim);
 $$;
-CREATE FUNCTION pg_temp.push_signed_in(p_mutations JSONB) RETURNS JSONB LANGUAGE sql SET role = 'authenticated' AS $$
-    SELECT public.push_changes(p_mutations);
-$$;
-CREATE FUNCTION pg_temp.pull_signed_in(p_cursors JSONB) RETURNS JSONB LANGUAGE sql SET role = 'authenticated' AS $$
-    SELECT public.pull_changes(p_cursors);
-$$;
-CREATE FUNCTION pg_temp.join_signed_in(p_code TEXT, p_claim UUID) RETURNS UUID LANGUAGE sql SET role = 'authenticated' AS $$
-    SELECT public.join_with_code(p_code, p_claim, NULL, NULL);
-$$;
-CREATE FUNCTION pg_temp.push(p_user UUID, p_mutation JSONB) RETURNS JSONB LANGUAGE plpgsql AS $$
-BEGIN
-    PERFORM pg_temp.sign_in(p_user);
-    RETURN pg_temp.push_signed_in(jsonb_build_array(jsonb_build_object('id', gen_random_uuid()) || p_mutation));
-END $$;
--- 'applied', or the rejection's code.
-CREATE FUNCTION pg_temp.try(p_user UUID, p_mutation JSONB) RETURNS TEXT LANGUAGE sql AS $$
-    SELECT COALESCE(r#>>'{rejected,0,code}', 'applied') FROM pg_temp.push(p_user, p_mutation) r;
-$$;
-CREATE FUNCTION pg_temp.join(p_user UUID, p_claim UUID) RETURNS UUID LANGUAGE plpgsql AS $$
-BEGIN
-    PERFORM pg_temp.sign_in(p_user);
-    RETURN pg_temp.join_signed_in((SELECT join_code FROM public.groups WHERE id = '10000000-0000-0000-0000-000000000001'), p_claim);
-END $$;
 CREATE FUNCTION pg_temp.stick(p_sticker JSONB) RETURNS JSONB LANGUAGE sql AS $$
     SELECT jsonb_build_object('type', 'group.sticker', 'groupId', '10000000-0000-0000-0000-000000000001', 'sticker', p_sticker);
 $$;
@@ -64,11 +39,9 @@ END $$;
 -- ---------------------------------------------------------------------------
 -- Group 1: Alex (owner) and Sam (member, joined with the group code). Kim is in no group.
 -- ---------------------------------------------------------------------------
-INSERT INTO auth.users (id, email, instance_id, aud, role, is_anonymous, raw_user_meta_data)
-VALUES
-    ('aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa', 'alex@stickers.test', '00000000-0000-0000-0000-000000000000', 'authenticated', 'authenticated', FALSE, '{"display_name": "Alex"}'),
-    ('bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb', 'sam@stickers.test', '00000000-0000-0000-0000-000000000000', 'authenticated', 'authenticated', FALSE, '{"display_name": "Sam"}'),
-    ('cccccccc-cccc-cccc-cccc-cccccccccccc', 'kim@stickers.test', '00000000-0000-0000-0000-000000000000', 'authenticated', 'authenticated', FALSE, '{"display_name": "Kim"}');
+SELECT pg_temp.add_user('aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa', 'alex@stickers.test', 'Alex');
+SELECT pg_temp.add_user('bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb', 'sam@stickers.test', 'Sam');
+SELECT pg_temp.add_user('cccccccc-cccc-cccc-cccc-cccccccccccc', 'kim@stickers.test', 'Kim');
 
 SELECT is(
     pg_temp.try('aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa', '{"type": "group.create", "groupId": "10000000-0000-0000-0000-000000000001", "memberId": "20000000-0000-0000-0000-0000000000a1", "name": "Japan", "displayName": "Alex"}'),
@@ -77,7 +50,7 @@ SELECT is(
 );
 SELECT is(pg_temp.sticker_of(), NULL, 'a new group has no sticker of its own: the devices show the default');
 SELECT is(pg_temp.try('aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa', '{"type": "member.add", "groupId": "10000000-0000-0000-0000-000000000001", "memberId": "20000000-0000-0000-0000-0000000000b1", "displayName": "Sam"}'), 'applied', 'Alex adds Sam by name');
-SELECT is(pg_temp.join('bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb', '20000000-0000-0000-0000-0000000000b1'), '10000000-0000-0000-0000-000000000001'::UUID, 'Sam joins with the group code');
+SELECT is(pg_temp.join_group_1('bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb', '20000000-0000-0000-0000-0000000000b1'), '10000000-0000-0000-0000-000000000001'::UUID, 'Sam joins with the group code');
 
 -- ---------------------------------------------------------------------------
 -- Anyone in the group may change it; it syncs to everyone

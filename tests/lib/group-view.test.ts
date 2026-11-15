@@ -13,7 +13,6 @@ import {
 	payerIds,
 	resolutionOf,
 	roundingCents,
-	sentenceList,
 	shortDate,
 	type BillVersion,
 } from "@/lib/group-view";
@@ -63,13 +62,6 @@ describe("days", () => {
 		expect(joinNames(["Alex"])).toBe("Alex");
 		expect(joinNames(["Alex", "Sam"])).toBe("Alex and Sam");
 		expect(joinNames(["Alex", "Jo", "Sam"])).toBe("Alex, Jo and Sam");
-	});
-
-	test("sentenceList: You starts a sentence, and is lower case after", () => {
-		expect(sentenceList(["You", "Sam"])).toBe("You and Sam");
-		expect(sentenceList(["alex.f", "You"])).toBe("alex.f and you");
-		expect(sentenceList(["Jo", "You", "Sam"])).toBe("Jo, you and Sam");
-		expect(sentenceList(["You"])).toBe("You");
 	});
 });
 
@@ -143,6 +135,18 @@ describe("roundingCents", () => {
 
 	test("rounding once per payer: two $10.00 items by 3, same payer: B and C $6.67, the payer $6.66", () => {
 		expect(notes([item("x", 1000, "a", ["a", "b", "c"]), item("y", 1000, "a", ["a", "b", "c"])])).toEqual({ a: -1 });
+	});
+
+	test("nets each person's moves across payers", () => {
+		// Sam covers 1¢ on Sam's $10.00 and has 1¢ taken off Alex's $20.00: nothing to note for Sam.
+		const items = [item("a", 1000, "sam", ["alex", "jo", "sam"]), item("b", 2000, "alex", ["sam", "kim", "lee"])];
+		expect(notes(items)).toEqual({});
+	});
+
+	test("a bill without items, or an item split between no one, notes nothing", () => {
+		const shares = computeShares([item("i", 1000, "sam", ["alex", "jo", "sam"])]);
+		expect(Object.fromEntries(roundingCents([], shares))).toEqual({});
+		expect(Object.fromEntries(roundingCents([item("i", 1000, "sam", [])], shares))).toEqual({});
 	});
 });
 

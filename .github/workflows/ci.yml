@@ -35,7 +35,7 @@ jobs:
       - uses: actions/checkout@v7
       - uses: supabase/setup-cli@v3
         with:
-          version: 2.122.1
+          version: 3.1.0
       # Auth stays on: its migrations add auth.users columns the tests use (is_anonymous). Mailpit stays
       # off: no test sends email, and its port has been seen taken on GitHub's runners.
       - run: supabase start -x realtime,storage-api,imgproxy,studio,edge-runtime,logflare,vector,postgres-meta,supavisor,mailpit

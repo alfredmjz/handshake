@@ -23,9 +23,9 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { List, ListRow } from "@/components/ui/list";
 import { Inline, Stack } from "@/components/ui/stack";
-import { isNameTaken } from "@/lib/changes";
 import { formatCode } from "@/lib/code-format";
 import { useGuestCodes } from "@/lib/codes";
+import { isNameTaken } from "@/lib/group-access";
 import type { MemberRow } from "@/lib/sync/types";
 
 type Dialog = { kind: "add" } | { kind: "rename"; member: MemberRow } | { kind: "remove"; member: MemberRow } | null;
@@ -49,8 +49,8 @@ export function PeopleTab({ data }: { data: GroupData }) {
 
 	const row = (member: MemberRow) => {
 		const isMe = member.id === me?.id;
-		const mayRename = data.can(isMe ? "member.rename.self" : "member.rename.others");
-		const mayRemove = !isMe && data.can("member.remove.others");
+		const mayRename = data.may(isMe ? "member.rename.self" : "member.rename.others");
+		const mayRemove = !isMe && data.may("member.remove.others");
 		const code = member.role === "guest" ? guestCodes?.get(member.id) : undefined;
 		const codeLabel = isMe ? "Your code to get back in" : `${member.displayName}'s code`;
 		return (
@@ -120,7 +120,7 @@ export function PeopleTab({ data }: { data: GroupData }) {
 			<Section
 				title="Members"
 				action={
-					data.can("member.add") && (
+					data.may("member.add") && (
 						<Button size="sm" variant="secondary" onClick={() => setDialog({ kind: "add" })}>
 							<Plus /> Add person
 						</Button>

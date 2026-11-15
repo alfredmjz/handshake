@@ -79,14 +79,14 @@ export function EntryNote({ entry, mayEdit }: { entry: EntryRow; mayEdit: boolea
 		);
 	}
 
-	const note = <p className="type-hand-lg whitespace-pre-wrap break-words text-left">{entry.notes}</p>;
+	const note = <p className="type-hand-lg whitespace-pre-wrap wrap-break-word text-left">{entry.notes}</p>;
 	return mayEdit ? (
 		<button
 			type="button"
 			onClick={open}
 			aria-label="Edit note"
 			className={cn(
-				"group -mx-2 flex flex-col gap-1 rounded-lg px-2 py-1 text-left transition-colors duration-quick ease-out hover:bg-ink/[0.04]"
+				"group -mx-2 flex flex-col gap-1 rounded-lg px-2 py-1 text-left transition-colors duration-quick ease-out hover:bg-ink/4"
 			)}
 		>
 			{note}

@@ -12,7 +12,7 @@ import type {
 	Share,
 } from "@/lib/sync/types";
 
-// pull_changes() rows as supabase/migrations/012_group_codes.sql builds them.
+// pull_changes() rows as supabase/migrations/020_baseline.sql builds them.
 export type RawGroup = {
 	id: string;
 	name: string;

@@ -49,7 +49,7 @@ export function Underlined({
 				aria-hidden
 				viewBox="0 0 200 12"
 				preserveAspectRatio="none"
-				className="mark-draw pointer-events-none absolute inset-x-0 -bottom-[0.14em] h-[0.2em] w-full overflow-visible [--mark-length:360]"
+				className="mark-draw pointer-events-none absolute inset-x-0 bottom-[-0.14em] h-[0.2em] w-full overflow-visible [--mark-length:360]"
 				style={delayOf(delay)}
 			>
 				<path

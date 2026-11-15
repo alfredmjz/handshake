@@ -7,26 +7,11 @@
 BEGIN;
 CREATE EXTENSION IF NOT EXISTS pgtap WITH SCHEMA extensions;
 SELECT no_plan();
+\ir prelude.psql
 
 -- ---------------------------------------------------------------------------
--- Helpers: act as a signed-in user
+-- Helpers (the shared ones are in prelude.psql)
 -- ---------------------------------------------------------------------------
-CREATE FUNCTION pg_temp.sign_in(p_user UUID) RETURNS VOID LANGUAGE sql AS $$
-    SELECT set_config('request.jwt.claims', json_build_object(
-        'sub', p_user,
-        'role', 'authenticated',
-        'is_anonymous', COALESCE((SELECT is_anonymous FROM auth.users WHERE id = p_user), FALSE)
-    )::TEXT, true);
-$$;
-CREATE FUNCTION pg_temp.push_signed_in(p_mutations JSONB) RETURNS JSONB LANGUAGE sql SET role = 'authenticated' AS $$
-    SELECT public.push_changes(p_mutations);
-$$;
-CREATE FUNCTION pg_temp.pull_signed_in(p_cursors JSONB) RETURNS JSONB LANGUAGE sql SET role = 'authenticated' AS $$
-    SELECT public.pull_changes(p_cursors);
-$$;
-CREATE FUNCTION pg_temp.join_signed_in(p_token TEXT, p_claim UUID, p_name TEXT) RETURNS UUID LANGUAGE sql SET role = 'authenticated' AS $$
-    SELECT public.join_group(p_token, p_claim, p_name);
-$$;
 CREATE FUNCTION pg_temp.visible_nudges_signed_in() RETURNS BIGINT LANGUAGE sql SET role = 'authenticated' AS $$
     SELECT count(*) FROM public.nudges;
 $$;
@@ -34,29 +19,6 @@ CREATE FUNCTION pg_temp.insert_nudge_signed_in() RETURNS VOID LANGUAGE sql SET r
     INSERT INTO public.nudges (id, group_id, from_member_id, to_member_id, amount_cents)
     VALUES (gen_random_uuid(), '10000000-0000-0000-0000-000000000001', '20000000-0000-0000-0000-0000000000a1', '20000000-0000-0000-0000-0000000000b1', 1);
 $$;
-CREATE FUNCTION pg_temp.push(p_user UUID, p_mutation JSONB) RETURNS JSONB LANGUAGE plpgsql AS $$
-BEGIN
-    PERFORM pg_temp.sign_in(p_user);
-    RETURN pg_temp.push_signed_in(jsonb_build_array(jsonb_build_object('id', gen_random_uuid()) || p_mutation));
-END $$;
--- 'applied', or the rejection's code.
-CREATE FUNCTION pg_temp.try(p_user UUID, p_mutation JSONB) RETURNS TEXT LANGUAGE sql AS $$
-    SELECT COALESCE(r#>>'{rejected,0,code}', 'applied') FROM pg_temp.push(p_user, p_mutation) r;
-$$;
--- The rejection's reason, or 'applied'.
-CREATE FUNCTION pg_temp.reason(p_user UUID, p_mutation JSONB) RETURNS TEXT LANGUAGE sql AS $$
-    SELECT COALESCE(r#>>'{rejected,0,reason}', 'applied') FROM pg_temp.push(p_user, p_mutation) r;
-$$;
-CREATE FUNCTION pg_temp.pull(p_user UUID, p_cursors JSONB DEFAULT '{}') RETURNS JSONB LANGUAGE plpgsql AS $$
-BEGIN
-    PERFORM pg_temp.sign_in(p_user);
-    RETURN pg_temp.pull_signed_in(p_cursors);
-END $$;
-CREATE FUNCTION pg_temp.join(p_user UUID, p_token TEXT, p_claim UUID) RETURNS UUID LANGUAGE plpgsql AS $$
-BEGIN
-    PERFORM pg_temp.sign_in(p_user);
-    RETURN pg_temp.join_signed_in(p_token, p_claim, NULL);
-END $$;
 CREATE FUNCTION pg_temp.visible_nudges(p_user UUID) RETURNS BIGINT LANGUAGE plpgsql AS $$
 BEGIN
     PERFORM pg_temp.sign_in(p_user);
@@ -101,12 +63,10 @@ $$;
 -- Users: aaaa… Alex, bbbb… Sam, dddd… Gus (anonymous), cccc… Pat (not in group 1).
 -- Members 2000…a1 Alex, …b1 Sam, …d1 Gus, …e1 Jo; group 2's 2000…a2 Alex, …f2 Lee. Nudges 6000…N.
 -- ---------------------------------------------------------------------------
-INSERT INTO auth.users (id, email, instance_id, aud, role, is_anonymous, raw_user_meta_data)
-VALUES
-    ('aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa', 'alex@nudges.test', '00000000-0000-0000-0000-000000000000', 'authenticated', 'authenticated', FALSE, '{"display_name": "Alex"}'),
-    ('bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb', 'sam@nudges.test', '00000000-0000-0000-0000-000000000000', 'authenticated', 'authenticated', FALSE, '{"display_name": "Sam"}'),
-    ('cccccccc-cccc-cccc-cccc-cccccccccccc', 'pat@nudges.test', '00000000-0000-0000-0000-000000000000', 'authenticated', 'authenticated', FALSE, '{"display_name": "Pat"}'),
-    ('dddddddd-dddd-dddd-dddd-dddddddddddd', NULL, '00000000-0000-0000-0000-000000000000', 'authenticated', 'authenticated', TRUE, '{}');
+SELECT pg_temp.add_user('aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa', 'alex@nudges.test', 'Alex');
+SELECT pg_temp.add_user('bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb', 'sam@nudges.test', 'Sam');
+SELECT pg_temp.add_user('cccccccc-cccc-cccc-cccc-cccccccccccc', 'pat@nudges.test', 'Pat');
+SELECT pg_temp.add_guest('dddddddd-dddd-dddd-dddd-dddddddddddd');
 
 SELECT is(pg_temp.try('aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa', '{"type": "group.create", "groupId": "10000000-0000-0000-0000-000000000001", "memberId": "20000000-0000-0000-0000-0000000000a1", "name": "Lisbon", "displayName": "Alex"}'), 'applied', 'Alex creates group 1');
 SELECT is(pg_temp.try('aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa', '{"type": "member.add", "groupId": "10000000-0000-0000-0000-000000000001", "memberId": "20000000-0000-0000-0000-0000000000b1", "displayName": "Sam"}'), 'applied', 'Alex adds Sam');

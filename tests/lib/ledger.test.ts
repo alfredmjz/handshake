@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 
-import { computeShares, summarizeGroup, validateEntry } from "@/lib/ledger";
+import { computeShares, countsTowardsDebts, explainRounding, summarizeGroup, validateEntry } from "@/lib/ledger";
 import type { EntryDraft, Item, LedgerEntry, LedgerMember, Share } from "@/lib/ledger";
 
 import { LEDGER_CASES } from "../fixtures/ledger-cases";
@@ -167,6 +167,107 @@ describe("seeded invariants", () => {
 				).toBe(false);
 			}
 		}
+	});
+});
+
+describe("explainRounding", () => {
+	const moves = (items: Item[]) => explainRounding(items, computeShares(items));
+
+	test("$23.00 paid by Alex split three ways: Alex's part takes 1¢ less ($7.66 against $7.67)", () => {
+		expect(moves([item(2300, "alex", ["alex", "jo", "sam"])])).toEqual([
+			{ memberId: "alex", payerId: "alex", cents: -1 },
+		]);
+	});
+
+	test("$10.00 paid by Sam split three ways: Sam covers the missing 1¢", () => {
+		expect(moves([item(1000, "sam", ["alex", "jo", "sam"])])).toEqual([{ memberId: "sam", payerId: "sam", cents: 1 }]);
+	});
+
+	test("an even split moves nothing", () => {
+		expect(moves([item(5000, "alex", ["alex", "jo", "sam", "kim", "lee"])])).toEqual([]);
+	});
+
+	test("a payer outside a $20.00 split: 1¢ comes off the first person's part", () => {
+		// 6.666… rounds to 6.67 each (20.01); Sam's own part can't go below 0, so Alex (listed first) drops to 6.66.
+		expect(moves([item(2000, "sam", ["alex", "jo", "kim"])])).toEqual([
+			{ memberId: "alex", payerId: "sam", cents: -1 },
+		]);
+	});
+
+	test("two payers: each payer's rounding is its own; P2's $20.00 by five splits evenly", () => {
+		expect(
+			moves([item(1000, "p1", ["p1", "p2", "p3"], "a"), item(2000, "p2", ["p1", "p2", "p3", "p4", "p5"], "b")])
+		).toEqual([{ memberId: "p1", payerId: "p1", cents: 1 }]);
+	});
+
+	test("one payer, two $10.00 items by three: rounded once over $20.00, so the payer's $6.67 is 1¢ less", () => {
+		expect(moves([item(1000, "a", ["a", "b", "c"], "x"), item(1000, "a", ["a", "b", "c"], "y")])).toEqual([
+			{ memberId: "a", payerId: "a", cents: -1 },
+		]);
+	});
+
+	test("explains the shares it is given: stored shares that differ show the difference", () => {
+		const items = [item(900, "alex", ["alex", "sam"])];
+		const shares: Share[] = [
+			{ memberId: "alex", paidCents: 900, owedCents: 450, owedTo: { alex: 450 } },
+			{ memberId: "sam", paidCents: 0, owedCents: 450, owedTo: { alex: 450 } },
+		];
+		expect(explainRounding(items, shares)).toEqual([]);
+		expect(explainRounding(items, [shares[0], { ...shares[1], owedTo: { alex: 449 } }])).toEqual([
+			{ memberId: "sam", payerId: "alex", cents: -1 },
+		]);
+	});
+
+	test("items computeShares would refuse have nothing to explain, rather than throwing", () => {
+		const shares = computeShares([item(1000, "alex", ["alex", "sam"])]);
+		expect(explainRounding([], shares)).toEqual([]);
+		expect(explainRounding([item(1000, "alex", [])], shares)).toEqual([]);
+		expect(explainRounding([item(1000, "alex", ["alex", "sam"]), item(500, "sam", [], "j")], shares)).toEqual([]);
+		expect(explainRounding([item(1000, "alex", ["sam", "sam"])], shares)).toEqual([]);
+		expect(explainRounding([item(0, "alex", ["alex", "sam"])], shares)).toEqual([]);
+	});
+});
+
+describe("countsTowardsDebts", () => {
+	const deleted = "2026-11-04T00:00:00Z";
+
+	test("a bill counts until it is deleted", () => {
+		expect(countsTowardsDebts({ kind: "expense", deletedAt: null, paymentStatus: null })).toBe(true);
+		expect(countsTowardsDebts({ kind: "expense", deletedAt: deleted, paymentStatus: null })).toBe(false);
+	});
+
+	test("a payment counts only once confirmed", () => {
+		const status = (paymentStatus: LedgerEntry["paymentStatus"]) =>
+			countsTowardsDebts({ kind: "payment", deletedAt: null, paymentStatus });
+		expect([status("pending"), status("declined"), status("undone"), status("confirmed")]).toEqual([
+			false,
+			false,
+			false,
+			true,
+		]);
+	});
+
+	test("summarizeGroup counts exactly those: a deleted bill and pending, declined, undone payments drop out", () => {
+		const people = [member("alex", "Alex"), member("sam", "Sam")];
+		const lunch = bill(computeShares([item(4000, "alex", ["alex", "sam"])]));
+		const taxi = { ...bill(computeShares([item(1000, "sam", ["alex", "sam"])])), deletedAt: deleted };
+		const entries = [
+			lunch,
+			taxi,
+			payment("sam", "alex", 500, "pending"),
+			payment("sam", "alex", 700, "declined"),
+			payment("sam", "alex", 900, "undone"),
+			payment("sam", "alex", 1200, "confirmed"),
+		];
+		expect(entries.map(countsTowardsDebts)).toEqual([true, false, false, false, false, true]);
+		// Sam owes half the $40.00 lunch, less the $12.00 confirmed.
+		expect(summarizeGroup(entries, people)).toEqual({
+			people: [
+				{ memberId: "alex", balanceCents: 800, state: "owed" },
+				{ memberId: "sam", balanceCents: -800, state: "owes" },
+			],
+			debts: [{ fromMemberId: "sam", toMemberId: "alex", amountCents: 800 }],
+		});
 	});
 });
 

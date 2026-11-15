@@ -7,64 +7,16 @@
 BEGIN;
 CREATE EXTENSION IF NOT EXISTS pgtap WITH SCHEMA extensions;
 SELECT no_plan();
+\ir prelude.psql
 
 -- ---------------------------------------------------------------------------
--- Helpers: act as a signed-in user (a guest when their auth user is anonymous), or signed out
+-- Helpers (the shared ones are in prelude.psql)
 -- ---------------------------------------------------------------------------
-CREATE FUNCTION pg_temp.sign_in(p_user UUID) RETURNS VOID LANGUAGE sql AS $$
-    SELECT set_config('request.jwt.claims', json_build_object(
-        'sub', p_user,
-        'role', 'authenticated',
-        'is_anonymous', COALESCE((SELECT is_anonymous FROM auth.users WHERE id = p_user), FALSE)
-    )::TEXT, true);
-$$;
-CREATE FUNCTION pg_temp.push_signed_in(p_mutations JSONB) RETURNS JSONB LANGUAGE sql SET role = 'authenticated' AS $$
-    SELECT public.push_changes(p_mutations);
-$$;
-CREATE FUNCTION pg_temp.pull_signed_in(p_cursors JSONB) RETURNS JSONB LANGUAGE sql SET role = 'authenticated' AS $$
-    SELECT public.pull_changes(p_cursors);
-$$;
-CREATE FUNCTION pg_temp.join_signed_in(p_token TEXT, p_claim UUID, p_name TEXT) RETURNS UUID LANGUAGE sql SET role = 'authenticated' AS $$
-    SELECT public.join_group(p_token, p_claim, p_name);
-$$;
-CREATE FUNCTION pg_temp.upgrade_signed_in() RETURNS VOID LANGUAGE sql SET role = 'authenticated' AS $$
-    SELECT public.upgrade_guest();
-$$;
 CREATE FUNCTION pg_temp.preview_signed_out(p_token TEXT) RETURNS JSONB LANGUAGE plpgsql SET role = 'anon' AS $$
 BEGIN
     PERFORM set_config('request.jwt.claims', '{"role": "anon"}', true);
     RETURN public.preview_invite(p_token);
 END $$;
-CREATE FUNCTION pg_temp.push(p_user UUID, p_mutation JSONB) RETURNS JSONB LANGUAGE plpgsql AS $$
-BEGIN
-    PERFORM pg_temp.sign_in(p_user);
-    RETURN pg_temp.push_signed_in(jsonb_build_array(jsonb_build_object('id', gen_random_uuid()) || p_mutation));
-END $$;
--- 'applied', or the rejection's code.
-CREATE FUNCTION pg_temp.try(p_user UUID, p_mutation JSONB) RETURNS TEXT LANGUAGE sql AS $$
-    SELECT COALESCE(r#>>'{rejected,0,code}', 'applied') FROM pg_temp.push(p_user, p_mutation) r;
-$$;
-CREATE FUNCTION pg_temp.pull(p_user UUID, p_cursors JSONB DEFAULT '{}') RETURNS JSONB LANGUAGE plpgsql AS $$
-BEGIN
-    PERFORM pg_temp.sign_in(p_user);
-    RETURN pg_temp.pull_signed_in(p_cursors);
-END $$;
-CREATE FUNCTION pg_temp.join(p_user UUID, p_token TEXT, p_claim UUID DEFAULT NULL, p_name TEXT DEFAULT NULL) RETURNS UUID LANGUAGE plpgsql AS $$
-BEGIN
-    PERFORM pg_temp.sign_in(p_user);
-    RETURN pg_temp.join_signed_in(p_token, p_claim, p_name);
-END $$;
-CREATE FUNCTION pg_temp.upgrade(p_user UUID) RETURNS VOID LANGUAGE plpgsql AS $$
-BEGIN
-    PERFORM pg_temp.sign_in(p_user);
-    PERFORM pg_temp.upgrade_signed_in();
-END $$;
-CREATE FUNCTION pg_temp.head(p_group UUID) RETURNS BIGINT LANGUAGE sql AS $$
-    SELECT head_version FROM public.groups WHERE id = p_group;
-$$;
-CREATE FUNCTION pg_temp.version_of(p_entry UUID) RETURNS BIGINT LANGUAGE sql AS $$
-    SELECT row_version FROM public.ledger_entries WHERE id = p_entry;
-$$;
 -- p_payer paid 900 for something Alex, Sam and p_other split: 300 each.
 CREATE FUNCTION pg_temp.expense(p_entry UUID, p_payer UUID, p_other UUID) RETURNS JSONB LANGUAGE sql AS $$
     SELECT jsonb_build_object(
@@ -91,14 +43,12 @@ $$;
 -- Users: aaaa… Alex, bbbb… Sam, cccc… Jo, dddd… Kim, eeee… Lee, 9999… Max (all but Alex and Sam start
 -- anonymous). Members 2000…<person><group>, Max is 2000…91.
 -- ---------------------------------------------------------------------------
-INSERT INTO auth.users (id, email, instance_id, aud, role, is_anonymous, raw_user_meta_data)
-VALUES
-    ('aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa', 'alex@complete.test', '00000000-0000-0000-0000-000000000000', 'authenticated', 'authenticated', FALSE, '{"display_name": "Alex"}'),
-    ('bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb', 'sam@complete.test', '00000000-0000-0000-0000-000000000000', 'authenticated', 'authenticated', FALSE, '{"display_name": "Sam"}'),
-    ('cccccccc-cccc-cccc-cccc-cccccccccccc', NULL, '00000000-0000-0000-0000-000000000000', 'authenticated', 'authenticated', TRUE, '{}'),
-    ('dddddddd-dddd-dddd-dddd-dddddddddddd', NULL, '00000000-0000-0000-0000-000000000000', 'authenticated', 'authenticated', TRUE, '{}'),
-    ('eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee', NULL, '00000000-0000-0000-0000-000000000000', 'authenticated', 'authenticated', TRUE, '{}'),
-    ('99999999-9999-9999-9999-999999999999', NULL, '00000000-0000-0000-0000-000000000000', 'authenticated', 'authenticated', TRUE, '{}');
+SELECT pg_temp.add_user('aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa', 'alex@complete.test', 'Alex');
+SELECT pg_temp.add_user('bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb', 'sam@complete.test', 'Sam');
+SELECT pg_temp.add_guest('cccccccc-cccc-cccc-cccc-cccccccccccc');
+SELECT pg_temp.add_guest('dddddddd-dddd-dddd-dddd-dddddddddddd');
+SELECT pg_temp.add_guest('eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee');
+SELECT pg_temp.add_guest('99999999-9999-9999-9999-999999999999');
 
 SELECT is(pg_temp.try('aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa', '{"type": "group.create", "groupId": "10000000-0000-0000-0000-000000000001", "memberId": "20000000-0000-0000-0000-0000000000a1", "name": "Banff", "displayName": "Alex"}'), 'applied', 'Alex creates group 1');
 SELECT is(
@@ -238,8 +188,7 @@ SELECT is(
 SELECT is(pg_temp.preview_signed_out('completetestinvitetoken00000000000000000001')->'unclaimed' @> '[{"displayName": "Kim"}]'::JSONB, TRUE, 'the old link works again, offering Kim''s name to claim');
 
 -- Kim's deleted login doesn't come back, but whoever joins as Kim takes over Kim's history.
-INSERT INTO auth.users (id, email, instance_id, aud, role, is_anonymous, raw_user_meta_data)
-VALUES ('dddddddd-0000-0000-0000-00000000000d', NULL, '00000000-0000-0000-0000-000000000000', 'authenticated', 'authenticated', TRUE, '{}');
+SELECT pg_temp.add_guest('dddddddd-0000-0000-0000-00000000000d');
 SELECT is(pg_temp.join('dddddddd-0000-0000-0000-00000000000d', 'completetestinvitetoken00000000000000000001', '20000000-0000-0000-0000-0000000000d1'), '10000000-0000-0000-0000-000000000001'::UUID, 'a new guest login joins as Kim');
 SELECT ok(
     (SELECT e->>'created_by_member_id' = '20000000-0000-0000-0000-0000000000d1'

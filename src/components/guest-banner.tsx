@@ -9,8 +9,8 @@ import { Field } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
 import { finishKeepMyData, startKeepMyData } from "@/lib/auth";
 import { useOnline } from "@/lib/online";
+import { failureNotice, isServerError, NEEDS_CONNECTION } from "@/lib/online-outcome";
 import { requestSync } from "@/lib/sync/controller";
-import { TransportError } from "@/lib/sync/supabase-transport";
 
 // Shown on every screen for a guest: their data goes when a group completes, unless they add an email; and
 // their personal code, to get back in on another device.
@@ -36,10 +36,6 @@ export function GuestBanner() {
 		close(false);
 	}
 
-	function failed(title: string, error: unknown) {
-		toast.error(title, { description: error instanceof Error ? error.message : undefined });
-	}
-
 	async function submit(token = code) {
 		setBusy(true);
 		try {
@@ -51,13 +47,15 @@ export function GuestBanner() {
 				kept();
 			}
 		} catch (error) {
-			failed(
-				step === "email"
-					? "Couldn't send the code"
-					: error instanceof TransportError
-						? "Couldn't keep your data"
-						: "That code didn't work",
-				error
+			toast.error(
+				...failureNotice(
+					error,
+					step === "email"
+						? "Couldn't send the code"
+						: isServerError(error)
+							? "Couldn't keep your data"
+							: "That code didn't work"
+				)
 			);
 		} finally {
 			setBusy(false);
@@ -102,7 +100,7 @@ export function GuestBanner() {
 				}
 			>
 				{step === "email" ? (
-					<Field label="Email" htmlFor="keep-email" error={online ? undefined : "Needs a connection"}>
+					<Field label="Email" htmlFor="keep-email" error={online ? undefined : NEEDS_CONNECTION}>
 						<Input
 							id="keep-email"
 							type="email"
@@ -113,7 +111,7 @@ export function GuestBanner() {
 						/>
 					</Field>
 				) : (
-					<Field label="Code" htmlFor="keep-code" error={online ? undefined : "Needs a connection"}>
+					<Field label="Code" htmlFor="keep-code" error={online ? undefined : NEEDS_CONNECTION}>
 						<CodeInput
 							id="keep-code"
 							value={code}

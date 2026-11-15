@@ -21,7 +21,7 @@ type ListRowProps = React.HTMLAttributes<HTMLElement> & {
 };
 
 const rowClass =
-	"flex w-full min-w-0 items-center gap-stack py-row text-left outline-none transition-colors [&:is(a,button)]:cursor-pointer [&:is(a,button):hover]:bg-ink/[0.03] focus-visible:bg-ink/[0.05]";
+	"flex w-full min-w-0 items-center gap-stack py-row text-left outline-hidden transition-colors [a,button]:cursor-pointer [&:is(a,button):hover]:bg-ink/3 focus-visible:bg-ink/5";
 
 const ListRow = React.forwardRef<HTMLElement, ListRowProps>(
 	({ asChild = false, leading, title, subtitle, trailing, className, children, ...props }, ref) => {

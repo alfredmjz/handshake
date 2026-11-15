@@ -183,7 +183,7 @@ function Row({
 						tabIndex={on ? 0 : -1}
 						onClick={() => onChange(key)}
 						className={cn(
-							"aspect-square w-full max-w-5 rounded-[3px] outline-none transition-transform duration-quick ease-out hover:scale-125 focus-visible:ring-2 focus-visible:ring-ring",
+							"aspect-square w-full max-w-5 rounded-[3px] outline-hidden transition-transform duration-quick ease-out hover:scale-125 focus-visible:ring-2 focus-visible:ring-ring",
 							on && "scale-110 ring-2 ring-ink ring-offset-1 ring-offset-paper"
 						)}
 						style={{ background: `hsl(${coverHsl(key)})` }}

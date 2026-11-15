@@ -315,9 +315,9 @@ Nothing from Pholio is stored in Handshake, and none of Pholio's keys or URLs ap
 
 | Area                   | Choice                                                                             | Why                                                                                                  |
 | ---------------------- | ---------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------- |
-| Runtime and tooling    | Bun 1.3, for every script, tool and the API function (ADR-006)                     | One fast tool for install, scripts and tests; runs TypeScript directly.                              |
+| Runtime and tooling    | Bun 1.4, for every script, tool and the API function (ADR-006)                     | One fast tool for install, scripts and tests; runs TypeScript directly.                              |
 | Node.js                | 26 LTS, only where a host needs it (ADR-006)                                       | Vercel's build image, and the fallback runtime for the API function.                                 |
-| Client                 | Vite 7, React 19, React Router 7, static SPA                                       | A static build is what both the PWA and Capacitor need; no server rendering to host or keep offline. |
+| Client                 | Vite 8, React 19, React Router 8, static SPA                                       | A static build is what both the PWA and Capacitor need; no server rendering to host or keep offline. |
 | Local store            | Dexie (IndexedDB) with `useLiveQuery`                                              | Screens re-render from local rows, so the app works the same with or without signal.                 |
 | Offline web            | `vite-plugin-pwa` (Workbox)                                                        | Caches the app shell so the site opens offline and can be installed.                                 |
 | Mobile                 | Capacitor 8 bundling `dist/`                                                       | One codebase; the binary contains the app, so it opens offline; native share sheet.                  |
@@ -325,7 +325,7 @@ Nothing from Pholio is stored in Handshake, and none of Pholio's keys or URLs ap
 | Sync                   | Own mutation log + per-group versions, no Realtime                                 | Exactly-once, ordered, works offline, and keeps the backend swappable behind one transport file.     |
 | API for Pholio         | TypeScript on a Vercel Function (Bun runtime), OpenAPI 3.1                         | Shares `ledger.ts`, same repo and deploy, testable in Bun (ADR-001, ADR-002, ADR-006).               |
 | API database driver    | Bun's built-in `SQL` (`Bun.sql`), `prepare: false`                                 | No dependency; works with Supavisor transaction mode. `postgres` (porsager) v3 is the fallback.      |
-| UI                     | Tailwind 3.4 with Pholio's tokens, Radix, sonner, lucide                           | Matches the owner's other app and stays accessible.                                                  |
+| UI                     | Tailwind 4 with Pholio's tokens, Radix, sonner, lucide                             | Matches the owner's other app and stays accessible.                                                  |
 | Tests                  | `bun test`, pgTAP (`supabase test db`), Ajv for contract checks                    | Pure logic in Bun, SQL in SQL, the HTTP contract checked against the YAML.                           |
 | Live updates (slice 8) | Supabase Realtime Broadcast as a change signal; `react-virtuoso` for the chat list | Already in the stack; the signal only triggers the existing pull (ADR-009).                          |
 | Hosting                | Vercel (site + function), Supabase cloud                                           | Free or cheap at friend-group scale; preview deploys per branch.                                     |
@@ -435,26 +435,34 @@ Nothing from Pholio is stored in Handshake, and none of Pholio's keys or URLs ap
 - **Decision:**
   - Every script runs its tool under Bun with `bun --bun` (Vite dev, build and preview, `tsc`, Prettier,
     the Capacitor CLI). Checked on 2026-11-03: all of them work, the PWA build included.
-  - `package.json` pins `"packageManager": "bun@1.3.3"`, which CI reads (`bun-version-file`).
-  - The API function runs on Vercel's **Bun runtime** (`"bunVersion": "1.x"` in `vercel.json`, the Bun 1.3
-    line). It talks to Postgres through `Bun.sql` with `prepare: false`, so it needs no driver package.
-  - Node stays only where a host brings it: Vercel's build machine, and the fallback runtime if Bun's has to
-    go. `"engines": { "node": "26.x" }` pins both to Node 26 LTS. Nothing in the repo runs Node directly,
-    so a developer machine doesn't need it for Handshake.
+  - `package.json` pins `"packageManager": "bun@1.4.4"`, which CI reads (`bun-version-file`).
+  - The API function runs on Vercel's **Bun runtime** (`"bunVersion": "1.4.x"` in `vercel.json`). It talks
+    to Postgres through `Bun.sql` with `prepare: false`, so it needs no driver package.
+  - Node stays only where a host brings it: Vercel's build machine. Its version is the Vercel project's
+    Node.js Version setting (26.x), not `engines`. Vercel lets `"engines": { "node" }` in `package.json`
+    override `bunVersion` and then builds the function for Node. A preview build log showed this on
+    2026-11-14 ("package.json takes precedence, using node"), so `package.json` has no `engines`. Nothing
+    in the repo runs Node directly, so a developer machine doesn't need it for Handshake.
   - CI actions use their current majors (`actions/checkout@v7`, `supabase/setup-cli@v3`,
     `oven-sh/setup-bun@v2`), which run on the runner's Node 24 instead of the deprecated Node 20.
 - **Trade-offs:**
   - Vercel's Bun runtime is in **public beta**. It has no automatic source maps and no request metrics on
-    `node:http`, neither of which this function uses. The way back is one line: remove `bunVersion`, and
-    the same handler runs on Node 26.
+    `node:http`, neither of which this function uses. The way back is to remove `bunVersion`. The handler
+    (`createApiV1`) runs unchanged on Node, but `api/v1/[...path].ts` imports `SQL` from `"bun"`, so it
+    must also switch to a Node Postgres driver behind the `ApiStore` seam.
   - `Bun.sql` is younger than `postgres`. The `ApiStore` seam keeps the choice local to
     `postgres-store.ts`, and the store contract suite (§9.11) proves whichever one is used.
-  - Bun 1.4 (Vercel's `"1.4.x"`) is a rewrite with breaking changes. Stay on 1.3 until it has been tried
-    here on its own branch.
+  - Bun 1.4 is a rewrite with breaking changes. Tried on 2026-11-14 before adopting it: Bun 1.4.4 ran in
+    an isolated copy of the repo, beside the machine's 1.3.3. It installed the same 623 packages and left
+    `bun.lock` byte-identical (still `lockfileVersion: 1`, so 1.3 and 1.4 share it). Typecheck, 922 unit
+    tests, the build (PWA precache 17 entries), `api:lint`, `db:reset` with 1,320 pgTAP tests, and the
+    `Bun.sql` store contract suite all passed. The bundled API function answered a real request through
+    Postgres. Not tried: a Vercel deployment on `"1.4.x"`; check a preview deployment before production.
+    The way back is the two version strings above.
 - **Rejected:** keeping the Node runtime for the function (works, but goes against the owner's rule and
-  adds a second runtime to test against); `.nvmrc` or `.node-version` files (nothing local needs Node,
-  and `engines` is what Vercel reads).
-- **Revisit:** when Vercel's Bun runtime leaves beta, and when moving to Bun 1.4.
+  adds a second runtime to test against); `.nvmrc`, `.node-version` or `engines` (nothing local needs
+  Node, and `engines` would turn the function into a Node function on Vercel).
+- **Revisit:** when Vercel's Bun runtime leaves beta, and when Bun 1.5 arrives.
 
 ### ADR-007: One permission matrix, mirrored in TypeScript and SQL, held in step by a case table
 
@@ -619,44 +627,52 @@ Rules applied to every module below:
 
 ### 9.1 Overview
 
-| #   | Module                    | Where                                                       | Interface                                           | Seam (adapters)                                                                                                                         | Test surface                                                    | Built by       |
-| --- | ------------------------- | ----------------------------------------------------------- | --------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------- | -------------- |
-| M1  | Ledger                    | `src/lib/ledger.ts`                                         | 3 pure functions                                    | none (in-process)                                                                                                                       | `tests/lib/ledger.test.ts` + shared case table                  | Chat 3         |
-| M2  | Change planner            | `src/lib/changes.ts`                                        | `planChange()` (pure) + `commit(intent)`            | none (in-process)                                                                                                                       | `changes.test.ts`, `changes.commit.test.ts`                     | Chat 3         |
-| M3  | Local replica             | `src/lib/sync/local.ts`                                     | `applyMutation()`, `mergePull()`                    | **`LocalTables`** (`dexieTables`, `createMemoryTables`)                                                                                 | `tests/lib/sync/local.test.ts`, `merge.test.ts`                 | Chat 3         |
-| M4  | Sync engine               | `src/lib/sync/engine.ts`                                    | `syncOnce(store, transport)`                        | **`SyncStore`** (`createDexieSyncStore`, fake in `engine.test.ts`); **`SyncTransport`** (`supabaseTransport`, fake in `engine.test.ts`) | `tests/lib/sync/engine.test.ts`                                 | Exists; chat 3 |
-| M5  | Sync controller           | `src/lib/sync/controller.ts`                                | `startSync()`, `requestSync()`, `useSyncStatus()`   | none                                                                                                                                    | By hand (offline → online)                                      | Exists         |
-| M7  | Money                     | `src/lib/money.ts`                                          | `parseAmount()`, `formatAmount()`                   | none                                                                                                                                    | `tests/lib/money.test.ts`                                       | Chat 3         |
-| M8  | Supabase adapter          | `src/lib/sync/supabase-transport.ts` (+ internal `wire.ts`) | `SyncTransport` + 6 online functions                | is the production adapter at `SyncTransport`                                                                                            | `tests/lib/sync/wire.test.ts`; behaviour in pgTAP               | Chat 3         |
-| M10 | Permissions               | `src/lib/permissions.ts`                                    | `may(action, role)`, `allowedWhenCompleted(action)` | none; the TS twin of `private.may()`                                                                                                    | `tests/lib/permissions.test.ts` + permission case table         | Chat 3         |
-| M11 | Message history (slice 8) | `src/lib/sync/messages.ts`                                  | `syncMessages()`, `loadOlder()`, `trimCache()`      | **`MessageFeed`** (Supabase feed functions, fake); reuses `LocalTables`                                                                 | `tests/lib/sync/messages.test.ts`                               | Slice 8        |
-| M9  | API v1                    | `src/server/api-v1/`                                        | `createApiV1({ store }) → handle(request)`          | **`ApiStore`** (`createPostgresApiStore`, `createMemoryApiStore`)                                                                       | `tests/api/v1.*.test.ts` through `handle`; store contract suite | Chat 3         |
-| D1  | Push                      | `public.push_changes()`                                     | mutations JSON → `{ applied, rejected }`            | behind M8                                                                                                                               | pgTAP through `push_changes` + `pull_changes`                   | Chat 2         |
-| D2  | Pull                      | `public.pull_changes()`                                     | cursors JSON → changes JSON                         | behind M8                                                                                                                               | pgTAP                                                           | Chat 2         |
-| D3  | Shares in SQL             | `private.compute_shares()`                                  | items JSONB → shares                                | none; the SQL twin of M1's `computeShares`                                                                                              | Generated pgTAP from the shared case table                      | Chat 2         |
-| D4  | Online functions          | `public.preview_invite()` … `revoke_api_token()`            | one function each                                   | behind M8                                                                                                                               | pgTAP, each through itself                                      | Chat 2         |
-| D6  | Permissions in SQL        | `private.may()`, `private.require()`                        | action × role → allowed                             | none; the SQL twin of M10                                                                                                               | Generated pgTAP from the permission case table                  | Chat 2         |
-| D5  | API SQL                   | `api.v1_*()`                                                | 4 functions, token hash first                       | the SQL half of M9's Postgres adapter                                                                                                   | pgTAP (security); the store contract suite (shapes)             | Chat 2         |
+| #   | Module                    | Where                                                                                 | Interface                                                                                                                                                                                       | Seam (adapters)                                                                                                                         | Test surface                                                               | Built by           |
+| --- | ------------------------- | ------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------- | ------------------ |
+| M1  | Ledger                    | `src/lib/ledger.ts`                                                                   | 5 pure functions (+ `explainRounding`, `countsTowardsDebts`)                                                                                                                                    | none (in-process)                                                                                                                       | `tests/lib/ledger.test.ts` + shared case table                             | Chat 3             |
+| M2  | Change planner            | `src/lib/changes.ts`                                                                  | `planChange()` (pure) + `commit(intent)`                                                                                                                                                        | none (in-process)                                                                                                                       | `changes.test.ts`, `changes.commit.test.ts`                                | Chat 3             |
+| M3  | Local replica             | `src/lib/sync/local.ts` (+ table description `tables.ts`)                             | `applyMutation()`, `mergePull()`                                                                                                                                                                | **`LocalTables`** (`dexieTables`, `createMemoryTables`), both built from `tables.ts`                                                    | `tests/lib/sync/local.test.ts`, `merge.test.ts`, `tables.test.ts`          | Chat 3             |
+| M4  | Sync engine               | `src/lib/sync/engine.ts`                                                              | `syncOnce(store, transport)`                                                                                                                                                                    | **`SyncStore`** (`createDexieSyncStore`, fake in `engine.test.ts`); **`SyncTransport`** (`supabaseTransport`, fake in `engine.test.ts`) | `tests/lib/sync/engine.test.ts`                                            | Exists; chat 3     |
+| M5  | Sync controller           | `src/lib/sync/controller.ts`                                                          | `createSyncController({ device, sync })`; `startSync()`, `requestSync()`, `useSyncStatus()`                                                                                                     | **`SyncDevice`** (`browserDevice`, fake in `controller.test.ts`)                                                                        | `tests/lib/sync/controller.test.ts`                                        | Exists; 2026-11-13 |
+| M7  | Money                     | `src/lib/money.ts`                                                                    | `parseAmount()`, `formatAmount()`                                                                                                                                                               | none                                                                                                                                    | `tests/lib/money.test.ts`                                                  | Chat 3             |
+| M8  | Supabase adapter          | `src/lib/sync/supabase-transport.ts` (+ internal `wire.ts`)                           | `SyncTransport` + 6 online functions                                                                                                                                                            | is the production adapter at `SyncTransport`                                                                                            | `tests/lib/sync/wire.test.ts`; behaviour in pgTAP                          | Chat 3             |
+| M10 | Permissions               | `src/lib/permissions.ts`                                                              | `may(action, role)`, `allowedWhenCompleted(action)`                                                                                                                                             | none; the TS twin of `private.may()`                                                                                                    | `tests/lib/permissions.test.ts` + permission case table                    | Chat 3             |
+| M12 | Group access              | `src/lib/group-access.ts`                                                             | `groupView({ group, members, userId }) → { group, members, active, me, may, whyNot, names }`, `denial()`, `makeNames()` (`signed`, `list`), `nextOwner()`, `toLedgerMembers()`, `isNameTaken()` | none (in-process); `useGroupView`/`useGroupData` are thin hooks over `groupView`; `planChange` uses `denial`                            | `tests/lib/group-access.test.ts`; planner codes by the refusal case table  | 2026-11-13; pass 2 |
+| M13 | Payment rules             | `src/lib/payment-rules.ts`                                                            | `readPayment(entry, me?)`, `recordingRule(recorder, from?, to?)`, `canAnswer()`, `pendingPaymentBetween()`                                                                                      | none (pure); used by the planner, the local replica and the screens                                                                     | `tests/lib/payment-rules.test.ts`; SQL agreement by the refusal case table | 2026-11-13; pass 2 |
+| M14 | Online outcome            | `src/lib/online-outcome.ts`                                                           | `joinOutcome(error, context)`, `previewFailure()`, `failureNotice(error, title)`, `isServerError()`                                                                                             | none (pure; one adapter for the online functions, so no seam)                                                                           | `tests/lib/online-outcome.test.ts`                                         | 2026-11-13; pass 2 |
+| M15 | Join flow                 | `src/lib/join-flow.ts` (+ `join-draft.ts`: `draftReady`, `nameClash`, `personalCode`) | `createJoinFlow(ports, code) → { restore, stash, go, viaGuest }`                                                                                                                                | **`JoinPorts`** (production ports in `join.tsx`; `tests/support/fake-join-ports.ts`)                                                    | `tests/lib/join-flow.test.ts`, `join-draft.test.ts`                        | 2026-11-13; pass 2 |
+| M11 | Message history (slice 8) | `src/lib/sync/messages.ts`                                                            | `syncMessages()`, `loadOlder()`, `trimCache()`                                                                                                                                                  | **`MessageFeed`** (Supabase feed functions, fake); reuses `LocalTables`                                                                 | `tests/lib/sync/messages.test.ts`                                          | Slice 8            |
+| M9  | API v1                    | `src/server/api-v1/`                                                                  | `createApiV1({ store }) → handle(request)`                                                                                                                                                      | **`ApiStore`** (`createPostgresApiStore`, `createMemoryApiStore`)                                                                       | `tests/api/v1.*.test.ts` through `handle`; store contract suite            | Chat 3             |
+| D1  | Push                      | `public.push_changes()`                                                               | mutations JSON → `{ applied, rejected }`                                                                                                                                                        | behind M8                                                                                                                               | pgTAP through `push_changes` + `pull_changes`                              | Chat 2             |
+| D2  | Pull                      | `public.pull_changes()` (+ `public.pull_*_row()`, 017)                                | cursors JSON → changes JSON                                                                                                                                                                     | behind M8                                                                                                                               | pgTAP; pull key table (`pull_keys.test.sql`)                               | Chat 2; 017        |
+| D3  | Shares in SQL             | `private.compute_shares()`                                                            | items JSONB → shares                                                                                                                                                                            | none; the SQL twin of M1's `computeShares`                                                                                              | Generated pgTAP from the shared case table                                 | Chat 2             |
+| D4  | Online functions          | `public.preview_invite()` … `revoke_api_token()`                                      | one function each                                                                                                                                                                               | behind M8                                                                                                                               | pgTAP, each through itself                                                 | Chat 2             |
+| D6  | Permissions in SQL        | `private.may()`, `private.require()`                                                  | action × role → allowed                                                                                                                                                                         | none; the SQL twin of M10                                                                                                               | Generated pgTAP from the permission case table                             | Chat 2             |
+| D5  | API SQL                   | `api.v1_*()`                                                                          | 4 functions, token hash first                                                                                                                                                                   | the SQL half of M9's Postgres adapter                                                                                                   | pgTAP (security); the store contract suite (shapes)                        | Chat 2             |
 
 ### 9.2 Seams and who owns them
 
-There are four real seams in TypeScript in the MVP, and a fifth in slice 8 (`MessageFeed`). Across the TypeScript–SQL divide there are four **wire contracts**:
+There are four real seams in TypeScript in the MVP, a fifth since 2026-11-13 (`SyncDevice`), and a sixth in slice 8 (`MessageFeed`). Across the TypeScript–SQL divide there are four **wire contracts**:
 JSON shapes that one side writes and the other reads. This document fixes them, so chats 2 and 3 can build
 their sides without waiting on each other.
 
-| Seam or contract        | Kind              | Defined in                                    | Sides / adapters                                                                                              | Chat 2                                               | Chat 3                                                     |
-| ----------------------- | ----------------- | --------------------------------------------- | ------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------- | ---------------------------------------------------------- |
-| `LocalTables`           | TS seam           | `src/lib/sync/local.ts`                       | `dexieTables(db)`; `createMemoryTables()` (`tests/support/memory-tables.ts`)                                  | —                                                    | Owns; reshapes it (M3)                                     |
-| `SyncStore`             | TS seam           | `src/lib/sync/engine.ts`                      | `createDexieSyncStore()`; the fake store in `tests/lib/sync/engine.test.ts`                                   | —                                                    | Owns; **kept unchanged**                                   |
-| `SyncTransport`         | TS seam           | `src/lib/sync/engine.ts`                      | `supabaseTransport`; the fake transport in `tests/lib/sync/engine.test.ts`                                    | —                                                    | Owns; **kept unchanged**                                   |
-| `ApiStore`              | TS seam           | `src/server/api-v1/store.ts`                  | `createPostgresApiStore(sql)`; `createMemoryApiStore(fixture)`                                                | Writes the `api.v1_*` SQL the Postgres adapter calls | Owns the interface, both adapters and their contract suite |
-| Mutation JSON           | Wire contract     | `src/lib/sync/types.ts`, spec "New mutations" | Device writes; `push_changes` reads                                                                           | Reads it exactly                                     | Writes it                                                  |
-| Pull JSON               | Wire contract     | §11.2 (snake_case rows)                       | `pull_changes` writes; `wire.ts` reads                                                                        | Owns the shape                                       | Reads it                                                   |
-| `api.v1_*` JSON         | Wire contract     | §11.2 (camelCase)                             | `api.v1_*` writes; `postgres-store.ts` reads                                                                  | Owns the shape                                       | Reads it                                                   |
-| Ledger case table       | Shared fixture    | `tests/fixtures/ledger-cases.ts`              | `tests/lib/ledger.test.ts`; generated `supabase/tests/ledger_cases.test.sql`                                  | Creates it and the SQL generator                     | Runs `computeShares`/`summarizeGroup` against it           |
-| Permission case table   | Shared fixture    | `tests/fixtures/permission-cases.ts`          | `tests/lib/permissions.test.ts`; generated `supabase/tests/permission_cases.test.sql`                         | Creates it and its generator                         | Runs `may()` against it                                    |
-| `MessageFeed` (slice 8) | TS seam           | `src/lib/sync/messages.ts`                    | `supabaseMessageFeed` (calls `pull_messages`, `message_history`); a fake in `tests/lib/sync/messages.test.ts` | Writes the feed functions                            | Owns the interface and both adapters                       |
-| HTTP `/api/v1`          | External contract | `docs/api-v1.openapi.yaml`                    | M9 writes; Pholio reads                                                                                       | —                                                    | Owns; contract tests                                       |
+| Seam or contract        | Kind              | Defined in                                    | Sides / adapters                                                                                                       | Chat 2                                               | Chat 3                                                     |
+| ----------------------- | ----------------- | --------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------- | ---------------------------------------------------------- |
+| `LocalTables`           | TS seam           | `src/lib/sync/local.ts`                       | `dexieTables(db)`; `createMemoryTables()` (`tests/support/memory-tables.ts`)                                           | —                                                    | Owns; reshapes it (M3)                                     |
+| `SyncStore`             | TS seam           | `src/lib/sync/engine.ts`                      | `createDexieSyncStore()`; the fake store in `tests/lib/sync/engine.test.ts`                                            | —                                                    | Owns; **kept unchanged**                                   |
+| `SyncTransport`         | TS seam           | `src/lib/sync/engine.ts`                      | `supabaseTransport`; the fake transport in `tests/lib/sync/engine.test.ts`                                             | —                                                    | Owns; **kept unchanged**                                   |
+| `ApiStore`              | TS seam           | `src/server/api-v1/store.ts`                  | `createPostgresApiStore(sql)`; `createMemoryApiStore(fixture)`                                                         | Writes the `api.v1_*` SQL the Postgres adapter calls | Owns the interface, both adapters and their contract suite |
+| Mutation JSON           | Wire contract     | `src/lib/sync/types.ts`, spec "New mutations" | Device writes; `push_changes` reads                                                                                    | Reads it exactly                                     | Writes it                                                  |
+| Pull JSON               | Wire contract     | §11.2 (snake_case rows)                       | `pull_changes` writes; `wire.ts` reads                                                                                 | Owns the shape                                       | Reads it                                                   |
+| `api.v1_*` JSON         | Wire contract     | §11.2 (camelCase)                             | `api.v1_*` writes; `postgres-store.ts` reads                                                                           | Owns the shape                                       | Reads it                                                   |
+| Ledger case table       | Shared fixture    | `tests/fixtures/ledger-cases.ts`              | `tests/lib/ledger.test.ts`; generated `supabase/tests/ledger_cases.test.sql`                                           | Creates it and the SQL generator                     | Runs `computeShares`/`summarizeGroup` against it           |
+| Permission case table   | Shared fixture    | `tests/fixtures/permission-cases.ts`          | `tests/lib/permissions.test.ts`; generated `supabase/tests/permission_cases.test.sql`                                  | Creates it and its generator                         | Runs `may()` against it                                    |
+| Refusal case table      | Shared fixture    | `tests/fixtures/refusal-cases.ts`             | `tests/lib/refusal-cases.test.ts` (`planChange`); generated `supabase/tests/refusal_cases.test.sql` (`push_changes`)   | — (2026-11-13)                                       | —                                                          |
+| Pull key table          | Shared fixture    | `tests/fixtures/pull-keys.ts`                 | `tests/lib/sync/pull-keys.test.ts` (`wire.ts` readers); generated `supabase/tests/pull_keys.test.sql` (`pull_changes`) | — (2026-11-13)                                       | —                                                          |
+| `SyncDevice`            | TS seam           | `src/lib/sync/controller.ts`                  | `browserDevice`; the fake device in `tests/lib/sync/controller.test.ts`                                                | —                                                    | — (2026-11-13)                                             |
+| `JoinPorts`             | TS seam           | `src/lib/join-flow.ts`                        | the ports built in `src/pages/join.tsx`; `tests/support/fake-join-ports.ts`                                            | —                                                    | — (pass 2)                                                 |
+| `MessageFeed` (slice 8) | TS seam           | `src/lib/sync/messages.ts`                    | `supabaseMessageFeed` (calls `pull_messages`, `message_history`); a fake in `tests/lib/sync/messages.test.ts`          | Writes the feed functions                            | Owns the interface and both adapters                       |
+| HTTP `/api/v1`          | External contract | `docs/api-v1.openapi.yaml`                    | M9 writes; Pholio reads                                                                                                | —                                                    | Owns; contract tests                                       |
 
 **Seams considered and not drawn** (one adapter each, so they would be indirection only):
 
@@ -664,8 +680,8 @@ their sides without waiting on each other.
   their behaviour lives in SQL and is tested by pgTAP, and the client side is a call plus error mapping.
 - A rate-limiter or token-store seam in the API. Both live inside `api.v1_*` (ADR-003), so the `ApiStore`
   seam already covers them.
-- A clock or event-source seam in the sync controller. Nothing but the browser would fill it; the
-  controller is checked by hand.
+- ~~A clock or event-source seam in the sync controller.~~ Drawn on 2026-11-13 as `SyncDevice`: the
+  test fake is the second adapter, and it lets the run-again, offline-skip and trigger rules be tested.
 - A seam for the Realtime change signal (slice 8). Only Supabase Realtime fills it; the controller takes
   a `subscribe(groupIds, onSignal)` function as a dependency, and a missed signal only costs latency.
 - A router or middleware seam in the API. There are five fixed routes; routing is part of the handler's
@@ -706,7 +722,10 @@ type PersonSummary = {
 };
 type GroupSummary = { people: PersonSummary[]; debts: Debt[] };
 
+type RoundingMove = { memberId: string; payerId: string; cents: number }; // a cent moved by rounding
 function computeShares(items: Item[]): Share[];
+function explainRounding(items: readonly Item[], shares: readonly Share[]): RoundingMove[]; // [] where computeShares refuses
+function countsTowardsDebts(entry: LedgerEntry): boolean; // a bill not deleted, or a confirmed payment
 function validateEntry(entry: EntryDraft, members: LedgerMember[]): EntryProblem[];
 function summarizeGroup(entries: Iterable<LedgerEntry>, members: LedgerMember[]): GroupSummary;
 ```
@@ -964,11 +983,15 @@ function mergePull(tables: LocalTables, pull: PullResult, pending: Mutation[], u
 2026-11-04.)
 
 - **M5 `controller.ts` (exists):**
-  - **Interface:** `startSync(store, transport, onRejected) → stop`, `requestSync()`, `useSyncStatus()`.
+  - **Interface:** `createSyncController({ device, sync }) → { start, requestSync, subscribe, status }`.
+    Screens keep using `startSync(store, transport, onRejected) → stop`, `requestSync()` and
+    `useSyncStatus()`, which wrap a default controller over `browserDevice` and `syncOnce`.
   - **Invariants:** one run at a time; a request during a run causes exactly one more run; offline means
-    the status says offline and no attempt is made.
-  - **Dependencies:** it accepts `store` and `transport` but reads `window`, `document` and `navigator`
-    directly. No seam is drawn there (see §9.2), and it is checked by hand.
+    the status says offline and no attempt is made. Triggers: start, reconnect, the app shown again, and
+    once a minute while shown.
+  - **Dependencies:** `SyncDevice` (`isOnline`, `isVisible`, `onConnectionChange`, `onVisibilityChange`,
+    `every(ms)`, `now`). `browserDevice` reads `window`, `document` and `navigator`; the fake in
+    `tests/lib/sync/controller.test.ts` is the second adapter.
   - **Deletion test:** delete it, and the scheduling would spread into the layout.
 - **M7 `money.ts`:**
   - **Interface:** `parseAmount(input): number | null` and `formatAmount(cents): string`. It is pure and
@@ -1185,6 +1208,23 @@ The generator only formats; it computes nothing, so the expected values stay han
 requires. Chat 2 creates the table, the generator, the generated file and the drift guard, because
 `compute_shares` is built first. Chat 3's ledger tests run on the same table.
 
+Two more tables follow the same pattern (2026-11-13):
+
+- **Refusal cases** (`tests/fixtures/refusal-cases.ts`, `bun run gen:refusal-cases`): (group state,
+  intent or mutation) → accepted or the first refusal code, for every mutation kind, including the
+  validation constants (categories, cover colour, sticker, name and note lengths). `planChange` and
+  `push_changes` run against it; codes only, wording stays per side (ADR-007). The four rows where the two
+  sides first disagreed were settled on 2026-11-13 (migration 019, below); every row now holds both sides to
+  one outcome.
+- **Pull keys** (`tests/fixtures/pull-keys.ts`, `bun run gen:pull-keys`): the JSON keys `pull_changes`
+  sends per table. pgTAP checks the server sends exactly those; the bun test checks `wire.ts` reads every
+  one (`groups.base_currency` is marked sent but unread).
+
+pgTAP files that sign people in share one prelude, `supabase/tests/prelude.psql` (`\ir prelude.psql`): `sign_in`, `push`,
+`push_signed_in`, `join`, `join_signed_in`, `try`, `try_reason`, `pull`, `add_user`, `add_guest`. pg_prove
+runs only `.sql` files, so the `.psql` includes are never run on their own. `ledger_cases`, `permission_cases`,
+`rule_helpers` and `sync` need none of it (`sync` checks the profile name taken from the email).
+
 ### 9.14 M10 Permissions (`src/lib/permissions.ts`)
 
 **Interface:**
@@ -1353,6 +1393,17 @@ then `ADD`), revokes from `PUBLIC, anon` and grants explicitly, and stamps every
   without `rowVersion`/`updatedByMemberId` (NULL for a delete).
 
 ### 11.2 Migrations
+
+On 2026-11-14 migrations 001–020 were squashed into one file, `supabase/migrations/020_baseline.sql`. It
+rebuilds the whole schema on an empty Supabase project: tables, functions, policies, grants, the
+`on_auth_user_created` trigger on `auth.users`, the `handshake_api` role, and the default privileges for
+`private` and `api`. Built on a wiped local stack, its whole-database `pg_dump --schema-only` and
+`pg_dumpall --roles-only` were identical to the ones from 001–020. Two things a plain squash gets wrong are
+fixed by hand in the file: it leaves out roles and the `private`/`api` default privileges, and its grants only
+add to what Supabase's default privileges give `anon` and `authenticated` on new `public` objects. Without
+that fix a rebuilt database would let anyone write every table, so the file turns those defaults off while
+it builds and restores them at the end. The sections below describe the original migrations; their files
+are in git history before the squash. New changes go in new migrations from `021`.
 
 **`004_people.sql`**
 
@@ -1759,8 +1810,8 @@ permission matrix, `private.may`):
 | `nudge.send`                                     | `groupId`, `nudgeId`, `toMemberId`, `amountCents`                                                                                                                    | Everyone, to someone with a login who owes them; once a day each   |
 
 Rejection codes the device can see: `HS403`, `HS404` (only `conflict.resolve` among mutations), `HS409`,
-`HS422`, and passed-through SQLSTATEs such as `23505` (an id already used), `23514` (a blank or overlong
-name) and `22P02` (a `groupId`, `memberId` or similar that isn't a UUID). Signed out, PostgREST refuses
+`HS422`, and passed-through SQLSTATEs such as `23505` (an id already used), `23514` (a CHECK no function
+checks first; names are checked with `HS422` from migration 019) and `22P02` (a `groupId`, `memberId` or similar that isn't a UUID). Signed out, PostgREST refuses
 every online call made only to `authenticated` with `42501` (anon lacks `EXECUTE`) before the function runs,
 so the `28000` the functions raise is not what the device sees.
 
@@ -1999,14 +2050,17 @@ screens branch (`feature/many-hands-ui`), which built the same interfaces in par
   `{ memberId, role, isAnonymous }`, and a caller with no active row gets `HS403` for every group intent.
 - **Answering a payment that is no longer pending** plans nothing, on this device, whoever answered it;
   the screens hide the buttons then, and the server's `HS409` covers an answer that raced another device.
-- **Refusals the server words differently.** Name lengths (`23514` on the server) and an unknown conflict
-  (`HS404`) plan `HS422`, since `Plan`'s codes are `HS403`, `HS409` and `HS422`.
+- **Refusal codes match the server's** (2026-11-13, held by the refusal case table): `Plan`'s codes are
+  `HS403`, `HS404`, `HS409` and `HS422`. An unknown conflict plans `HS404`; a cover colour is checked after
+  who you are; migration 019 (`private.require_name`) refuses names out of 1-80 (groups) or 1-60 (people)
+  with `HS422`, at the point `planChange` checks them, and a blank owner's name on `group.create` too (the
+  profile name is used only when no `displayName` is sent).
 - **`ExpenseDraft`** is `{ description, entryDate, notes, category, items }`; `planChange` works out the
   amount and shares from the items. `createdId` also names a person added with `addPerson`.
-- **Read hooks:** `groups.ts` (`useGroups`, `useGroup`, `useWaitingChanges`, `useUnsyncedIds`),
-  `members.ts` (`useMembers`, `useMyMember`), `entries.ts` (`useEntries`, `useEntry`, `useGroupSummary`,
-  `usePendingPayments`, `useConflicts`, `useOpenConflicts`, `useGroupCategory`, `useGroupCategories`),
-  `invites.ts` (`useInvites`, `useInviteToken`).
+- **Read hooks:** `groups.ts` (`useGroups`, `useWaitingChanges`, `useUnsyncedIds`),
+  `members.ts` (`useMembers`), `entries.ts` (`useEntries`, `useEntry`, `useGroupSummary`,
+  `usePendingPayments`, `useConflicts`, `useOpenConflicts`, `useGroupCategory`, `useGroupCategories`);
+  a group screen reads its group and people through `useGroupView` (pass 2).
 - **Dexie versions 2 and 3.** `inviteTokens` is indexed by `groupId` too. Version 3 adds `note` and
   `category`; each upgrade clears the cursors so the next pull sends every group whole.
 - **A rejected change leaves no trace.** After any rejection the device clears its cursors and pulls again;
@@ -2024,6 +2078,85 @@ screens branch (`feature/many-hands-ui`), which built the same interfaces in par
   group's head version, since the two adapters stamp different absolute versions.
 - **Not checked:** `Bun.sql` through Supavisor's transaction mode (the local pooler is off; the suite ran
   on the direct connection), and `bunx vercel build` (needs the owner's Vercel login; see ADR-001).
+
+#### As built (deepen modules, 2026-11-13, branch `refactor/deepen-modules`)
+
+Ten behaviour-preserving refactors from the architecture review of 2026-11-13. What changed in §9's terms:
+
+- **Replica tables described once.** `src/lib/sync/tables.ts` holds one description per Dexie replica
+  table (row key, group field, how a pulled row maps in, what a full pull keeps). `LocalTables`
+  (`dropGroup`, `keepOnlyPulled`, the `mergePull` puts), `dexieTables`/`writeTables`, `LocalDb`'s replica
+  fields and `createMemoryTables()` are built from it; a table without a description is a type error.
+  The Dexie `version()` history and `wire.ts` mappers are still written by hand. No Dexie version bump.
+- **Pull JSON built per table in SQL.** Migration 017 rebuilds `pull_changes` from `public.pull_*_row()`
+  builders (SECURITY INVOKER, granted to `authenticated`, since RLS picks the rows and `authenticated`
+  has no `USAGE` on `private`). The output is byte-identical to 016's. The pull key table pins the keys.
+- **SQL rule helpers.** Migration 018 adds `private.payment_answerer()` (who must answer a payment; NULL
+  means it counts at once), `private.may_record_payment()`, and the field checks `private.entry_amount()`,
+  `entry_date()`, `entry_notes()`. `private.validate_entry` and `private.apply_payment_record` call them.
+  Each helper has its own pgTAP (`rule_helpers.test.sql`).
+- **Refusal case table, pull key table, pgTAP prelude:** see §9.13.
+- **M13 payment rules** (`src/lib/payment-rules.ts`): the pending-payment rules the planner, the local
+  replica (`applyMutation`), Settle up, the Balances tab and the payment editor share. The Balances tab
+  shows settle-view's `paymentCards` filtered to the person's own. The group-note normaliser is
+  `storedNote()` in `src/lib/stored-text.ts`, used by the planner and the replica.
+- **Ledger.** `explainRounding()` replaces the two rounding explainers (`group-view.roundingCents` is a
+  per-person sum of its moves; the bill editor calls it directly) and returns `[]` for items
+  `computeShares` refuses, where the old copies threw or reported whole shares as rounding.
+  `countsTowardsDebts()` is the one TypeScript statement of the rule; `summarizeGroup` and the memory
+  `ApiStore` use it, and the SQL twin is `private.entry_counts` (009). The store contract suite's "Cabin"
+  group checks it on both adapters.
+- **M12 group access** (`src/lib/group-access.ts`): the gate (`may` and open-or-allowed-when-completed),
+  the reason in words, and `makeNames()`. `useGroupData` is a thin hook over it; `planChange` calls
+  `denial()` and keeps its codes and server wording. A person who left reads "Jo (left)" everywhere
+  except signatures and nudge senders. The conflict resolver branches on member ids, not on "You".
+- **M14 online outcome and M15 join draft.** All online-only failure wording (join, return with a
+  personal code, settings, guest banner, the sign-in offline toast) comes from `online-outcome.ts`; the
+  sentences are unchanged. `sign-in.tsx` still calls `supabase.auth` directly. Join's draft rules and
+  its two `sessionStorage` stashes live in `join-draft.ts`, with the storage passed in.
+- **M5 controller:** see §9.7 (`SyncDevice`).
+
+#### As built (deepen modules, pass 2, 2026-11-14)
+
+A second review on the same branch. Behaviour and wording are unchanged except where listed.
+
+- **SQL checks as named steps (020).** `private.validate_entry` and `private.apply_payment_record` are
+  restated once as lists of calls to private helpers (`bill_description`, `bill_shares`, `bill_items`,
+  `bill_people_in_group`, `bill_shares_match_items`, `payment_sides`, `no_payment_waiting`); the kind
+  checks, the `data_exception` wrapper and 018's date wording stay. Each helper's message is pinned in
+  `rule_helpers.test.sql`. From here on a rule change replaces one helper (AGENTS.md, Database rules).
+- **One generator frame.** `scripts/case-sql.ts` holds `sqlString`, the GENERATED header and the
+  BEGIN/plan/finish/ROLLBACK frame; the four generators keep only their cases, and the drift tests stay
+  beside each table's own tests. `refusal_cases.test.sql` first checks the psql world against the
+  TypeScript `WORLD`, so a drifted world fails by name. Every refusal case now states one expected outcome.
+- **M12 group view.** `groupView()` gives every group screen the group, its people, `me`, `may`, `whyNot`
+  and `names` (`signed`, `list`) from one live query (`useGroupView`); `useGroupData` adds entries and
+  stays undefined until they load. `can` is now `may`. A deleted group reads as not being in it.
+  `useGroup`, `useMyMember`, `groupAccess` and `sentenceList` are gone. `nextOwner()` mirrors
+  `private.hand_over` (012) for the replica and the leave dialog, which now lists a member with no join
+  date last, as the server does.
+- **M13 one reading of a payment.** `readPayment()` answers who paid whom, its status, who answers (or
+  declined), who signed, when it counted and, for one person, their side and whether they may answer
+  or undo. The planner, the replica, Settle up, the Balances tab, the entry page and the editors read
+  it. `group-view.ts` and `shell-view.ts` keep their one-line status checks on narrow row types.
+- **The committer reads through `LocalTables`.** `readGroupState` uses `dexieTables(db)` inside the
+  commit transaction; `toLedgerMembers` and `isNameTaken` live in group-access; `byLabel` is in
+  `utils.ts` and `byText` is defined through it.
+- **M14/M15 join flow and failure wording.** `createJoinFlow(ports, code)` owns the two stashes, the
+  one-attempt-in-flight rule and the outcome of a join, a return and a guest sign-in; `join.tsx` renders
+  as before. `failureNotice(error, title)` replaces `describeProblem`/`messageOf`. Intended wording
+  change: a lost connection on sign-in, the guest banner and settings reads "Needs a connection"
+  (a failed fetch only; a server error keeps its own message). An auto-join that finishes after the screen closed no
+  longer shows its result.
+- **Dropped, do not re-suggest:**
+  - _G, the table description owning Dexie indexes and wire mapping._ Dexie `version()` blocks are
+    history: each is a migration and must stay as written, so they cannot be derived. Moving the wire
+    mappers into `tables.ts` would let snake_case past `wire.ts`. Both halves add friction.
+  - _J, moving the `public.pull_*_row()` builders off the public RPC list._ It needs a new schema and a
+    restated `pull_changes` to close eight entry points that are already safe (SECURITY INVOKER, RLS
+    applies, `anon` revoked, grants pinned by the pull key table). The surface is intended (017).
+  - _An `entry_date` wording argument._ A second signature makes one-argument calls ambiguous and breaks
+    re-running 018.
 
 ## 13. Risks specific to this design
 

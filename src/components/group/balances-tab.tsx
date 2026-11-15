@@ -18,10 +18,11 @@ import { square } from "@/components/art/figures/square";
 import { Button } from "@/components/ui/button";
 import { List, ListHeading, ListRow } from "@/components/ui/list";
 import { Stack } from "@/components/ui/stack";
-import { canAnswer, paymentSides } from "@/lib/changes";
 import type { Debt } from "@/lib/ledger";
-import type { EntryRow } from "@/lib/sync/types";
 import { formatAmount } from "@/lib/money";
+import { readPayment, recordingRule } from "@/lib/payment-rules";
+import { paymentCards } from "@/lib/settle-view";
+import type { EntryRow } from "@/lib/sync/types";
 import { everOwed } from "@/lib/shell-view";
 import { byText } from "@/lib/utils";
 
@@ -43,28 +44,32 @@ export function BalancesTab({ data }: { data: GroupData }) {
 		setEditorOpen(true);
 	};
 
+	const cards = data.me
+		? paymentCards(
+				debts,
+				data.entries.filter((e) => readPayment(e)?.status === "pending"),
+				data.members,
+				{
+					memberId: data.me.id,
+					role: data.me.role,
+				}
+			)
+		: [];
 	const byOther = new Map<string, Counterpart>();
-	for (const debt of debts) {
-		if (debt.fromMemberId !== me && debt.toMemberId !== me) continue;
-		const otherId = debt.fromMemberId === me ? debt.toMemberId : debt.fromMemberId;
-		byOther.set(otherId, { otherId, debt });
-	}
-	for (const entry of data.entries) {
-		if (entry.kind !== "payment" || entry.paymentStatus !== "pending") continue;
-		const { from, to } = paymentSides(entry);
-		if (!from || !to || (from !== me && to !== me)) continue;
-		const otherId = from === me ? to : from;
-		byOther.set(otherId, { ...byOther.get(otherId), otherId, pending: entry });
+	for (const card of cards) {
+		if (card.from !== me && card.to !== me) continue;
+		const otherId = card.from === me ? card.to : card.from;
+		const pending = card.kind === "record" ? undefined : card.entry;
+		const known = byOther.get(otherId);
+		byOther.set(otherId, { otherId, debt: card.debt ?? known?.debt, pending: pending ?? known?.pending });
 	}
 	const mine = [...byOther.values()].sort(byText((c) => names.of(c.otherId)));
 
 	const others = debts
 		.filter((d) => d.fromMemberId !== me && d.toMemberId !== me)
 		.sort(byText((d) => `${names.of(d.fromMemberId)} ${names.of(d.toMemberId)}`));
-	const mayRecordOthers = data.can("payment.record.others");
-	const mayRecordOwn = data.can("payment.record.own");
-	// People sign with their own name, you included.
-	const signedName = (id: string) => data.members.find((m) => m.id === id)?.displayName ?? names.of(id);
+	const mayRecordOthers = data.may("payment.record.others");
+	const mayRecordOwn = data.may("payment.record.own");
 
 	return (
 		<Stack gap="section">
@@ -79,25 +84,25 @@ export function BalancesTab({ data }: { data: GroupData }) {
 					{mine.map(({ otherId, debt, pending }, n) => {
 						if (!me) return null;
 						const person = (id: string) => ({ id, name: names.of(id) });
-						const sides = pending ? paymentSides(pending) : null;
+						const payment = pending ? readPayment(pending, me) : null;
 						// The arrow follows the debt; a payment with nobody owing anything follows the payment.
-						const fromId = debt?.fromMemberId ?? sides?.from ?? otherId;
-						const toId = debt?.toMemberId ?? sides?.to ?? otherId;
+						const fromId = debt?.fromMemberId ?? payment?.from ?? otherId;
+						const toId = debt?.toMemberId ?? payment?.to ?? otherId;
 						const amountCents = debt?.amountCents ?? pending?.amountCents ?? 0;
 						const iOwe = fromId === me;
 
 						// A badge under each face for their part of the handshake; your buttons go on your side.
 						const badges = new Map<string, ReactNode>();
 						let actions: ReactNode = null;
-						if (pending && sides?.from && sides.to) {
+						if (pending && payment) {
 							const recorder = pending.createdByMemberId;
-							const target = recorder === sides.from ? sides.to : sides.from;
+							const target = recorder === payment.from ? payment.to : payment.from;
 							const part = pending.amountCents !== amountCents ? ` ${formatAmount(pending.amountCents)}` : "";
 							badges.set(
 								recorder,
 								<Badge tone="settled">
 									<CheckDoodle />
-									{recorder === sides.from ? "Paid" : "Received"}
+									{recorder === payment.from ? "Paid" : "Received"}
 									{part}
 								</Badge>
 							);
@@ -133,18 +138,18 @@ export function BalancesTab({ data }: { data: GroupData }) {
 								tilt={n % 2 === 0 ? "up" : "down"}
 								fromBadge={badges.get(fromId)}
 								signatures={
-									pending && sides?.from && sides.to ? (
+									payment ? (
 										<Signatures
 											write={false}
 											payer={{
-												name: signedName(sides.from),
+												name: names.signed(payment.from),
 												role: "paid",
-												signed: pending.createdByMemberId === sides.from,
+												signed: payment.signed.payer,
 											}}
 											receiver={{
-												name: signedName(sides.to),
+												name: names.signed(payment.to),
 												role: "received",
-												signed: pending.createdByMemberId === sides.to,
+												signed: payment.signed.receiver,
 											}}
 										/>
 									) : undefined
@@ -153,8 +158,8 @@ export function BalancesTab({ data }: { data: GroupData }) {
 								actions={actions}
 								actionsSide={iOwe ? "from" : "to"}
 								sentence={
-									pending
-										? pendingSentence(pending, names, me)
+									payment
+										? pendingSentence(payment, names)
 										: iOwe
 											? `You owe ${names.of(otherId)}`
 											: `${names.of(otherId)} owes you`
@@ -190,8 +195,7 @@ export function BalancesTab({ data }: { data: GroupData }) {
 						{others.map((debt) => {
 							const recordable =
 								mayRecordOthers &&
-								!canAnswer(names.member(debt.fromMemberId)) &&
-								!canAnswer(names.member(debt.toMemberId));
+								recordingRule(me, names.member(debt.fromMemberId), names.member(debt.toMemberId)).mayRecord;
 							return (
 								<ListRow
 									key={`${debt.fromMemberId}:${debt.toMemberId}`}

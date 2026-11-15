@@ -162,10 +162,10 @@ SELECT is(
 
 SELECT is(
     (public.push_changes(jsonb_build_array(
-        jsonb_build_object('id', 'c0000000-0000-0000-0000-000000000006', 'type', 'group.rename', 'groupId', 'a0000000-0000-0000-0000-0000000000a1', 'name', '   ')
+        jsonb_build_object('id', 'c0000000-0000-0000-0000-000000000006', 'type', 'group.rename', 'groupId', 'not-a-uuid', 'name', 'Japan 2027')
     ))#>'{rejected,0}') - 'reason',
-    '{"id": "c0000000-0000-0000-0000-000000000006", "code": "23514"}'::JSONB,
-    'a blank name is rejected by the table''s check, with its own SQLSTATE'
+    '{"id": "c0000000-0000-0000-0000-000000000006", "code": "22P02"}'::JSONB,
+    'any other error is rejected with its own SQLSTATE (a groupId that isn''t a UUID)'
 );
 
 RESET ROLE;

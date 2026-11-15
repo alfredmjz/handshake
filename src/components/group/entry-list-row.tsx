@@ -1,29 +1,29 @@
 import { Link } from "react-router";
 
 import { HandDisc } from "@/components/art/hand";
-import type { Names } from "@/components/group/group-data";
 import { RowAmount } from "@/components/money";
 import { Badge } from "@/components/ui/badge";
 import { ListRow } from "@/components/ui/list";
 import { Inline } from "@/components/ui/stack";
-import { paymentSides } from "@/lib/changes";
-import { effectOn, payerIds, sentenceList } from "@/lib/group-view";
+import type { Names } from "@/lib/group-access";
+import { effectOn, payerIds } from "@/lib/group-view";
 import { formatAmount } from "@/lib/money";
+import { readPayment } from "@/lib/payment-rules";
 import type { EntryRow } from "@/lib/sync/types";
 import { cn } from "@/lib/utils";
 
 // "Sam paid Alex $30.00" / "You paid Sam $10.00".
 export function paymentTitle(entry: EntryRow, names: Names): string {
-	const { from, to } = paymentSides(entry);
-	return `${names.of(from)} paid ${names.inSentence(to)} ${formatAmount(entry.amountCents)}`;
+	const payment = readPayment(entry);
+	return `${names.of(payment?.from)} paid ${names.inSentence(payment?.to)} ${formatAmount(entry.amountCents)}`;
 }
 
 // Where a payment stands, in a few words.
 export function paymentState(entry: EntryRow, names: Names): string {
-	const { from, to } = paymentSides(entry);
-	switch (entry.paymentStatus) {
+	const payment = readPayment(entry);
+	switch (payment?.status) {
 		case "pending":
-			return `Waiting for ${names.inSentence(entry.payerConfirmedAt ? to : from)}`;
+			return `Waiting for ${names.inSentence(payment.answerer)}`;
 		case "declined":
 			return "Declined";
 		case "undone":
@@ -35,7 +35,7 @@ export function paymentState(entry: EntryRow, names: Names): string {
 
 // "Alex paid $90.00", "Alex and Sam paid $100.00".
 export function payersLine(entry: EntryRow, names: Names): string {
-	return `${sentenceList(payerIds(entry).map(names.of))} paid ${formatAmount(entry.amountCents)}`;
+	return `${names.list(payerIds(entry), "start")} paid ${formatAmount(entry.amountCents)}`;
 }
 
 type EntryListRowProps = {
@@ -70,7 +70,7 @@ export function EntryListRow({
 			className={cn(
 				arrived &&
 					// Waits for the editor to close, so the drop happens where you can see it.
-					"-mx-2 rounded-lg px-2 [animation:land_var(--duration-moment)_var(--ease-bounce)_280ms_both,just-changed_4s_var(--ease-out)_280ms_both]"
+					"-mx-2 rounded-lg px-2 animate-[land_var(--duration-moment)_var(--ease-bounce)_280ms_both,just-changed_4s_var(--ease-out)_280ms_both]"
 			)}
 			leading={<HandDisc kind={isPayment ? "shake" : (entry.category ?? "new")} size={46} />}
 			title={isPayment ? paymentTitle(entry, names) : entry.description}

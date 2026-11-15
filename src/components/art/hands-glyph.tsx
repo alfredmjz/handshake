@@ -36,7 +36,7 @@ export function HandsGlyph({
 }) {
 	const apart = pose === "apart";
 	// The hands part and meet on a spring, so a dropped connection reads as a let-go, not a switch.
-	const hand = "transition-transform duration-settle ease-bounce [transform-box:view-box]";
+	const hand = "transition-transform duration-settle ease-bounce transform-view";
 	return (
 		<svg
 			viewBox="-12 -4 144 88"
