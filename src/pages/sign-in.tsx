@@ -1,4 +1,5 @@
-import { useState, type FormEvent } from "react";
+import { useEffect, useState, type FormEvent } from "react";
+import { useLocation, useNavigate } from "react-router";
 import { toast } from "sonner";
 
 import { HandshakeMark, ReceiptDoodle } from "@/components/art/doodles";
@@ -12,8 +13,11 @@ import { Field } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
 import { Stack } from "@/components/ui/stack";
 import { takeEndedNotice } from "@/lib/auth";
+import { CODE_LENGTH } from "@/lib/emailed-code";
+import { emailLinkIn } from "@/lib/email-link";
 import { devLoginAvailable, switchToTestAccount, TEST_ACCOUNTS } from "@/lib/dev-login";
 import { failureNotice, OFFLINE_SIGN_IN } from "@/lib/online-outcome";
+import { formatCountdown, useSecondsUntilResend } from "@/lib/resend-cooldown";
 import { supabase } from "@/lib/supabase";
 import { cn } from "@/lib/utils";
 
@@ -39,27 +43,43 @@ function HandsAroundReceipt() {
 	);
 }
 
-// Email, then the 6-digit code. Also shown from a group code, so someone signed out can make an account.
+// Email, then the emailed code. Also shown from a group code, so someone signed out can make an account.
 export function EmailSignIn({ onBack }: { onBack?: () => void }) {
 	const [email, setEmail] = useState("");
 	const [code, setCode] = useState("");
 	const [step, setStep] = useState<"email" | "code">("email");
 	const [busy, setBusy] = useState(false);
+	const [sent, setSent] = useState<{ email: string; at: number } | null>(null);
+	const address = email.trim().toLowerCase();
+	const wait = useSecondsUntilResend(sent?.email === address ? sent.at : null);
 
-	async function sendCode(event: FormEvent) {
-		event.preventDefault();
+	async function send(): Promise<boolean> {
 		if (!navigator.onLine) {
 			toast.error(OFFLINE_SIGN_IN.title, { description: OFFLINE_SIGN_IN.description });
-			return;
+			return false;
 		}
 		setBusy(true);
 		const { error } = await supabase.auth.signInWithOtp({ email: email.trim(), options: { shouldCreateUser: true } });
 		setBusy(false);
 		if (error) {
 			toast.error(...failureNotice(error, "Couldn't send the code"));
-			return;
+			return false;
 		}
-		setStep("code");
+		setSent({ email: address, at: Date.now() });
+		return true;
+	}
+
+	// Back to the same address within the minute: its code is still on the way, so straight to it.
+	async function sendCode(event: FormEvent) {
+		event.preventDefault();
+		if (wait > 0 || (await send())) setStep("code");
+	}
+
+	// A new code replaces the last one, so the box starts empty.
+	async function resend() {
+		if (!(await send())) return;
+		setCode("");
+		toast.success("New code sent", { description: "Use the newest email." });
 	}
 
 	async function verify(token: string) {
@@ -86,7 +106,7 @@ export function EmailSignIn({ onBack }: { onBack?: () => void }) {
 							/>
 						</Field>
 						<Button type="submit" size="lg" className="w-full" disabled={busy || !email.trim()}>
-							{busy ? "Sending…" : "Send code"}
+							{busy ? "Sending…" : wait > 0 ? "Enter the code" : "Send code"}
 						</Button>
 						{onBack && (
 							<Button type="button" variant="ghost" className="w-full" onClick={onBack}>
@@ -103,7 +123,7 @@ export function EmailSignIn({ onBack }: { onBack?: () => void }) {
 					}}
 				>
 					<Stack>
-						<Field label="Code" htmlFor="code" hint={`We sent a 6-digit code to ${email.trim()}.`}>
+						<Field label="Code" htmlFor="code" hint={`We sent a code to ${email.trim()}.`}>
 							<CodeInput
 								id="code"
 								autoFocus
@@ -113,8 +133,17 @@ export function EmailSignIn({ onBack }: { onBack?: () => void }) {
 								ready={!busy}
 							/>
 						</Field>
-						<Button type="submit" size="lg" className="w-full" disabled={busy || code.length < 6}>
+						<Button type="submit" size="lg" className="w-full" disabled={busy || code.length < CODE_LENGTH}>
 							{busy ? "Checking…" : "Sign in"}
+						</Button>
+						<Button
+							type="button"
+							variant="outline"
+							className="w-full tabular-nums"
+							disabled={busy || wait > 0}
+							onClick={() => void resend()}
+						>
+							{wait > 0 ? `Resend code in ${formatCountdown(wait)}` : "Resend code"}
 						</Button>
 						<Button
 							type="button"
@@ -130,6 +159,43 @@ export function EmailSignIn({ onBack }: { onBack?: () => void }) {
 					</Stack>
 				</form>
 			)}
+		</div>
+	);
+}
+
+const linksTried = new Set<string>();
+
+// Opened from the sign-in email's button. Once signed in, the app moves on to the groups by itself; a link that no
+// longer works goes back to the front door with a note.
+export function EmailLinkSignIn() {
+	const navigate = useNavigate();
+	const { search } = useLocation();
+
+	useEffect(() => {
+		const link = emailLinkIn(search);
+		if (!link) {
+			navigate("/", { replace: true });
+			return;
+		}
+		if (linksTried.has(link.tokenHash)) return;
+		linksTried.add(link.tokenHash);
+		if (!navigator.onLine) {
+			linksTried.delete(link.tokenHash);
+			toast.error(OFFLINE_SIGN_IN.title, { description: OFFLINE_SIGN_IN.description });
+			navigate("/", { replace: true });
+			return;
+		}
+		void supabase.auth.verifyOtp({ token_hash: link.tokenHash, type: link.type }).then(({ error }) => {
+			if (!error) return;
+			toast.error(...failureNotice(error, "That link didn't work"));
+			navigate("/", { replace: true });
+		});
+	}, [navigate, search]);
+
+	return (
+		<div className="flex min-h-dvh flex-col items-center justify-center gap-stack px-page">
+			<HandshakeMark className="h-8 w-12" />
+			<p className="type-body text-muted-foreground">Signing you in…</p>
 		</div>
 	);
 }

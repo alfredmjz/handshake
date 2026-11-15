@@ -114,17 +114,39 @@
 								</table>
 								<p
 									style="
-										margin: 12px 0 0;
+										margin: 10px 0 0;
 										text-align: center;
 										font-family: 'Shantell Sans', 'Comic Neue', 'Helvetica Neue', Arial, sans-serif;
 										font-size: 14px;
 										color: #5e5e58;
 									"
 								>
-									Copy it and head back to Handshake.
+									Or skip the copying:
 								</p>
+								<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="margin-top: 24px">
+									<tr>
+										<td align="center" bgcolor="#2f45d8" style="border-radius: 999px; background-color: #2f45d8">
+											<a
+												href="{{ .SiteURL }}/sign-in/link?token_hash={{ .TokenHash }}&amp;type=email"
+												target="_blank"
+												style="
+													display: block;
+													padding: 15px 24px;
+													font-family: 'Funnel Sans', 'Helvetica Neue', Arial, sans-serif;
+													font-size: 16px;
+													font-weight: 600;
+													line-height: 1.2;
+													color: #ffffff;
+													text-decoration: none;
+													border-radius: 999px;
+												"
+												>Sign in to Handshake</a
+											>
+										</td>
+									</tr>
+								</table>
 								<p style="margin: 28px 0 0; font-size: 13px; line-height: 1.5; color: #5e5e58">
-									Expires in one hour. Didn't ask for it? Ignore this email.
+									The code and the button work once, for one hour. Didn't ask for it? Ignore this email.
 								</p>
 							</td>
 						</tr>

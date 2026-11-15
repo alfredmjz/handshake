@@ -17,7 +17,7 @@ What Handshake has today (scaffold, 2026-11-03):
   `push_changes()` (`supabase/migrations/003_sync.sql`) applies the queue on the server, and
   `pull_changes(cursors)` returns rows past each group's version. Screens read only from Dexie.
 - `src/lib/money.ts`: amounts as integers, `parseAmount`, `formatAmount`, `splitEvenly`.
-- Sign-in with a 6-digit email code.
+- Sign-in with an 8-digit email code.
 
 This spec adds what makes the app useful: the people in a group, bills and how they are split, who owes
 whom, paying back, inviting friends (as members or guests), resolving edit conflicts, checking off who
@@ -328,7 +328,7 @@ Decided 2026-11-10 (replaces invite links).
   - Opening the link or typing the code shows the group and its owner, then three ways in: pick an
     unclaimed name (a name-only person: no login, not removed), join as someone new under a name no one in
     the group has, or **I'm already in this group**. A name someone has joined belongs to them.
-  - Joining asks **Create an account** (6-digit email code; joins as a member) or **Continue as guest**
+  - Joining asks **Create an account** (8-digit email code; joins as a member) or **Continue as guest**
     (joins as a guest, no email).
   - Guests use **Supabase anonymous sign-in** (`signInAnonymously()`). An anonymous user is a real
     `auth.users` row with the `authenticated` role and an `is_anonymous` claim in its token, so sync,
@@ -350,7 +350,7 @@ Decided 2026-11-10 (replaces invite links).
     the two kinds apart (6: group, 8: personal). A code whose guest has left or added an email, or whose
     group is deleted or completed, "doesn't work".
   - A guest keeps their data by adding an email later ("Keep my data"): `updateUser({ email })`, then
-    the 6-digit code. The user id stays the same, so their member rows and history stay theirs. An online
+    the 8-digit code. The user id stays the same, so their member rows and history stay theirs. An online
     function `upgrade_guest()` then turns their `guest` rows into `member`, and their personal codes are
     deleted: email is their way back.
   - Anonymous users can't create groups (`group.create` checks `is_anonymous`).
@@ -463,7 +463,7 @@ Decided 2026-11-10.
 - **Chosen Solution:**
   - A token is `hsk_` + 32 random bytes in base64url (43 characters), named ("Pholio") and shown **once**.
   - **Pholio makes it** (owner, 2026-11-12). Pholio connects to Handshake, not the other way round, so
-    Handshake's Settings has no Connected apps. Pholio signs the person in to Handshake's auth (the same 6-digit
+    Handshake's Settings has no Connected apps. Pholio signs the person in to Handshake's auth (the same 8-digit
     email code, with Handshake's public URL and anon key), calls `create_api_token`, keeps the token on its
     server and signs that session out. The steps are in `docs/api-v1.md` (Authentication).
   - The server stores only its SHA-256 (`api_tokens.token_hash`), plus the name, the scope (`read`),
@@ -945,7 +945,7 @@ people alphabetically.
 9. **Settings.** **Name:** what you go by, kept on the account (`display_name` in its metadata) for groups you
    start or join from then on, and changed in each open group you're in (one `member.rename` each; a group where
    someone already has that name keeps the old one, and says so). **Email** (not for guests): the new address, then
-   the 6-digit code sent to each address (`double_confirm_changes`). **Delete account:** the dialog from
+   the 8-digit code sent to each address (`double_confirm_changes`). **Delete account:** the dialog from
    decision 19, naming any open debts. All online only. A guest also sees their code. Sign out is in the account
    menu.
 10. **Settle up** (everyone; completing is the owner's). "3 of 5 settled" at the top. One row per person

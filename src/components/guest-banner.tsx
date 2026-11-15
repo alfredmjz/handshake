@@ -8,6 +8,7 @@ import { Button } from "@/components/ui/button";
 import { Field } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
 import { finishKeepMyData, startKeepMyData } from "@/lib/auth";
+import { CODE_LENGTH } from "@/lib/emailed-code";
 import { useOnline } from "@/lib/online";
 import { failureNotice, isServerError, NEEDS_CONNECTION } from "@/lib/online-outcome";
 import { requestSync } from "@/lib/sync/controller";
@@ -62,7 +63,7 @@ export function GuestBanner() {
 		}
 	}
 
-	const ready = online && !busy && (step === "email" ? email.trim().includes("@") : code.length >= 6);
+	const ready = online && !busy && (step === "email" ? email.trim().includes("@") : code.length >= CODE_LENGTH);
 
 	return (
 		<>
@@ -86,7 +87,7 @@ export function GuestBanner() {
 				onOpenChange={close}
 				title={step === "email" ? "Keep my data" : "Enter the code"}
 				description={
-					step === "email" ? "Add your email and your groups stay yours." : `We sent a 6-digit code to ${email.trim()}.`
+					step === "email" ? "Add your email and your groups stay yours." : `We sent a code to ${email.trim()}.`
 				}
 				submitLabel={busy ? "Checking…" : step === "email" ? "Send code" : "Keep my data"}
 				canSubmit={ready}

@@ -14,7 +14,7 @@ Handshake's database (see `docs/shared-ledger-spec.md`).
 | Node.js  | **26 LTS** on Vercel's build machine only (project setting, no `engines`)        |
 | Client   | **Vite 8 + React 19 + React Router 8**, a static single-page app                 |
 | Offline  | **Dexie** (IndexedDB) on the device, `vite-plugin-pwa` service worker on the web |
-| Server   | **Supabase**: Postgres + RLS, Auth with 6-digit email codes                      |
+| Server   | **Supabase**: Postgres + RLS, Auth with 8-digit email codes                      |
 | Mobile   | **Capacitor 8**, bundling `dist/` (not loading a hosted URL)                     |
 | UI       | **shadcn/ui** on Tailwind 4 and Radix, sonner, lucide; Funnel Display + Sans     |
 | Language | TypeScript 7, `strict`                                                           |

@@ -5,13 +5,14 @@ import { GroupFaces } from "@/components/group-faces";
 import { SignedInLayout } from "@/components/signed-in-layout";
 import { Toaster } from "@/components/ui/sonner";
 import { useAuthState } from "@/lib/auth";
+import { EMAIL_LINK_PATH } from "@/lib/email-link";
 import { EntryPage } from "@/pages/entry";
 import { GroupPage } from "@/pages/group";
 import { GroupsPage } from "@/pages/groups";
 import { JoinPage } from "@/pages/join";
 import { SettingsPage } from "@/pages/settings";
 import { SettleUpPage } from "@/pages/settle-up";
-import { SignInPage } from "@/pages/sign-in";
+import { EmailLinkSignIn, SignInPage } from "@/pages/sign-in";
 
 // The design kit is for development only; production builds leave it out.
 const KitPage = import.meta.env.DEV ? lazy(() => import("@/pages/kit").then((m) => ({ default: m.KitPage }))) : null;
@@ -33,6 +34,7 @@ export function App() {
 		<>
 			{auth.status === "loading" ? null : auth.status === "signed-out" ? (
 				<Routes>
+					<Route path={EMAIL_LINK_PATH} element={<EmailLinkSignIn />} />
 					<Route path="join/:code" element={<JoinPage signedIn={false} />} />
 					<Route path="*" element={<SignInPage />} />
 				</Routes>
