@@ -140,7 +140,7 @@ export function KitPage() {
 						<Button variant="ghost">Later</Button>
 						<Button variant="destructive">Delete</Button>
 						<Button variant="link" size="inline">
-							Have a code?
+							Join a group
 						</Button>
 						<Button size="icon" variant="ghost" aria-label="More">
 							<MoreHorizontal />
