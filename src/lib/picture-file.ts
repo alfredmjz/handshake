@@ -1,5 +1,5 @@
 import { isSticker, STICKER_LIMIT } from "@/lib/cover-stickers";
-import { isProfilePicture } from "@/lib/profile-picture";
+import { isPhoto } from "@/lib/profile-picture";
 
 type Try = { edge: number; quality: number };
 
@@ -57,5 +57,4 @@ export const stickerFromFile = (file: File) =>
 	shrink(file, { tries: STICKER_TRIES, fits: (url) => url.length <= STICKER_LIMIT && isSticker(url), square: false });
 
 // A profile picture: the middle square, at most 192px.
-export const pictureFromFile = (file: File) =>
-	shrink(file, { tries: PROFILE_TRIES, fits: isProfilePicture, square: true });
+export const pictureFromFile = (file: File) => shrink(file, { tries: PROFILE_TRIES, fits: isPhoto, square: true });

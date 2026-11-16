@@ -36,6 +36,25 @@ describe("assignSlots", () => {
 		expect(new Set(tints).size).toBe(TINTS);
 	});
 
+	test("someone who chose a face has it, and the others are dealt around it", () => {
+		const home = slotOf("u1");
+		const slots = assignSlots([
+			{ id: "chooser", userId: "u2", chosen: home },
+			{ id: "dealt", userId: "u1" },
+		]);
+		expect(slots.get("chooser")).toBe(home);
+		expect(slots.get("dealt")).not.toBe(home);
+		expect(Math.floor(slots.get("dealt")! / LOOKS)).not.toBe(Math.floor(home / LOOKS));
+	});
+
+	test("two people who chose the same face both keep it", () => {
+		const slots = assignSlots([
+			{ id: "a", userId: "u1", chosen: 7 },
+			{ id: "b", userId: "u2", chosen: 7 },
+		]);
+		expect([slots.get("a"), slots.get("b")]).toEqual([7, 7]);
+	});
+
 	test("more members than slots still all get one", () => {
 		const members = Array.from({ length: SLOTS + 3 }, (_, i) => ({ id: `m${i}`, userId: null }));
 		expect(assignSlots(members).size).toBe(SLOTS + 3);

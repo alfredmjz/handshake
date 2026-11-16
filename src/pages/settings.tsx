@@ -1,10 +1,11 @@
-import { useRef, useState } from "react";
-import { ImagePlus, Trash2 } from "lucide-react";
+import { useState } from "react";
+import { Trash2 } from "lucide-react";
 import { toast } from "sonner";
 
 import { Face } from "@/components/art/face";
 import { ConfirmDialog } from "@/components/confirm-dialog";
 import { EditorDialog } from "@/components/editor-dialog";
+import { FacePicker } from "@/components/face-picker";
 import { NameDialog } from "@/components/group/name-dialog";
 import { MyGuestCodes } from "@/components/guest-code";
 import { useOpenDebts } from "@/components/my-balances";
@@ -29,7 +30,7 @@ import { myOpenMemberships, useMyPicture } from "@/lib/members";
 import { formatAmount } from "@/lib/money";
 import { useOnline } from "@/lib/online";
 import { failureNotice, NEEDS_CONNECTION } from "@/lib/online-outcome";
-import { pictureFromFile } from "@/lib/picture-file";
+import { parseProfilePicture } from "@/lib/profile-picture";
 import { describeDebt } from "@/lib/shell-view";
 import { requestSync } from "@/lib/sync/controller";
 
@@ -84,37 +85,29 @@ function NameRow() {
 	);
 }
 
-// Your picture, shown in place of your drawn face in every group you're in.
+const PICTURE_TITLES = { face: "Drawn face", photo: "Your photo" } as const;
+
+// Your picture in every group you're in: the face each group deals you, one of the drawn faces, or a photo.
 function PictureRow() {
 	const user = useCurrentUser();
 	const online = useOnline();
 	const picture = useMyPicture(user.id);
-	const file = useRef<HTMLInputElement>(null);
 	const [open, setOpen] = useState(false);
 	const [draft, setDraft] = useState<string | null>(null);
-	const [reading, setReading] = useState(false);
 	const [busy, setBusy] = useState(false);
+	const kind = parseProfilePicture(picture)?.kind;
 
 	const start = () => {
 		setDraft(picture);
 		setOpen(true);
 	};
 
-	async function choose(picked: File | undefined) {
-		if (!picked) return;
-		setReading(true);
-		const made = await pictureFromFile(picked);
-		setReading(false);
-		if (made) setDraft(made);
-		else toast.error("That picture can't be used. Try a PNG, JPEG or WebP.");
-	}
-
 	async function save() {
 		setBusy(true);
 		try {
 			await changePicture(draft);
 			requestSync();
-			toast.success(draft ? "Picture changed" : "Picture removed");
+			toast.success("Picture changed");
 			setOpen(false);
 		} catch (error) {
 			toast.error(...failureNotice(error, "Couldn't change your picture"));
@@ -127,7 +120,7 @@ function PictureRow() {
 		<>
 			<ListRow
 				leading={<Face seed={user.id} name="" size={40} picture={picture} />}
-				title={picture ? "Your photo" : "Drawn face"}
+				title={kind ? PICTURE_TITLES[kind] : "Default face"}
 				subtitle="Picture"
 				trailing={
 					<Button size="sm" variant="secondary" disabled={!online} onClick={start}>
@@ -141,34 +134,12 @@ function PictureRow() {
 				title="Your picture"
 				description="Everyone in your groups sees it."
 				submitLabel={busy ? "Saving…" : "Save picture"}
-				canSubmit={online && !busy && !reading && draft !== picture}
+				canSubmit={online && !busy && draft !== picture}
 				onSubmit={save}
 			>
-				<div className="flex flex-col items-center gap-stack">
-					<Face seed={user.id} name={draft ? "Your picture" : "Your drawn face"} size={128} picture={draft} />
-					<div className="flex flex-wrap justify-center gap-control">
-						<Button type="button" variant="secondary" disabled={reading} onClick={() => file.current?.click()}>
-							<ImagePlus />
-							{reading ? "Reading…" : "Choose a picture"}
-						</Button>
-						{draft && (
-							<Button type="button" variant="ghost" onClick={() => setDraft(null)}>
-								Use drawn face
-							</Button>
-						)}
-					</div>
-					<input
-						ref={file}
-						type="file"
-						accept="image/png,image/jpeg,image/webp,image/gif"
-						className="sr-only"
-						tabIndex={-1}
-						aria-hidden
-						onChange={(event) => {
-							void choose(event.target.files?.[0]);
-							event.target.value = "";
-						}}
-					/>
+				<div className="flex flex-col items-center gap-section">
+					<Face seed={user.id} name="Your picture" size={112} picture={draft} />
+					<FacePicker value={draft} onChange={setDraft} seed={user.id} />
 					{!online && <Notice tone="waiting">{NEEDS_CONNECTION}</Notice>}
 				</div>
 			</EditorDialog>

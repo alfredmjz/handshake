@@ -1,5 +1,6 @@
 -- ============================================================================
--- pgTAP tests for profile pictures (migration 021). A picture belongs to the account: set_my_picture() keeps it
+-- pgTAP tests for profile pictures (migration 021). A picture (one of the 30 drawn faces, or a small photo)
+-- belongs to the account: set_my_picture() keeps it
 -- on the profile and copies it onto every member row the account has, each taking the group's next version so
 -- the others pull it. A login that joins or claims a row brings its picture; a row without a login has none.
 -- Everything is rolled back.
@@ -94,6 +95,20 @@ SELECT is(pg_temp.set_picture('bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb', 'data:imag
 SELECT is(pg_temp.set_picture('bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb', 'data:image/png;base64,' || repeat('A', 39978)), 'ok', 'one of exactly 40,000 is kept');
 SELECT is(pg_temp.set_picture('bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb', NULL), 'ok', '... (and removed again)');
 SELECT is(pg_temp.profile_picture('bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb'), NULL, 'none of the refused ones were kept');
+
+-- ---------------------------------------------------------------------------
+-- Or one of the 30 drawn faces, by its slot
+-- ---------------------------------------------------------------------------
+SELECT is(pg_temp.set_picture('bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb', 'face:0'), 'ok', 'Sam picks the first drawn face');
+SELECT is(pg_temp.set_picture('bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb', 'face:29'), 'ok', '... then the last');
+SELECT is(pg_temp.picture_of('20000000-0000-0000-0000-0000000000b1'), 'face:29', '... kept on his member row');
+SELECT is(pg_temp.pulled_member('aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa', '20000000-0000-0000-0000-0000000000b1')->>'picture', 'face:29', '... which Alex pulls');
+SELECT is(pg_temp.set_picture('bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb', 'face:30'), 'HS422', 'there is no 31st face');
+SELECT is(pg_temp.set_picture('bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb', 'face:07'), 'HS422', 'a slot with a leading zero is refused');
+SELECT is(pg_temp.set_picture('bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb', 'face:-1'), 'HS422', 'a negative slot is refused');
+SELECT is(pg_temp.set_picture('bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb', 'face:'), 'HS422', 'a face with no slot is refused');
+SELECT is(pg_temp.profile_picture('bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb'), 'face:29', '... and he keeps the last face');
+SELECT is(pg_temp.set_picture('bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb', NULL), 'ok', '... until he goes back to the default');
 
 SELECT is(pg_temp.sqlstate_signed_out('SELECT public.set_my_picture(NULL)'), '42501', 'signed out, it can''t be called');
 SELECT is(pg_temp.as_user('aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa', $$UPDATE public.group_members SET picture = 'data:image/png;base64,iVBORw0KGgo=' WHERE id = '20000000-0000-0000-0000-0000000000b1'$$), '42501', 'Alex can''t write a picture onto Sam''s row');

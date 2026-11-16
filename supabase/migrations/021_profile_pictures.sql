@@ -1,14 +1,15 @@
 -- ============================================================================
 -- 021: profile pictures. One per account, kept on the profile and copied onto each of its member rows, so the
--- rest of a group pulls it with the member row. NULL is the drawn face. set_my_picture() changes it everywhere at
+-- rest of a group pulls it with the member row: one of the 30 drawn faces ('face:12') or a small photo. NULL is the
+-- default, the drawn face the group deals. set_my_picture() changes it everywhere at
 -- once; a new or claimed membership takes the profile's; a member row without a login never has one.
 -- ============================================================================
 
 ALTER TABLE public.profiles ADD COLUMN IF NOT EXISTS picture TEXT;
 ALTER TABLE public.group_members ADD COLUMN IF NOT EXISTS picture TEXT;
 
--- A small square picture as a data URL (made small on the device first), or NULL. isProfilePicture()
--- (src/lib/profile-picture.ts) accepts the same.
+-- One of the drawn faces by its slot ('face:0' to 'face:29'), a small square photo as a data URL (made small on the
+-- device first), or NULL. parseProfilePicture() (src/lib/profile-picture.ts) accepts the same.
 CREATE OR REPLACE FUNCTION private.profile_picture(p_picture TEXT) RETURNS TEXT
     LANGUAGE plpgsql IMMUTABLE
     SET search_path TO ''
@@ -18,7 +19,10 @@ BEGIN
         RETURN NULL;
     END IF;
     IF char_length(p_picture) > 40000
-        OR p_picture !~ '^data:image/(png|jpeg|webp);base64,[A-Za-z0-9+/]+={0,2}$' THEN
+        OR NOT (
+            p_picture ~ '^face:([0-9]|[12][0-9])$'
+            OR p_picture ~ '^data:image/(png|jpeg|webp);base64,[A-Za-z0-9+/]+={0,2}$'
+        ) THEN
         RAISE EXCEPTION 'That isn''t a picture' USING ERRCODE = 'HS422';
     END IF;
     RETURN p_picture;

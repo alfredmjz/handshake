@@ -1,18 +1,20 @@
 import { createContext, useContext, useMemo, type CSSProperties, type ReactNode } from "react";
 
 import { FACE_PATHS } from "@/components/art/art-markup";
-import { slotOf, assignSlots } from "@/lib/face-slots";
+import { assignSlots, lookOf, slotOf, tintOf } from "@/lib/face-slots";
+import { chosenSlot, parseProfilePicture } from "@/lib/profile-picture";
 import { cn } from "@/lib/utils";
 
 const LOOKS = ["alex", "jo", "priya", "sam", "mo"] as const;
 const TINTS = ["drinks", "groceries", "fun", "travel", "stay", "food"] as const;
 
-// A group's people: each one's slot, and the pictures of those who have one, by member id.
-type Faces = { slots: Map<string, number>; pictures: Map<string, string> };
+// A group's people: each one's slot, and the photos of those who have one, by member id.
+type Faces = { slots: Map<string, number>; photos: Map<string, string> };
 
 const FacesContext = createContext<Faces | null>(null);
 
-// Inside a group, faces are dealt so no two members look alike (see assignSlots), and people with a picture show it.
+// Inside a group, faces are dealt so no two members look alike (see assignSlots), people who chose a face have it,
+// and people with a photo show it.
 export function FaceSlots({
 	members,
 	children,
@@ -24,8 +26,13 @@ export function FaceSlots({
 		() =>
 			members
 				? {
-						slots: assignSlots(members),
-						pictures: new Map(members.flatMap((m) => (m.picture ? [[m.id, m.picture] as const] : []))),
+						slots: assignSlots(members.map((m) => ({ ...m, chosen: chosenSlot(m.picture) }))),
+						photos: new Map(
+							members.flatMap((m) => {
+								const picture = parseProfilePicture(m.picture);
+								return picture?.kind === "photo" ? [[m.id, picture.src] as const] : [];
+							})
+						),
 					}
 				: null,
 		[members]
@@ -33,10 +40,11 @@ export function FaceSlots({
 	return <FacesContext.Provider value={faces}>{children}</FacesContext.Provider>;
 }
 
+const lookAt = (slot: number) => ({ look: LOOKS[lookOf(slot)], tint: TINTS[tintOf(slot) % TINTS.length] });
+
 // The same person always gets the same drawing and disc colour: from their slot in the group, else from the seed.
 function useLook(seed: string) {
-	const slot = useContext(FacesContext)?.slots.get(seed) ?? slotOf(seed);
-	return { look: LOOKS[slot % LOOKS.length], tint: TINTS[Math.floor(slot / LOOKS.length) % TINTS.length] };
+	return lookAt(useContext(FacesContext)?.slots.get(seed) ?? slotOf(seed));
 }
 
 // The disc colour of a person's face as drawn here: their slot inside a group's FaceSlots, else the seed's.
@@ -62,16 +70,19 @@ type FaceProps = {
 	className?: string;
 	// Faded, for someone who left or isn't picked.
 	faded?: boolean;
-	// Their picture where FaceSlots doesn't know them (the account menu, Settings); null for the drawing.
+	// Their picture where FaceSlots doesn't know them (the account menu, Settings): a chosen face or a photo, or
+	// null for the default drawing.
 	picture?: string | null;
 };
 
 // A one-line portrait on a colour disc, or the person's own picture. The colour only tells people apart; it never
 // means money.
 export function Face({ seed, name, size, className, faded = false, picture }: FaceProps) {
-	const { look, tint } = useLook(seed);
-	const known = useContext(FacesContext)?.pictures.get(seed) ?? null;
-	const src = picture !== undefined ? picture : known;
+	const dealt = useLook(seed);
+	const known = useContext(FacesContext)?.photos.get(seed) ?? null;
+	const given = picture === undefined ? null : parseProfilePicture(picture);
+	const src = picture === undefined ? known : given?.kind === "photo" ? given.src : null;
+	const { look, tint } = given?.kind === "face" ? lookAt(given.slot) : dealt;
 	const markup = useMemo(() => faceMarkup(look), [look]);
 	const style = {
 		width: size,
