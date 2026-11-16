@@ -2,10 +2,19 @@ import { useEffect, useRef, useState, type KeyboardEvent, type PointerEvent } fr
 import { ImagePlus } from "lucide-react";
 import { toast } from "sonner";
 
-import { Face } from "@/components/art/face";
+import { Face, FACE_TINTS } from "@/components/art/face";
 import { Button } from "@/components/ui/button";
-import { SLOTS, slotOf } from "@/lib/face-slots";
-import { MAX_ZOOM, cropSquare, panCrop, placeInFrame, startCrop, zoomCrop, type Crop } from "@/lib/photo-crop";
+import { SLOTS, slotOf, tintOf } from "@/lib/face-slots";
+import {
+	MAX_ZOOM,
+	MIN_ZOOM,
+	cropSquare,
+	panCrop,
+	placeInFrame,
+	startCrop,
+	zoomCrop,
+	type Crop,
+} from "@/lib/photo-crop";
 import { loadImage, photoFromSquare } from "@/lib/picture-file";
 import { chosenSlot, faceChoice, isPhoto } from "@/lib/profile-picture";
 import { cn } from "@/lib/utils";
@@ -19,14 +28,43 @@ type FacePickerProps = {
 	className?: string;
 };
 
-// A photo of their own: the picture it is cut from, where the cut is, and the photo that cut makes.
-type Photo = { src: string; image: HTMLImageElement; crop: Crop; value: string };
+// A photo of their own: the picture it is cut from, where the cut is, the background colour (a FACE_TINTS index),
+// and the photo they make.
+type Photo = { src: string; image: HTMLImageElement; crop: Crop; tint: number; value: string };
 
 const FRAME = 144;
 const NUDGE = 8;
 const SLOT_LIST = Array.from({ length: SLOTS }, (_, slot) => slot);
 
+const TINT_NAMES: Record<(typeof FACE_TINTS)[number], string> = {
+	drinks: "Yellow",
+	groceries: "Green",
+	fun: "Pink",
+	travel: "Blue",
+	stay: "Purple",
+	food: "Orange",
+};
+
 const sizeOf = (image: HTMLImageElement) => ({ width: image.naturalWidth, height: image.naturalHeight });
+const tintVar = (tint: number) => `hsl(var(--category-${FACE_TINTS[tint]}))`;
+// The colour as the canvas needs it: the theme's value, not a var().
+const tintColour = (tint: number) =>
+	`hsl(${getComputedStyle(document.documentElement).getPropertyValue(`--category-${FACE_TINTS[tint]}`).trim()})`;
+
+const makePhoto = (photo: Omit<Photo, "value">) =>
+	photoFromSquare(
+		photo.image,
+		sizeOf(photo.image),
+		cropSquare(sizeOf(photo.image), photo.crop),
+		tintColour(photo.tint)
+	);
+
+// A tile in the picker: a picture with room around it, so the ring marking the one picked stays inside the tile.
+const tileClass = (on: boolean) =>
+	cn(
+		"flex items-center justify-center rounded-full p-1 outline-hidden transition-transform duration-quick ease-out hover:scale-110 focus-visible:ring-2 focus-visible:ring-ring",
+		on && "ring-2 ring-inset ring-ink"
+	);
 
 // The photo in the round frame: drag it (or use the arrow keys) to move it; the parent zooms.
 function CropFrame({ photo, onMove, onDone }: { photo: Photo; onMove: (crop: Crop) => void; onDone: () => void }) {
@@ -68,8 +106,8 @@ function CropFrame({ photo, onMove, onDone }: { photo: Photo; onMove: (crop: Cro
 			onPointerCancel={up}
 			onKeyUp={(event) => event.key.startsWith("Arrow") && onDone()}
 			onKeyDown={nudge}
-			className="relative shrink-0 cursor-grab touch-none overflow-hidden rounded-full bg-sunken outline-hidden select-none focus-visible:ring-2 focus-visible:ring-ring active:cursor-grabbing"
-			style={{ width: FRAME, height: FRAME }}
+			className="relative shrink-0 cursor-grab touch-none overflow-hidden rounded-full outline-hidden select-none focus-visible:ring-2 focus-visible:ring-ring active:cursor-grabbing"
+			style={{ width: FRAME, height: FRAME, background: tintVar(photo.tint) }}
 		>
 			<img
 				src={photo.src}
@@ -83,7 +121,8 @@ function CropFrame({ photo, onMove, onDone }: { photo: Photo; onMove: (crop: Cro
 }
 
 // Pick your picture from the 30 drawn faces (each drawing in each colour, a colour to a row; your default face is
-// the one picked until you choose), or a photo of your own, cut to the frame. Arrow keys walk the faces.
+// the one picked until you choose), or a photo of your own, cut to the frame on one of the faces' colours. Arrow keys
+// walk the faces.
 export function FacePicker({ value, onChange, seed, className }: FacePickerProps) {
 	const [photo, setPhoto] = useState<Photo | null>(null);
 	const [adjusting, setAdjusting] = useState(false);
@@ -100,7 +139,8 @@ export function FacePicker({ value, onChange, seed, className }: FacePickerProps
 		if (!isPhoto(value)) return;
 		const kept = value;
 		void loadImage(kept).then((image) => {
-			if (image) setPhoto((now) => now ?? { src: kept, image, crop: startCrop(sizeOf(image)), value: kept });
+			if (image)
+				setPhoto((now) => now ?? { src: kept, image, crop: startCrop(sizeOf(image)), tint: tintOf(home), value: kept });
 		});
 		// Only the picture the dialog opened with.
 	}, []);
@@ -122,7 +162,7 @@ export function FacePicker({ value, onChange, seed, className }: FacePickerProps
 
 	// The cut, made into the photo kept.
 	const cut = (next: Photo) => {
-		const made = photoFromSquare(next.image, cropSquare(sizeOf(next.image), next.crop));
+		const made = makePhoto(next);
 		if (!made) return;
 		setPhoto({ ...next, value: made });
 		onChange(made);
@@ -134,15 +174,16 @@ export function FacePicker({ value, onChange, seed, className }: FacePickerProps
 		const src = URL.createObjectURL(chosen);
 		const image = chosen.type.startsWith("image/") ? await loadImage(src) : null;
 		setReading(false);
-		const made = image ? photoFromSquare(image, cropSquare(sizeOf(image), startCrop(sizeOf(image)))) : null;
-		if (!image || !made) {
+		const start = image ? { src, image, crop: startCrop(sizeOf(image)), tint: tintOf(home) } : null;
+		const made = start ? makePhoto(start) : null;
+		if (!start || !made) {
 			URL.revokeObjectURL(src);
 			toast.error("That picture can't be used. Try a PNG, JPEG or WebP.");
 			return;
 		}
 		if (objectUrl.current) URL.revokeObjectURL(objectUrl.current);
 		objectUrl.current = src;
-		setPhoto({ src, image, crop: startCrop(sizeOf(image)), value: made });
+		setPhoto({ ...start, value: made });
 		setAdjusting(true);
 		onChange(made);
 	};
@@ -168,7 +209,7 @@ export function FacePicker({ value, onChange, seed, className }: FacePickerProps
 						<input
 							type="range"
 							aria-label="Zoom"
-							min={1}
+							min={MIN_ZOOM}
 							max={MAX_ZOOM}
 							step={0.01}
 							value={cropping.crop.zoom}
@@ -178,6 +219,21 @@ export function FacePicker({ value, onChange, seed, className }: FacePickerProps
 							className="w-40 accent-ink"
 						/>
 						<p className="type-caption text-muted-foreground">Drag to move</p>
+						<div role="group" aria-label="Background" className="flex gap-control">
+							{FACE_TINTS.map((name, tint) => (
+								<button
+									key={name}
+									type="button"
+									aria-label={`${TINT_NAMES[name]} background`}
+									title={`${TINT_NAMES[name]} background`}
+									aria-pressed={tint === cropping.tint}
+									onClick={() => cut({ ...cropping, tint })}
+									className={tileClass(tint === cropping.tint)}
+								>
+									<span className="block size-7 rounded-full" style={{ background: tintVar(tint) }} />
+								</button>
+							))}
+						</div>
 					</>
 				) : (
 					<Face seed={seed} name="Your picture" size={FRAME} picture={value} />
@@ -191,7 +247,7 @@ export function FacePicker({ value, onChange, seed, className }: FacePickerProps
 							aria-label="Adjust your photo"
 							title="Adjust your photo"
 							onClick={adjust}
-							className="rounded-full outline-hidden transition-transform duration-quick ease-out hover:scale-110 focus-visible:ring-2 focus-visible:ring-ring"
+							className={tileClass(false)}
 						>
 							<Face seed={seed} name="" size={44} picture={photo.value} />
 						</button>
@@ -206,7 +262,7 @@ export function FacePicker({ value, onChange, seed, className }: FacePickerProps
 					role="radiogroup"
 					aria-label="Drawn faces"
 					onKeyDown={walk}
-					className="grid w-fit grid-cols-5 gap-control"
+					className="grid w-fit grid-cols-5 gap-x-stack gap-y-control"
 				>
 					{SLOT_LIST.map((slot) => {
 						const on = slot === picked;
@@ -222,10 +278,7 @@ export function FacePicker({ value, onChange, seed, className }: FacePickerProps
 								title={label}
 								tabIndex={on || (picked === null && slot === 0) ? 0 : -1}
 								onClick={() => choose(slot)}
-								className={cn(
-									"flex aspect-square items-center justify-center rounded-full outline-hidden transition-transform duration-quick ease-out hover:scale-110 focus-visible:ring-2 focus-visible:ring-ring",
-									on && "ring-2 ring-ink ring-offset-2 ring-offset-paper"
-								)}
+								className={tileClass(on)}
 							>
 								<Face seed={seed} name="" size={44} picture={faceChoice(slot)} />
 							</button>

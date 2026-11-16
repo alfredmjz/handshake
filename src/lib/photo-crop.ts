@@ -1,20 +1,27 @@
-// Where a photo sits in the round frame: a square of the photo, chosen by zooming in and dragging. The centre is in
-// the photo's own pixels; zoom 1 is the largest square that fits (the middle square to start with).
+// Where a photo sits in the round frame: a square of the photo, chosen by zooming and dragging. The centre is in
+// the photo's own pixels; zoom 1 is the largest square that fits (the middle square to start with). Below 1 the
+// square is bigger than the photo, which then sits inside the frame on a background colour.
 
 export type ImageSize = { width: number; height: number };
 export type Crop = { zoom: number; cx: number; cy: number };
 export type Square = { x: number; y: number; side: number };
 
+export const MIN_ZOOM = 0.5;
 export const MAX_ZOOM = 4;
 
 const sideOf = (size: ImageSize, zoom: number) => Math.min(size.width, size.height) / zoom;
 const clamp = (value: number, min: number, max: number) => Math.min(max, Math.max(min, value));
 
-// The zoom held to 1 to MAX_ZOOM, and the centre moved just enough that the square stays inside the photo.
+// Along one side of the photo, `length` long: where the centre may go so the square stays inside the photo, or,
+// where the square is the longer, so the photo stays inside the square.
+const along = (centre: number, half: number, length: number) =>
+	clamp(centre, Math.min(half, length - half), Math.max(half, length - half));
+
+// The zoom held to MIN_ZOOM to MAX_ZOOM, and the centre moved just enough that the square and the photo don't part.
 export function clampCrop(size: ImageSize, crop: Crop): Crop {
-	const zoom = clamp(crop.zoom, 1, MAX_ZOOM);
+	const zoom = clamp(crop.zoom, MIN_ZOOM, MAX_ZOOM);
 	const half = sideOf(size, zoom) / 2;
-	return { zoom, cx: clamp(crop.cx, half, size.width - half), cy: clamp(crop.cy, half, size.height - half) };
+	return { zoom, cx: along(crop.cx, half, size.width), cy: along(crop.cy, half, size.height) };
 }
 
 export const startCrop = (size: ImageSize): Crop => ({ zoom: 1, cx: size.width / 2, cy: size.height / 2 });

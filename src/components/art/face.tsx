@@ -6,7 +6,9 @@ import { chosenSlot, parseProfilePicture } from "@/lib/profile-picture";
 import { cn } from "@/lib/utils";
 
 const LOOKS = ["alex", "jo", "priya", "sam", "mo"] as const;
-const TINTS = ["drinks", "groceries", "fun", "travel", "stay", "food"] as const;
+// The disc colours, in slot order: a face's colour, and the backgrounds a photo can sit on.
+export const FACE_TINTS = ["drinks", "groceries", "fun", "travel", "stay", "food"] as const;
+const TINTS = FACE_TINTS;
 
 // A group's people: each one's slot, and the photos of those who have one, by member id.
 type Faces = { slots: Map<string, number>; photos: Map<string, string> };

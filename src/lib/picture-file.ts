@@ -17,8 +17,13 @@ const PROFILE_TRIES: readonly Try[] = [
 	{ edge: 128, quality: 0.7 },
 ];
 
-// Part of a picture drawn into a box of at most `edge` px, as WebP (PNG where the browser can't write WebP). Null
-// when no try makes one that `fits`.
+// The canvas as WebP (PNG where the browser can't write WebP).
+function encode(canvas: HTMLCanvasElement, quality: number): string {
+	const url = canvas.toDataURL("image/webp", quality);
+	return url.startsWith("data:image/webp") ? url : canvas.toDataURL("image/png");
+}
+
+// Part of a picture drawn into a box of at most `edge` px. Null when no try makes one that `fits`.
 function shrink(
 	image: CanvasImageSource,
 	source: Rect,
@@ -32,8 +37,7 @@ function shrink(
 		const context = canvas.getContext("2d");
 		if (!context) return null;
 		context.drawImage(image, source.x, source.y, source.width, source.height, 0, 0, canvas.width, canvas.height);
-		let url = canvas.toDataURL("image/webp", quality);
-		if (!url.startsWith("data:image/webp")) url = canvas.toDataURL("image/png");
+		const url = encode(canvas, quality);
 		if (fits(url)) return url;
 	}
 	return null;
@@ -71,13 +75,25 @@ export function loadImage(src: string): Promise<HTMLImageElement | null> {
 	});
 }
 
-// A profile photo: the chosen square of the picture, at most 192px.
-export const photoFromSquare = (image: CanvasImageSource, square: Square) =>
-	shrink(
-		image,
-		{ x: square.x, y: square.y, width: square.side, height: square.side },
-		{
-			tries: PROFILE_TRIES,
-			fits: isPhoto,
-		}
-	);
+// A profile photo: the chosen square of the picture at most 192px, on the background colour (which shows where the
+// square reaches past the picture, or through a transparent one).
+export function photoFromSquare(
+	image: CanvasImageSource,
+	size: { width: number; height: number },
+	square: Square,
+	background: string
+): string | null {
+	for (const { edge, quality } of PROFILE_TRIES) {
+		const canvas = document.createElement("canvas");
+		canvas.width = canvas.height = Math.max(1, Math.round(Math.min(edge, square.side)));
+		const context = canvas.getContext("2d");
+		if (!context) return null;
+		const scale = canvas.width / square.side;
+		context.fillStyle = background;
+		context.fillRect(0, 0, canvas.width, canvas.height);
+		context.drawImage(image, -square.x * scale, -square.y * scale, size.width * scale, size.height * scale);
+		const url = encode(canvas, quality);
+		if (isPhoto(url)) return url;
+	}
+	return null;
+}
