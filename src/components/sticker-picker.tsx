@@ -15,7 +15,7 @@ import {
 	parseSticker,
 	suggestStickers,
 } from "@/lib/cover-stickers";
-import { stickerFromFile } from "@/lib/sticker-image";
+import { stickerFromFile } from "@/lib/picture-file";
 import { cn } from "@/lib/utils";
 
 type StickerPickerProps = {

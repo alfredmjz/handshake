@@ -1,30 +1,52 @@
 import { createContext, useContext, useMemo, type CSSProperties, type ReactNode } from "react";
 
 import { FACE_PATHS } from "@/components/art/art-markup";
-import { slotOf, assignSlots } from "@/lib/face-slots";
+import { assignSlots, lookOf, slotOf, tintOf } from "@/lib/face-slots";
+import { chosenSlot, parseProfilePicture } from "@/lib/profile-picture";
 import { cn } from "@/lib/utils";
 
 const LOOKS = ["alex", "jo", "priya", "sam", "mo"] as const;
-const TINTS = ["drinks", "groceries", "fun", "travel", "stay", "food"] as const;
+// The disc colours, in slot order: a face's colour, and the backgrounds a photo can sit on.
+export const FACE_TINTS = ["drinks", "groceries", "fun", "travel", "stay", "food"] as const;
+const TINTS = FACE_TINTS;
 
-const SlotsContext = createContext<Map<string, number> | null>(null);
+// A group's people: each one's slot, and the photos of those who have one, by member id.
+type Faces = { slots: Map<string, number>; photos: Map<string, string> };
 
-// Inside a group, faces are dealt so no two members look alike (see assignSlots).
+const FacesContext = createContext<Faces | null>(null);
+
+// Inside a group, faces are dealt so no two members look alike (see assignSlots), people who chose a face have it,
+// and people with a photo show it.
 export function FaceSlots({
 	members,
 	children,
 }: {
-	members: { id: string; userId: string | null }[] | undefined;
+	members: { id: string; userId: string | null; picture?: string | null }[] | undefined;
 	children: ReactNode;
 }) {
-	const slots = useMemo(() => (members ? assignSlots(members) : null), [members]);
-	return <SlotsContext.Provider value={slots}>{children}</SlotsContext.Provider>;
+	const faces = useMemo(
+		() =>
+			members
+				? {
+						slots: assignSlots(members.map((m) => ({ ...m, chosen: chosenSlot(m.picture) }))),
+						photos: new Map(
+							members.flatMap((m) => {
+								const picture = parseProfilePicture(m.picture);
+								return picture?.kind === "photo" ? [[m.id, picture.src] as const] : [];
+							})
+						),
+					}
+				: null,
+		[members]
+	);
+	return <FacesContext.Provider value={faces}>{children}</FacesContext.Provider>;
 }
+
+const lookAt = (slot: number) => ({ look: LOOKS[lookOf(slot)], tint: TINTS[tintOf(slot) % TINTS.length] });
 
 // The same person always gets the same drawing and disc colour: from their slot in the group, else from the seed.
 function useLook(seed: string) {
-	const slot = useContext(SlotsContext)?.get(seed) ?? slotOf(seed);
-	return { look: LOOKS[slot % LOOKS.length], tint: TINTS[Math.floor(slot / LOOKS.length) % TINTS.length] };
+	return lookAt(useContext(FacesContext)?.slots.get(seed) ?? slotOf(seed));
 }
 
 // The disc colour of a person's face as drawn here: their slot inside a group's FaceSlots, else the seed's.
@@ -50,11 +72,19 @@ type FaceProps = {
 	className?: string;
 	// Faded, for someone who left or isn't picked.
 	faded?: boolean;
+	// Their picture where FaceSlots doesn't know them (the account menu, Settings): a chosen face or a photo, or
+	// null for the default drawing.
+	picture?: string | null;
 };
 
-// A one-line portrait on a colour disc. The colour only tells people apart; it never means money.
-export function Face({ seed, name, size, className, faded = false }: FaceProps) {
-	const { look, tint } = useLook(seed);
+// A one-line portrait on a colour disc, or the person's own picture. The colour only tells people apart; it never
+// means money.
+export function Face({ seed, name, size, className, faded = false, picture }: FaceProps) {
+	const dealt = useLook(seed);
+	const known = useContext(FacesContext)?.photos.get(seed) ?? null;
+	const given = picture === undefined ? null : parseProfilePicture(picture);
+	const src = picture === undefined ? known : given?.kind === "photo" ? given.src : null;
+	const { look, tint } = given?.kind === "face" ? lookAt(given.slot) : dealt;
 	const markup = useMemo(() => faceMarkup(look), [look]);
 	const style = {
 		width: size,
@@ -69,19 +99,23 @@ export function Face({ seed, name, size, className, faded = false }: FaceProps) 
 			className={cn("inline-flex shrink-0 overflow-hidden rounded-full", faded && "opacity-45", className)}
 			style={style}
 		>
-			<svg
-				viewBox="0 0 48 48"
-				// Buttons size every svg inside them as an icon; a face always fills its own disc.
-				className="block size-full!"
-				{...(name ? { role: "img", "aria-label": name } : { "aria-hidden": true })}
-			>
-				<g
-					className="doodle"
-					transform={FACE_FIT}
-					style={{ strokeWidth: (size < 40 ? 2.2 : size < 64 ? 1.8 : 1.5) / FACE_SCALE }}
-					dangerouslySetInnerHTML={{ __html: markup }}
-				/>
-			</svg>
+			{src ? (
+				<img src={src} alt={name} draggable={false} className="block size-full object-cover" />
+			) : (
+				<svg
+					viewBox="0 0 48 48"
+					// Buttons size every svg inside them as an icon; a face always fills its own disc.
+					className="block size-full!"
+					{...(name ? { role: "img", "aria-label": name } : { "aria-hidden": true })}
+				>
+					<g
+						className="doodle"
+						transform={FACE_FIT}
+						style={{ strokeWidth: (size < 40 ? 2.2 : size < 64 ? 1.8 : 1.5) / FACE_SCALE }}
+						dangerouslySetInnerHTML={{ __html: markup }}
+					/>
+				</svg>
+			)}
 		</span>
 	);
 }

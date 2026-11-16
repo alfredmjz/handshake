@@ -1,9 +1,9 @@
 import { createContext, useContext, useEffect, useState } from "react";
 import type { Session } from "@supabase/supabase-js";
 
-import { clearLocalData, db } from "@/lib/local-db";
+import { clearLocalData, db, MY_PICTURE_KEY } from "@/lib/local-db";
 import { supabase } from "@/lib/supabase";
-import { deleteAccount, upgradeGuest } from "@/lib/sync/supabase-transport";
+import { deleteAccount, setMyPicture, upgradeGuest } from "@/lib/sync/supabase-transport";
 
 // isAnonymous: a guest (Supabase anonymous sign-in) who hasn't added an email yet. name: what they go by, set in
 // Settings and kept on the account; until then the start of their email.
@@ -118,6 +118,13 @@ export async function finishKeepMyData(email: string, code: string): Promise<voi
 export async function changeName(name: string): Promise<void> {
 	const { error } = await supabase.auth.updateUser({ data: { display_name: name.trim() } });
 	if (error) throw error;
+}
+
+// Online only. Puts the picture (null for the drawn face) on the account and in every group it's in; the groups'
+// people get it with their next sync. Kept on this device too, for when the account is in no group yet.
+export async function changePicture(picture: string | null): Promise<void> {
+	await setMyPicture(picture);
+	await db.meta.put({ key: MY_PICTURE_KEY, value: picture ?? "" });
 }
 
 // Moving an account to a new email, step 1: sends a code to the new address, and one to the current address too

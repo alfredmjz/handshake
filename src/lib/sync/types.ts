@@ -30,6 +30,9 @@ export type MemberRow = {
 	// Null for a name-only person.
 	userId: string | null;
 	displayName: string;
+	// Their account's picture, a small data URL (src/lib/profile-picture.ts); null for the drawn face and for
+	// a name-only person.
+	picture: string | null;
 	role: Role;
 	joinedAt: string | null;
 	deletedAt: string | null;

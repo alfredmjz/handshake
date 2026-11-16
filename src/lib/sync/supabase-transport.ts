@@ -98,6 +98,11 @@ export async function upgradeGuest(): Promise<void> {
 	await call("upgrade_guest");
 }
 
+// The account's picture (null for the drawn face), on the profile and on every member row it has.
+export async function setMyPicture(picture: string | null): Promise<void> {
+	await call("set_my_picture", { p_picture: picture });
+}
+
 // Leaves the person's history behind as a name-only person and removes their login.
 export async function deleteAccount(): Promise<void> {
 	await call("delete_account");

@@ -24,7 +24,7 @@ export const PULL_KEYS: Record<PullLevel, string[]> = {
 		"note",
 		"row_version",
 	],
-	members: ["deleted_at", "display_name", "group_id", "id", "joined_at", "role", "row_version", "user_id"],
+	members: ["deleted_at", "display_name", "group_id", "id", "joined_at", "picture", "role", "row_version", "user_id"],
 	entries: [
 		"amount_cents",
 		"category",

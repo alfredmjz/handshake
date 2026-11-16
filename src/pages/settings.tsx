@@ -2,8 +2,10 @@ import { useState } from "react";
 import { Trash2 } from "lucide-react";
 import { toast } from "sonner";
 
+import { Face } from "@/components/art/face";
 import { ConfirmDialog } from "@/components/confirm-dialog";
 import { EditorDialog } from "@/components/editor-dialog";
+import { FacePicker } from "@/components/face-picker";
 import { NameDialog } from "@/components/group/name-dialog";
 import { MyGuestCodes } from "@/components/guest-code";
 import { useOpenDebts } from "@/components/my-balances";
@@ -13,15 +15,24 @@ import { Button } from "@/components/ui/button";
 import { Field } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
 import { List, ListRow } from "@/components/ui/list";
-import { changeName, deleteMyAccount, finishEmailChange, startEmailChange, useCurrentUser } from "@/lib/auth";
+import {
+	changeName,
+	changePicture,
+	deleteMyAccount,
+	finishEmailChange,
+	startEmailChange,
+	useCurrentUser,
+} from "@/lib/auth";
 import { useCommit } from "@/lib/changes";
 import { CODE_LENGTH } from "@/lib/emailed-code";
 import { joinNames } from "@/lib/group-view";
-import { myOpenMemberships } from "@/lib/members";
+import { myOpenMemberships, useMyPicture } from "@/lib/members";
 import { formatAmount } from "@/lib/money";
 import { useOnline } from "@/lib/online";
 import { failureNotice, NEEDS_CONNECTION } from "@/lib/online-outcome";
+import { parseProfilePicture } from "@/lib/profile-picture";
 import { describeDebt } from "@/lib/shell-view";
+import { requestSync } from "@/lib/sync/controller";
 
 // Your name, kept on the account for groups from now on, and changed in each open group you're in.
 function NameRow() {
@@ -70,6 +81,67 @@ function NameRow() {
 				initial={user.name}
 				onSave={save}
 			/>
+		</>
+	);
+}
+
+const PICTURE_TITLES = { face: "Drawn face", photo: "Your photo" } as const;
+
+// Your picture in every group you're in: the face each group deals you, one of the drawn faces, or a photo.
+function PictureRow() {
+	const user = useCurrentUser();
+	const online = useOnline();
+	const picture = useMyPicture(user.id);
+	const [open, setOpen] = useState(false);
+	const [draft, setDraft] = useState<string | null>(null);
+	const [busy, setBusy] = useState(false);
+	const kind = parseProfilePicture(picture)?.kind;
+
+	const start = () => {
+		setDraft(picture);
+		setOpen(true);
+	};
+
+	async function save() {
+		setBusy(true);
+		try {
+			await changePicture(draft);
+			requestSync();
+			toast.success("Picture changed");
+			setOpen(false);
+		} catch (error) {
+			toast.error(...failureNotice(error, "Couldn't change your picture"));
+		} finally {
+			setBusy(false);
+		}
+	}
+
+	return (
+		<>
+			<ListRow
+				leading={<Face seed={user.id} name="" size={40} picture={picture} />}
+				title={kind ? PICTURE_TITLES[kind] : "Default face"}
+				subtitle="Picture"
+				trailing={
+					<Button size="sm" variant="secondary" disabled={!online} onClick={start}>
+						Change
+					</Button>
+				}
+			/>
+			<EditorDialog
+				open={open}
+				onOpenChange={setOpen}
+				title="Your picture"
+				description="Everyone in your groups sees it."
+				submitLabel={busy ? "Saving…" : "Save picture"}
+				canSubmit={online && !busy && draft !== picture}
+				onSubmit={save}
+			>
+				<div className="flex flex-col items-center gap-section">
+					<FacePicker value={draft} onChange={setDraft} seed={user.id} />
+					{!online && <Notice tone="waiting">{NEEDS_CONNECTION}</Notice>}
+				</div>
+			</EditorDialog>
 		</>
 	);
 }
@@ -228,7 +300,7 @@ function DeleteAccount() {
 	);
 }
 
-// Your name, your email, and deleting the account. A guest has no email yet; their code is how they get back in.
+// Your picture, your name, your email, and deleting the account. A guest has no email yet; their code is how they get back in.
 export function SettingsPage() {
 	const user = useCurrentUser();
 	const online = useOnline();
@@ -239,6 +311,7 @@ export function SettingsPage() {
 			{!online && <Notice tone="waiting">{NEEDS_CONNECTION} to change these</Notice>}
 			<Section title="You">
 				<List>
+					<PictureRow />
 					<NameRow />
 					{!user.isAnonymous && <EmailRow />}
 				</List>

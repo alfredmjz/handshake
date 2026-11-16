@@ -1,6 +1,6 @@
 import { useLiveQuery } from "dexie-react-hooks";
 
-import { db } from "@/lib/local-db";
+import { db, MY_PICTURE_KEY } from "@/lib/local-db";
 import type { MemberRow } from "@/lib/sync/types";
 import { byLabel } from "@/lib/utils";
 
@@ -16,6 +16,20 @@ export function useMembers(groupId: string, { includeLeft = false } = {}) {
 				.filter((m) => includeLeft || !m.deletedAt)
 				.sort(byMemberName),
 		[groupId, includeLeft]
+	);
+}
+
+// The current user's picture, or null for their drawn face. The server keeps it the same on all their member rows;
+// rows in groups they left may be older, so those count only when there are no others. With no rows at all, the
+// picture last set on this device.
+export function useMyPicture(userId: string): string | null {
+	return (
+		useLiveQuery(async () => {
+			const mine = (await db.members.toArray()).filter((m) => m.userId === userId);
+			const current = mine.filter((m) => !m.deletedAt);
+			if (mine.length > 0) return (current.length > 0 ? current : mine)[0].picture;
+			return (await db.meta.get(MY_PICTURE_KEY))?.value || null;
+		}, [userId]) ?? null
 	);
 }
 

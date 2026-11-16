@@ -178,11 +178,18 @@ describe("wire", () => {
 			groupId: "g1",
 			userId: null,
 			displayName: "Sam",
+			picture: null,
 			role: "guest",
 			joinedAt: T,
 			deletedAt: null,
 			rowVersion: 1,
 		});
+	});
+
+	test("a member's picture comes through as picture", () => {
+		const picture = "data:image/webp;base64,UklGRg==";
+		expect(toMemberRow({ ...rawMember, picture }).picture).toBe(picture);
+		expect(toMemberRow({ ...rawMember, picture: null }).picture).toBeNull();
 	});
 
 	test("bills keep their items as written and map shares with owedTo", () => {

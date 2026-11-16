@@ -30,6 +30,7 @@ import {
 	type TestAccount,
 } from "@/lib/dev-login";
 import { claimLocalData, db } from "@/lib/local-db";
+import { useMyPicture } from "@/lib/members";
 import { requestSync, startSync } from "@/lib/sync/controller";
 import { createDexieSyncStore, resetCursors } from "@/lib/sync/dexie-store";
 import { supabaseTransport } from "@/lib/sync/supabase-transport";
@@ -140,6 +141,7 @@ function TestAccountItems() {
 function Shell({ user, commit }: { user: CurrentUser; commit: Commit }) {
 	const navigate = useNavigate();
 	const sync = useSyncState();
+	const picture = useMyPicture(user.id);
 
 	return (
 		<CurrentUserProvider value={user}>
@@ -163,7 +165,7 @@ function Shell({ user, commit }: { user: CurrentUser; commit: Commit }) {
 							<DropdownMenu>
 								<DropdownMenuTrigger asChild>
 									<Button variant="ghost" size="icon" aria-label="Account" title="Account" className="rounded-full">
-										<Face seed={user.id} name="" size={32} />
+										<Face seed={user.id} name="" size={32} picture={picture} />
 									</Button>
 								</DropdownMenuTrigger>
 								<DropdownMenuContent align="end">
