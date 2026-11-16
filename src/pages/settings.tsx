@@ -138,7 +138,6 @@ function PictureRow() {
 				onSubmit={save}
 			>
 				<div className="flex flex-col items-center gap-section">
-					<Face seed={user.id} name="Your picture" size={112} picture={draft} />
 					<FacePicker value={draft} onChange={setDraft} seed={user.id} />
 					{!online && <Notice tone="waiting">{NEEDS_CONNECTION}</Notice>}
 				</div>

@@ -32,4 +32,5 @@ export function chosenSlot(value: string | null | undefined): number | null {
 	return picture?.kind === "face" ? picture.slot : null;
 }
 
-export const isPhoto = (value: string | null | undefined) => parseProfilePicture(value)?.kind === "photo";
+export const isPhoto = (value: string | null | undefined): value is string =>
+	parseProfilePicture(value)?.kind === "photo";
