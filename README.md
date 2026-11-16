@@ -105,7 +105,7 @@ bun run test:db
 | -------------------------------------- | --------------------------------------------------------------------------- |
 | `bun run db:reset`                     | Rebuild the local database from `supabase/migrations/`                      |
 | `bun run test:api-db`                  | The API's store contract suite against the local Postgres                   |
-| `bun run api:lint`                     | Lint `docs/api-v1.openapi.yaml`                                             |
+| `bun run api:lint`                     | Lint `openapi/api-v1.openapi.yaml`                                          |
 | `bun run gen:*-cases`, `gen:pull-keys` | Regenerate the pgTAP files from the shared case tables in `tests/fixtures/` |
 | `bun run format`                       | Prettier (tabs, width 120, CRLF)                                            |
 
@@ -146,6 +146,6 @@ address before `mobile:sync`. iOS uses the same steps with `ios` (needs a Mac wi
 | [`docs/architecture.md`](docs/architecture.md)             | System design, ADRs, module map                                     |
 | [`docs/shared-ledger-spec.md`](docs/shared-ledger-spec.md) | What the app does: people, bills, debts, handshakes, guests         |
 | [`docs/design.md`](docs/design.md)                         | UI rules, tokens and components                                     |
-| [`docs/api-v1.md`](docs/api-v1.md)                         | The read-only API for Pholio (with `api-v1.openapi.yaml`)           |
+| [`docs/api-v1.md`](docs/api-v1.md)                         | The read-only API for Pholio (with `openapi/api-v1.openapi.yaml`)   |
 | [`docs/chat-spec.md`](docs/chat-spec.md)                   | Group chat, live updates and push (being revisited: issue #8)       |
 | [`docs/PRODUCT.md`](docs/PRODUCT.md)                       | Who it's for, principles and voice                                  |

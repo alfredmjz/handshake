@@ -6,11 +6,11 @@ import { createApiV1 } from "../../src/server/api-v1/index";
 import { ApiStoreError } from "../../src/server/api-v1/store";
 import { dinnerWorld, get, IDS, NOW, TOKENS } from "./dinner";
 
-// Every response the handler gives is checked against docs/api-v1.openapi.yaml (ADR-002), with every
+// Every response the handler gives is checked against openapi/api-v1.openapi.yaml (ADR-002), with every
 // object closed so an undocumented field fails. Plus the golden JSON from the docs' example.
 
 type Schema = Record<string, unknown>;
-const doc = Bun.YAML.parse(await Bun.file(new URL("../../docs/api-v1.openapi.yaml", import.meta.url)).text()) as {
+const doc = Bun.YAML.parse(await Bun.file(new URL("../../openapi/api-v1.openapi.yaml", import.meta.url)).text()) as {
 	paths: Record<string, Record<string, { responses: Record<string, Schema> }>>;
 	components: { schemas: Record<string, Schema>; responses: Record<string, Schema>; headers: Record<string, Schema> };
 };
@@ -96,7 +96,7 @@ const sortKeys = (value: unknown): unknown =>
 				)
 			: value;
 
-describe("every response matches docs/api-v1.openapi.yaml", () => {
+describe("every response matches openapi/api-v1.openapi.yaml", () => {
 	test("200s on every route, and a second feed page", async () => {
 		const { handle } = await dinnerWorld();
 		for (const path of [

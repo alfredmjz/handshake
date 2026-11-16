@@ -1,4 +1,4 @@
-// Response bodies, written by hand to match docs/api-v1.openapi.yaml (ADR-002). The contract tests hold
+// Response bodies, written by hand to match openapi/api-v1.openapi.yaml (ADR-002). The contract tests hold
 // them to it.
 
 export type Me = { userId: string; displayName: string };
