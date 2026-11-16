@@ -12,7 +12,7 @@
 		"test:watch": "bun test --watch",
 		"test:db": "supabase test db",
 		"test:api-db": "bun test --env-file=.env.local tests/api/postgres-store.test.ts",
-		"api:lint": "bunx @redocly/cli@2 lint docs/api-v1.openapi.yaml",
+		"api:lint": "bunx @redocly/cli@2 lint openapi/api-v1.openapi.yaml",
 		"gen:ledger-cases": "bun scripts/ledger-cases-sql.ts",
 		"gen:permission-cases": "bun scripts/permission-cases-sql.ts",
 		"gen:pull-keys": "bun scripts/pull-keys-sql.ts",

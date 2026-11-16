@@ -17,3 +17,8 @@ supabase/.temp/
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
+
+# Local only: agent and design-tool files, and the working docs
+.claude/
+.impeccable/
+docs/

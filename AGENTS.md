@@ -31,7 +31,7 @@ Handshake's database (see `docs/shared-ledger-spec.md`).
 | `bun test`            | Unit tests in `tests/`                                                                                |
 | `bun run test:db`     | pgTAP tests in `supabase/tests/` against the local Supabase                                           |
 | `bun run test:api-db` | The ApiStore contract suite against the local Supabase (`HANDSHAKE_API_DATABASE_URL` in `.env.local`) |
-| `bun run api:lint`    | Lint `docs/api-v1.openapi.yaml` with Redocly                                                          |
+| `bun run api:lint`    | Lint `openapi/api-v1.openapi.yaml` with Redocly                                                       |
 | `bun run build`       | Production build into `dist/` — must exit 0                                                           |
 | `bun run format`      | Prettier                                                                                              |
 | `bun run mobile:*`    | Capacitor: `mobile:sync`, `mobile:add:ios`, `mobile:open:android`, …                                  |
